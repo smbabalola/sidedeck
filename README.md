@@ -111,3 +111,30 @@ A future bounded read-only paper-account inspection (account summary, approved l
 ```
 
 The application **does not auto-load `.env`**. The key variable is `ALPACA_API_KEY` and the matching paper secret must be in `ALPACA_SECRET_KEY`, `ALPACA_API_SECRET_KEY`, or `APCA_API_SECRET_KEY`. Never paste the values into chat or commit them. The client uses **only** `https://paper-api.alpaca.markets` and GET account, positions and open orders; redirects and retries are blocked. One account's buying power may be greater than the two SideDeck allocations and **is not shared with either strategy**. Broker orders will be added only after two distinct paper accounts (if broker separation desired), order-level risk/idempotency, reconciliation and additional explicit authorisation. No eToro or live brokerage calls are made by this module.
+
+## Two paper-key IDs: dual-account safety (not live tested)
+
+Local variable names:
+
+| Strategy | Paper key ID | Corresponding paper secret |
+| --- | --- | --- |
+| `tradingagents` | `ALPACA_API_KEY` | `ALPACA_SECRET_KEY` (or supported alias) |
+| `ai-trading` | `ALPACA_API_KEY2` | `ALPACA_SECRET_KEY2` (or supported alias) |
+
+Creating another API key does **not** necessarily create a second Alpaca PAPER account. SideDeck's dual-account validator uses one `GET /v2/account` per key pair **only after deliberate read-only permission**; it compares broker account IDs in memory and reports whether they differ, never displaying IDs.
+
+Safe offline test, no credentials or network:
+
+```powershell
+$env:PYTHONPATH = "src"
+.venv\Scripts\python.exe -m sidedeck.paper_pair --dry-run
+```
+
+If separately authorised for a single bounded *two-account* read-only check, the opt-in CLI is:
+
+```powershell
+$env:PYTHONPATH = "src"
+.venv\Scripts\python.exe -m sidedeck.paper_pair --paper-only --allow-read-network --confirm-owner-paper-read-only
+```
+
+The CLI does not load `.env`; a local launcher must privately provide both key/secret pairs. It contacts the **paper host only**, at most twice, without retries, and stops if authentication fails. It cannot place or cancel paper orders. No distinct-account assertion should be made based on the fixture dry-run.
