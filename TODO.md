@@ -80,7 +80,7 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 | 2026-10-18 | P1.2 `cae13cf` | [39131573901](https://github.com/smbabalola/sidedeck/actions/runs/39131573901) | Accepted accounting foundation |
 | 2026-10-18 | P2A `a2b402d` | [39132670450](https://github.com/smbabalola/sidedeck/actions/runs/39132670450) | Accepted fixture proposal gateway |
 | 2026-10-18 | Delivery sprint authorised | See subsequent commit | Living backlog established |
-| 2026-10-18 | Integration hardening + SD-07/SD-09 | See this milestone commit | 38 local tests green; CI pending |
+| 2026-10-18 | Integration hardening + SD-07/SD-09 `3d21d80` | [39135593162](https://github.com/smbabalola/sidedeck/actions/runs/39135593162) | 39 CI tests green, Ruff/mypy/PostgreSQL passed; one initial CI packaging omission fixed |
 | 2026-10-18 | SD-01–SD-06 offline demo `4a35d412` | [39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) | Track A minimal offline demo verified: 35 CI tests, Ruff, mypy, disposable PostgreSQL passed |
 
-**Next action:** Record the final CI SHA/URL for this milestone; actual upstream TradingAgents execution remains credential/provider gated.
+**Next action:** Keep actual upstream TradingAgents execution credential/provider gated; SD-08/SD-10 and broker tasks remain externally blocked.

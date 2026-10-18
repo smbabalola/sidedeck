@@ -21,7 +21,7 @@ Status: offline-safe hardening and code-ready TradingAgents proposal boundary; e
 - Ruff: passed.
 - mypy: passed for 21 source files.
 - SQLite Alembic upgrade: passed.
-- Disposable PostgreSQL CI remains required after push; no existing user database was contacted.
+- Disposable PostgreSQL CI: [run 39135593162](https://github.com/smbabalola/sidedeck/actions/runs/39135593162) — Python 3.12, 39 passed, 3 existing SQLite adapter warnings, Ruff and mypy passed for 21 source files. No existing user database was contacted.
 
 ## External blockers
 
