@@ -3,8 +3,8 @@
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
 **Updated:** 2026-10-18 (user visual demo verified; limited provider tests authorised)  
-**Verified integration branch SHA:** `cbee3d03406c250d16574d81df59c37113375cd8`  
-**Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39135705189 — Python 3.12, 39 passed, Ruff and mypy (21 source files) green, disposable PostgreSQL; three existing warnings.  
+**Verified integration branch SHA:** `3059971e3f05a84dfb2ae4847b173e1ed47c6d8f`  
+**Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39138613194 — Python 3.12, 42 passed, Ruff and mypy (22 source files) green, disposable PostgreSQL; three existing warnings.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
 
 ## Mandatory maintenance
@@ -80,7 +80,7 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **User visual acceptance:** Owner successfully ran `python -m sidedeck.demo run` and opened `results/dashboard.html` in PowerShell on 2026-10-18. Synthetic AAPL/MSFT trades, simulated portfolio summaries, an oversell rejection, and HOLD visibly appeared. **This is fixture acceptance only.**
 - [x] **Private provider configuration reported:** User has Ollama, NVIDIA and OpenAI provider credentials/settings in a local ignored `.env`; not checked into this GitHub repository. Only `.env.example` placeholders are tracked. Never disclose or commit values.
 - [x] **Scoped user authorisation:** Small local **model-only** smoke-test calls using existing local provider configuration, favour no-cost local Ollama / eligible NVIDIA allowance before any OpenAI paid usage. No unrestricted billing, no market-data scraping, no broker APIs. A local code agent must check availability, model and allowance without printing keys.
-- [x] **SD-10A / Immediate:** Followed `docs/REAL_AGENT_SMOKE_TEST.md`; added explicit opt-in smoke CLI, provider preflight and separate provider/graph status. One Ollama request was run with synthetic context; offline CI remains network-free.
+- [x] **SD-10A / Immediate:** Followed `docs/REAL_AGENT_SMOKE_TEST.md`; added explicit opt-in smoke CLI, provider preflight and separate provider/graph status. One Ollama request was run with synthetic context; offline CI remains network-free. Local: 41 passed / 1 PostgreSQL skipped; CI: 42 passed.
 - [ ] **SD-10B / Immediate:** **BLOCKED:** the pinned runtime dependency installation did not complete in the bounded disposable-venv attempt; `UPSTREAM_IMPORT_VERIFIED=false` and `TRADINGAGENTS_GRAPH_RUN_VERIFIED=false`. Provider-only Ollama inference is recorded separately and made no broker calls.
 - [ ] **SD-10C / UX:** User visual acceptance shows an unstyled plain HTML table, not final UI. Add a presentable comparison dashboard when safe without delaying model verification. No need to repeat completed fixture demo.
 - [ ] **SD-10D / Security:** Check repository history and CI logs for accidental secret inclusion using safe redacted detection and owner notification if found. Never echo potential secret values. Current remote `.env` absent and `.gitignore` ignores it; a historical scan is a separate check.
@@ -105,6 +105,7 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 | 2026-10-18 | Delivery sprint authorised | See subsequent commit | Living backlog established |
 | 2026-10-18 | Integration hardening + SD-07/SD-09 `3d21d80` | [39135593162](https://github.com/smbabalola/sidedeck/actions/runs/39135593162) | 39 CI tests green, Ruff/mypy/PostgreSQL passed; one initial CI packaging omission fixed |
 | 2026-10-18 | Final integration report `cbee3d0` | [39135705189](https://github.com/smbabalola/sidedeck/actions/runs/39135705189) | Independently verified 39 green tests + PostgreSQL; genuine upstream agent runs and eToro gated |
+| 2026-10-18 | Guarded local model smoke `3059971` | [39138613194](https://github.com/smbabalola/sidedeck/actions/runs/39138613194) | One local Ollama provider-only inference accepted by SideDeck proposal validation; 42 CI tests green; upstream graph remains unverified |
 | 2026-10-18 | SD-01–SD-06 offline demo `4a35d412` | [39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) | Track A minimal offline demo verified: 35 CI tests, Ruff, mypy, disposable PostgreSQL passed |
 
 **Next action:** Resolve the disposable TradingAgents runtime installation/data-isolation blocker before claiming an upstream graph run. Use the canonical CLI `python -m sidedeck.demo run` (and `reset-fixture` as a separate command), **not** the unsupported `--reset` flag. Leave broker calls disabled until explicit Demo-only approval. Draft PR #1 remains draft/unmerged.

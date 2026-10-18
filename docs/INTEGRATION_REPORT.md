@@ -17,11 +17,11 @@ Status: offline-safe hardening and code-ready TradingAgents proposal boundary; e
 
 ## Verification
 
-- Local: 38 passed, 1 skipped (local PostgreSQL unavailable), 3 existing SQLite datetime-adapter warnings.
+- Local: 41 passed, 1 skipped (local PostgreSQL unavailable), 3 existing SQLite datetime-adapter warnings.
 - Ruff: passed.
 - mypy: passed for 21 source files.
 - SQLite Alembic upgrade: passed.
-- Disposable PostgreSQL CI: [run 39135593162](https://github.com/smbabalola/sidedeck/actions/runs/39135593162) — Python 3.12, 39 passed, 3 existing SQLite adapter warnings, Ruff and mypy passed for 21 source files. No existing user database was contacted.
+- Disposable PostgreSQL CI: [run 39138613194](https://github.com/smbabalola/sidedeck/actions/runs/39138613194) — Python 3.12, 42 passed, 3 existing SQLite adapter warnings, Ruff and mypy passed for 22 source files. No existing user database was contacted.
 
 ## External blockers
 
