@@ -70,7 +70,16 @@ $env:PYTHONPATH = "src"
 .venv\Scripts\python.exe -m sidedeck.data_probe --provider etoro --market-data-only --allow-read-network --confirm-owner-read-only
 ```
 
-Do not run that command until read-only access is explicitly approved. Five-year daily eToro coverage is currently unverified. The existing licensed local CSV import is the prepared fallback; it must be supplied with confirmed usage rights and is never silently combined with or replaced by Yahoo.
+SideDeck instrument resolution now uses SignalDeck's legacy `GET /api/v2/market-data/instruments/search?query=AAPL&limit=5`, while completed daily candles remain on eToro API **v1**. This is a deliberately chosen compatibility path, **not** proof that eToro still authorizes v2. The regular probe above can make multiple reads and is **not** an appropriate first authentication check. Five-year daily eToro coverage remains unverified.
+
+For a strictly bounded verification, there is also an **AAPL-only single-request mode** (at most one market-data GET, no rate/candle/account/portfolio/order request and no automatic retries):
+
+```powershell
+$env:PYTHONPATH = "src"
+.venv\Scripts\python.exe -m sidedeck.data_probe --provider etoro --market-data-only --allow-read-network --confirm-owner-read-only --single-v2-search AAPL
+```
+
+Run this only once with the owner's express permission and private credentials loaded into the process, never in GitHub CI. The probe does **not** load `.env` automatically. Do not echo values to the terminal or persist them in shell history. Do not repeat after an error without a new decision. The existing licensed local CSV import is the prepared fallback; it must be supplied with confirmed usage rights and is never silently combined with or replaced by Yahoo.
 Credential-free dry run for all four approved instruments:
 
 ```powershell
