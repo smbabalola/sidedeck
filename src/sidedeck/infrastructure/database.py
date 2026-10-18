@@ -30,6 +30,32 @@ class PersistenceConflict(RuntimeError):
     """A generated event UUID was reused for different immutable content."""
 
 
+class AgentRunAuditRecord(Base):
+    __tablename__ = "agent_run_audits"
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    experiment_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    portfolio_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    adapter_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    accepted: Mapped[bool] = mapped_column(nullable=False)
+    validation_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_ids: Mapped[str] = mapped_column(Text, nullable=False)
+    sanitized_output: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DecisionAuditRecord(Base):
+    __tablename__ = "decision_audits"
+    decision_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    portfolio_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    adapter_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    intent_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 def create_database(url: str) -> Engine:
     return create_engine(url, future=True)
 
