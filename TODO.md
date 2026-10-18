@@ -367,3 +367,10 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **Verification:** CI status to be recorded after push; see `docs/SIDEDECK_PAPER_DESK.md`.
 
 - [x] **SD-12D visual paper desk review:** `python -m sidedeck.paper_desk_review --dry-run` produces `results/paper_desk_review.html` and `.json` for two risk-approved synthetic proposals. Each displays its respective key slot and separate cash allocation; 0 Alpaca calls and 0 broker orders. No credential access; fixture-only acceptance, not paper trading.
+
+## SD-12E — Durable local Alpaca PAPER order/ledger outbox
+
+- [x] **Local durable transactional workflow:** `src/sidedeck/domain/paper_outbox.py` persists exactly two USD 1,000 strategy ledgers, order drafts, pending reservations, acknowledgments, evidence of offline simulated/verified future fills, and balanced ledger events to a separately tagged SQLite file. Restart rehydrates open orders, accumulated fills and journal postings; same-id replays are idempotent.
+- [x] **No broker writes:** Persistent kill switch engaged, no submit or broker cancel method; source data/receipts are still fixture/injected contracts. Existing `results/demo.sqlite3` and user DBs are untouched. This is not yet a live Alpaca paper trading integration.
+- [ ] **Pending integration:** Read-only authenticated paper fill evidence adapter, broker account/strategy mapping, fail-closed handling of cancellations/corrections and account reservations, and broker-order write transport only after distinct owner approval. Review security/CI before live calls.
+- [ ] **Code verification:** Record actual green CI pass count and SHA after push. Runbook: `docs/PAPER_OUTBOX.md`.
