@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (SD-10C accepted; next sprint eToro daily-history verification, Yahoo-free SideDeck data path)
+**Updated:** 2026-10-18 (SD-11A code delivered; SD-11B official API compatibility fixes required before live reads)
 **Verified integration branch SHA:** `12ae6eaae21e567034536d7d0c0ebb10397848da`  
 **Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39140051347 — Python 3.12, 50 passed, Ruff and mypy (22 source files) green, disposable PostgreSQL; three existing warnings.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -171,3 +171,18 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **Offline evidence:** `pytest` 68 passed / 1 skipped / 3 warnings; Ruff passed; mypy passed for 25 source files; SQLite Alembic upgrade passed. No network calls were made by tests.
 
 **Next action:** obtain explicit owner approval for a read-only eToro market-data GET with permitted credentials/environment, then run one bounded coverage probe for AAPL/MSFT/SPY/QQQ. Until then, remain on the offline adapter and licensed CSV fallback; preserve TradingAgents native-network safety restrictions.
+
+
+## SD-11A independent acceptance — code foundation verified, live coverage still unverified
+
+- [x] **Verified pushed feature commit** `a7e678a3a6b43f15d4c17bc01d2a51200b6ef0de`, [CI 39141855089](https://github.com/smbabalola/sidedeck/actions/runs/39141855089) and [CI 39141852093](https://github.com/smbabalola/sidedeck/actions/runs/39141852093) both passed. Owner-reported local 68 passed, 1 PostgreSQL skipped, 3 existing warnings; Ruff/mypy/SQLite passed. Draft PR #1 remains unmerged.
+- [x] **SD-11A code only:** Market-data-only injected client, approved universe, synthetic coverage scanner and explicit owner-confirmation CLI exist; no authenticated eToro read occurred, so actual daily depth and trading data correctness remain **UNVERIFIED**.
+- [ ] **SD-11B-1 / Must fix before any real probe:** Official eToro instrument guide specifies `internalSymbolFull=AAPL`, exact match on `internalSymbolFull` and a verified instrument ID. Current code requests `search=AAPL` and defaults critical instrument attributes. Normalise verified live response/metadata, reject ambiguous symbols, CFDs and unverified classification.
+- [ ] **SD-11B-2 / Must fix:** Published candle payload nests `candles` by instrument and timestamps rows using `fromDate`; current flat parser expects `timestamp|date|time`. Check nested group instrument IDs and support documented zero volume without inventing it.
+- [ ] **SD-11B-3 / Must fix:** Current `sidedeck.data_probe` prints only the AAPL instrument resolution. It does **not request or scan history**, so no authenticated five-year test would answer the goal. Implement offline-dry-run and bounded four-symbol history scanner, redacted output.
+- [ ] **SD-11B-4 / Must fix:** `urllib.urlopen` throws `HTTPError` on 429, so current client retries do not work through the real transport. Correct status normalization, documented bounded Retry-After, safe GET URL allowlist and same-host redirect policy.
+- [ ] **SD-11B-5 / Must fix:** A single max-1000 OneDay candle response **cannot** prove five years of approx 1,250 daily sessions; use accurate exchange-calendar coverage, leap-safe five-year periods, gaps/holidays and actual supported historical pagination or a legitimate second source. Do not fabricate data or treat weekly candles as daily.
+- [ ] **SD-11B-6 / Required acceptance:** Full offline schema-fixture tests (including published examples), pytest/Ruff/mypy/PostgreSQL and README/docs. Keep live calls and key use disabled until the owner separately approves only eToro `/market-data/` GET and local secrets. **Actual account-specific depth remains unverified** until that bounded check.
+
+**One-pass coding brief:** [`docs/ETORO_API_FIXES.md`](docs/ETORO_API_FIXES.md). Complete SD-11B code fixes without routine review pauses. No further Yahoo/OS firewall work, no paid LLM, no orders/eToro broker access.
+
