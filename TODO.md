@@ -387,3 +387,10 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] Final CI status and SHA to be recorded after tests complete; source/documentation: `docs/ALPACA_RECEIPT_RECONCILIATION.md`.
 
 - [x] **SD-12F audit refinement:** A matching broker filled-share total is **not** proof that fees, activity IDs, account identity or corrections are verified. All FILL IDs remain unverified; `auto_post_enabled=false` regardless of numerical agreement. Read-only journal comparison now also checks its locally stored acknowledged broker-order ID against the paper order ID; an unacknowledged/mismatched ID is flagged for review. No broker write was enabled.
+
+## SD-12G — Controlled Alpaca PAPER submission foundation (2026-10-18)
+
+- [x] **Single-attempt durable claim:** Add `paper_submissions` table in tagged SideDeck SQLite journal (no existing user DB touched). Each approved draft has exactly one `UNCERTAIN` claim before any dispatch; no retry after timeout/crash or rejected/malformed acknowledgment. Atomic broker acknowledgement when validated. Historical fixture and demo ledgers remain isolated.
+- [x] **Paper execution simulation only:** New `SideDeckPaperSubmission` verifies strategy key slot, fresh draft, distinct active unblocked paper accounts, limit/day order, and uses `fixture_only` injected writer. It has no real HTTP POST, credential loading or live account access. Simulated network failures leave `UNCERTAIN`; GET-only recovery validates `client_order_id` and broker UUID, never a repeated POST. Hard kill switch stays engaged.
+- [ ] **Next gate:** Real paper-only HTTP writer and account-bound authorization remain disabled pending explicit owner approval for first paper order and local authenticated read-only account check; genuine active user market quotes, fees, fill correction/audit required before production order posting. No order or real brokerage request made.
+- [ ] **CI evidence:** record actual test totals and green workflow after completion.
