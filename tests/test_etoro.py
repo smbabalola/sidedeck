@@ -66,7 +66,7 @@ def test_coverage_does_not_claim_five_years_from_1000_bars():
         ) for index in range(1000)
     )
     scanner = client(FakeTransport({}))
-    assert scanner.scan_five_year_daily(instrument(), cutoff=cutoff, candles=candles).status == "UNVERIFIED"
+    assert scanner.scan_five_year_daily(instrument(), cutoff=cutoff, candles=candles).status == "INSUFFICIENT_DEPTH"
     sessions = frozenset((cutoff - timedelta(days=index)).date() for index in range(1300) if (cutoff - timedelta(days=index)).weekday() < 5)
     report = scanner.scan_five_year_daily(instrument(), cutoff=cutoff, candles=candles, exchange_sessions=sessions)
     assert report.status == "INSUFFICIENT_DEPTH"
@@ -134,4 +134,4 @@ def test_leap_day_period_and_zero_volume_are_safe():
     parsed = client(FakeTransport(candle_payload(row))).fetch_daily_candles(instrument(), cutoff=cutoff)
     assert parsed[0].volume == Decimal("0")
     report = client(FakeTransport({})).scan_five_year_daily(instrument(), cutoff=cutoff, candles=parsed)
-    assert report.status == "UNVERIFIED"
+    assert report.status == "INSUFFICIENT_DEPTH"
