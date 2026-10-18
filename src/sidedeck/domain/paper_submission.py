@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal, Mapping, Protocol
-from uuid import UUID
+from typing import Literal, Mapping, Protocol
 
-from .alpaca_paper import AlpacaPaperError, AlpacaPaperReadClient, PaperGetTransport
+from .alpaca_paper import AlpacaPaperReadClient, PaperGetTransport
 from .alpaca_paper_execution import _order
 from .alpaca_paper_pair import DualPaperAccountInspector
 from .paper_desk import BROKER_KEY_SLOTS, PaperDeskError, PaperOrderDraft
