@@ -103,8 +103,8 @@ class AgentRunRequest(Contract):
 
     @model_validator(mode="after")
     def safe_read_only_snapshot(self) -> Self:
-        if not self.deterministic_fixture:
-            raise ValueError("P2A only permits deterministic fixture runs")
+        if not self.deterministic_fixture and self.adapter_id != "tradingagents.upstream":
+            raise ValueError("only the approved TradingAgents smoke adapter may use a real model")
         if self.upstream_repository and not self.upstream_sha:
             raise ValueError("upstream repository requires a pinned SHA")
         if any(not key.startswith("US:") or value < 0 or not value.is_finite() for key, value in self.holdings.items()):

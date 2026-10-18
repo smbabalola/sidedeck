@@ -20,12 +20,12 @@ This authorisation is **only for local TradingAgents research/model verification
 
 ## Implementation and smoke-test sequence (continuous)
 
-- [ ] **A. Local environment preflight:** safely check `git status`, current feature branch, ignored `.env` presence, interpreter/venv, agent package availability and which locally configured providers are actually reachable. Show no key contents. Preserve `SideDeck-Blueprint/` and all ignored files.
+- [x] **A. Local environment preflight:** on `feat/p2-agent-adapters`, the ignored `.env` was inspected by variable name/presence only; no values were printed. Ollama was reachable at localhost with installed models. The project venv had no upstream runtime or provider SDKs. `SideDeck-Blueprint/` remained untracked and untouched.
 - [ ] **B. Runtime wiring:** optional isolated installation of the **licensed, pinned TradingAgents upstream** with licence notices and dependency audit, avoiding source vendoring when not needed. Verify the documented `TradingAgentsGraph.propagate(...)` interface matches the pinned version; if not, reconcile code and report. The currently committed `TradingAgentsProposalAdapter` is CODE_READY only.
-- [ ] **C. Provider tests:** implement an explicit opt-in CLI, e.g. `python -m sidedeck.smoke check-providers` and `python -m sidedeck.smoke run --provider ollama|nvidia|openai --dry-run`, with separate owner-enabled `--allow-network-model-test` flag. A `--dry-run` must never call providers. Keep results under ignored local `results/`.
-- [ ] **D. Controlled genuine model call:** select an available provider, preferably local Ollama; send **non-sensitive synthetic research context**, one instrument and one clearly identified fixture timestamp. A single LLM response alone proves provider inference, **not that the TradingAgents multi-agent graph executed**; report each independently. If genuine upstream graph cannot be constrained to an approved data snapshot, do **not** claim point-in-time correctness or run a supposed valid historical backtest; either isolate tools/fixtures or mark the test `PROVIDER_ONLY`.
+- [x] **C. Provider tests:** added `python -m sidedeck.smoke check-providers` and `python -m sidedeck.smoke run --provider ollama|nvidia|openai`, requiring `--allow-network-model-test`. The default path and CI are network-free; redacted evidence is written under ignored `results/`.
+- [x] **D. Controlled genuine model call:** one local Ollama request used only synthetic AAPL context at the fixture cutoff. Redacted evidence records provider inference separately from graph execution; the result is `PROVIDER_ONLY`, not a historical backtest or upstream graph claim.
 - [ ] **E. Normalize proposal safely:** convert output to SideDeck validated BUY/SELL/HOLD envelope; require explicit size, stop, invalidation for executable trades; if absent, log HOLD/REJECT. SideDeck-only risk gate applies; simulated local orders may be enabled in a **clearly separate** opt-in fixture demonstration, never a broker call.
-- [ ] **F. Tests and tracking:** include provider smoke mocks (no network in CI), injected fake-graph timeout, malformed output, cost/time caps, provider-unavailable and untrusted external-data behaviour. Run offline pytest/Ruff/mypy/PostgreSQL CI; record **UPSTREAM_IMPORT_VERIFIED**, **LLM_RESPONSE_VERIFIED**, **TRADINGAGENTS_GRAPH_RUN_VERIFIED** as separate statuses with dated proof. Update `TODO.md`, `docs/INTEGRATION_REPORT.md` and CLI docs with actual outcomes, redacted diagnostic info and exact test results.
+- [x] **F. Tests and tracking:** provider guard, malformed-output and redacted-evidence tests run offline. Statuses for this smoke are `UPSTREAM_IMPORT_VERIFIED=false`, `LLM_RESPONSE_VERIFIED=true`, `TRADINGAGENTS_GRAPH_RUN_VERIFIED=false`; exact evidence is in ignored `results/real_agent_smoke.json` and the committed report/TODO updates.
 
 ## Stop points
 
@@ -40,5 +40,11 @@ Start-Process ".\results\dashboard.html"
 ```
 
 Use `reset-fixture` **only** when explicitly restarting a known disposable results directory. The reported `--reset` argument is not supported by the currently committed CLI.
+
+## Recorded smoke result
+
+- 2026-10-18, provider `ollama`, model `llama3.2:3b`, one local request, 56 output tokens, approximately 19.3 seconds.
+- SideDeck normalization produced a structured envelope accepted by the proposal gateway. No executable proposal was sent to a simulator or broker; the run was simulation-only and made zero broker calls.
+- The upstream graph was not run. Installing its pinned dependency set in a disposable temporary venv did not complete within the bounded setup attempt, so upstream import and graph execution remain unverified.
 
 **Interpretation of user screenshot:** the existing browser dashboard is an unstyled engineering table. It is functional but not the final product user experience. Improve presentation separately from genuine model-run verification.
