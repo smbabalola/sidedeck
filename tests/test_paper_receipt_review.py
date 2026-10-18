@@ -73,7 +73,7 @@ def test_receipt_lookup_matches_local_durable_order_and_never_posts_fills(tmp_pa
     assert result.needs_review and not result.auto_post_enabled
     assert result.paper_filled_qty == Decimal("1")
     assert result.journal_filled_qty == Decimal("0")
-    assert result.missing_fill_activity_ids == (FILL_ID,)
+    assert result.unverified_activity_ids == (FILL_ID,)
     assert len(t.calls) == 2
     assert db.snapshot()["strategies"]["tradingagents"]["cash"] == "1000"
     assert db.snapshot()["strategies"]["ai-trading"]["cash"] == "1000"
