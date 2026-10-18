@@ -2,9 +2,9 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (integration hardening and proposal adapter sprint)  
-**Verified Track A SHA:** `4a35d4120d3a6653250083906f10808b593e8994`  
-**Track A CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39134181178 — 35 passed, Ruff and mypy green, disposable PostgreSQL.  
+**Updated:** 2026-10-18 (verified integration sprint and remaining external gates)  
+**Verified integration branch SHA:** `cbee3d03406c250d16574d81df59c37113375cd8`  
+**Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39135705189 — Python 3.12, 39 passed, Ruff and mypy (21 source files) green, disposable PostgreSQL; three existing warnings.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
 
 ## Mandatory maintenance
@@ -48,7 +48,7 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **SD-06H-05 / P1 — Honest dashboard:** Dashboard now includes agent status, final summary, session equity/NAV, positions, exposure, risk decisions and JSON/CSV exports, with fixture/simulation labels.
 - [x] **SD-06H-06 / P1 — Calendar and data provenance:** Demo sessions use weekdays; CSV import validates licence confirmation, UTC as-of/publication/ingestion timestamps, stale/future data and weekend rejection.
 
-**Track A:** runnable minimal offline MVP **delivered**. **Track A hardened:** pending SD-06H-01…06; work in parallel with safe SD-07/SD-09 adapter preparation so there is no handoff delay.
+**Track A:** runnable offline MVP **delivered and hardened** at `cbee3d0`, CI 39 tests passed. This does **not** constitute verification of live third-party AI inference, real data, broker execution, or performance.
 
 ## THEN — genuine research integrations without broker execution
 
@@ -63,6 +63,17 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **SD-12 / P2 — Supervised then automated Demo:** Reconciliation, risk stop, kill switch, recovery, unmatched-fill alerts and auditable order approval. Never connect to Real trading.
 - [ ] **SD-13 / P2 — Fair forward evaluation:** Risk-adjusted return vs SPY and cash baselines, trading spreads/slippage, model/data costs, drawdown and uncertainty; collect sufficient real trading sessions before declaring a winner.
 - [ ] **SD-14 / P2 — Merge and release:** Only after owner approves release; commit SHA, CI, operations runbook and rollback evidence.
+
+## Latest verified integration evidence and launch correction
+
+- [x] Integration sprint: `cbee3d03406c250d16574d81df59c37113375cd8`; [GitHub CI 39135705189](https://github.com/smbabalola/sidedeck/actions/runs/39135705189) passed **39 tests** under Python 3.12, Ruff, mypy (21 files), and disposable PostgreSQL. Local report: 38 passed / 1 PostgreSQL skipped. Three SQLite deprecation warnings were reported.
+- [x] `docs/INTEGRATION_REPORT.md` and `docs/LICENSING_DECISION.md` present. `src/sidedeck/agents/tradingagents_adapter.py` is **CODE_READY only**, not upstream-import/runtime-verified.
+- [ ] **External Gate A:** Authorise/configure a chosen supported LLM provider locally, establish maximum spend and data privacy/network policy before genuine TradingAgents calls. Credential-free offline tests are not a real-model test.
+- [ ] **External Gate B:** Obtain affirmative rights/licensing clarity for `imranpollob/ai-trading` before copying or running original upstream source. An independent SideDeck protocol worker may continue separately without claiming it is the upstream project.
+- [ ] **External Gate C:** Approve authenticated **eToro Demo only** access and scope before calls or orders; ensure broker fills reconcile to isolated SideDeck virtual portfolios.
+- [ ] **SD-07F / Minor UX/documentation:** The reported `python -m sidedeck.demo --reset` command does not exist in the inspected `argparse` CLI. Use `python -m sidedeck.demo reset-fixture` then `python -m sidedeck.demo run`. Keep README and reports accurate or add a tested alias intentionally. Reset is destructive to the chosen fixture results folder; never target user data.
+- [ ] **SD-07G / Deferred nonblocking robustness:** `reset_fixture` currently allows deleting any existing directory named `results`; tighten to an explicit project-owned marker, preserving legacy default fixture flow. Do not treat the current offline demo as production hardened.
+- [ ] **SD-10:** Upstream TradingAgents smoke verification, AI Trading rights clearance, observed data and representative forward sessions are not complete, despite all green CI tests.
 
 ## Active blockers and mitigations
 
@@ -81,6 +92,7 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 | 2026-10-18 | P2A `a2b402d` | [39132670450](https://github.com/smbabalola/sidedeck/actions/runs/39132670450) | Accepted fixture proposal gateway |
 | 2026-10-18 | Delivery sprint authorised | See subsequent commit | Living backlog established |
 | 2026-10-18 | Integration hardening + SD-07/SD-09 `3d21d80` | [39135593162](https://github.com/smbabalola/sidedeck/actions/runs/39135593162) | 39 CI tests green, Ruff/mypy/PostgreSQL passed; one initial CI packaging omission fixed |
+| 2026-10-18 | Final integration report `cbee3d0` | [39135705189](https://github.com/smbabalola/sidedeck/actions/runs/39135705189) | Independently verified 39 green tests + PostgreSQL; genuine upstream agent runs and eToro gated |
 | 2026-10-18 | SD-01–SD-06 offline demo `4a35d412` | [39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) | Track A minimal offline demo verified: 35 CI tests, Ruff, mypy, disposable PostgreSQL passed |
 
-**Next action:** Keep actual upstream TradingAgents execution credential/provider gated; SD-08/SD-10 and broker tasks remain externally blocked.
+**Next action:** Owner-approved model provider/access and point-in-time market-data policy are needed for an actual TradingAgents smoke test; AI Trading upstream remains blocked until licence/rights are clarified. Continue only independent safe work without permissions. Use the canonical CLI `python -m sidedeck.demo run` (and `reset-fixture` as a separate command), **not** the unsupported `--reset` flag. Leave broker calls disabled until explicit Demo-only approval. Draft PR #1 auto-tracks branch commits and must remain draft/unmerged.
