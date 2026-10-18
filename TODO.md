@@ -67,6 +67,6 @@
 | 2026-10-18 | P1.2 `cae13cf` | [39131573901](https://github.com/smbabalola/sidedeck/actions/runs/39131573901) | Accepted accounting foundation |
 | 2026-10-18 | P2A `a2b402d` | [39132670450](https://github.com/smbabalola/sidedeck/actions/runs/39132670450) | Accepted fixture proposal gateway |
 | 2026-10-18 | Delivery sprint authorised | See subsequent commit | Living backlog established |
-| 2026-10-18 | SD-01–SD-06 local demo | See subsequent commit | Track A runnable offline demo complete; CI pending |
+| 2026-10-18 | SD-01–SD-06 local demo | [39134103922](https://github.com/smbabalola/sidedeck/actions/runs/39134103922) | Track A runnable offline demo complete; 35 CI tests passed |
 
-**Next action:** Codex reads `docs/DELIVERY_SPRINT.md` and implements **SD-01 through SD-06 as one continuous local demo sprint**, pushing incremental working commits and updating this file.
+**Next action:** Safe code-only TradingAgents adapter preparation is recorded; actual model smoke testing remains credential-gated.

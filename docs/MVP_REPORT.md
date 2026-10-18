@@ -28,6 +28,7 @@ These are synthetic fixture prices and simulated fills, not market observations,
 ## Acceptance evidence
 
 - 34 local tests passed; one local PostgreSQL test skipped because Docker has no usable daemon.
+- Final disposable PostgreSQL CI: [run 39134103922](https://github.com/smbabalola/sidedeck/actions/runs/39134103922) — Python 3.12, 35 tests passed, Ruff and mypy passed.
 - Ruff passed; mypy passed for 19 source files.
 - SQLite Alembic upgrade through `0004_agent_audits` passed.
 - Risk controls cover portfolio isolation, approved instruments, point-in-time data, cash, position/exposure/position-count caps, stop-risk budget, long-only selling, fees, spread and refusal reasons.
