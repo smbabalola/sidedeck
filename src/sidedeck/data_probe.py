@@ -98,9 +98,10 @@ def main() -> int:
         if not api_key or not user_key:
             parser.error("ETORO_API_KEY and ETORO_USER_KEY are required only after owner approval")
         transport = UrllibReadOnlyTransport({"x-api-key": api_key, "x-user-key": user_key})
-    client = EtoroHistoricalDataClient(
-        transport, capability=MarketDataReadCapability(), max_retries=0 if args.single_v2_search else 1
-    )
+    if args.single_v2_search:
+        client = EtoroHistoricalDataClient(transport, capability=MarketDataReadCapability(), max_retries=0)
+    else:
+        client = EtoroHistoricalDataClient(transport, capability=MarketDataReadCapability())
     if args.single_v2_search:
         resolved = client.resolve_instrument(args.single_v2_search)
         print(json.dumps({"mode": "dry-run" if args.dry_run else "live-read-only", "kind": "v2-search-only", "ticker": resolved.ticker, "instrument_id": resolved.instrument_id, "status": "RESOLVED"}))
