@@ -159,3 +159,17 @@ def test_requires_initialization_and_keeps_broker_execution_disabled(tmp_path):
     assert db.paper_write_enabled is False
     assert not hasattr(db, "submit_order")
     assert not hasattr(db, "cancel_broker_order")
+
+
+def test_corrupt_or_disengaged_paper_kill_switch_blocks_all_local_book_operations(tmp_path):
+    db = DurablePaperDesk(tmp_path / "paper.sqlite3")
+    db.initialize(opened_at=AT - timedelta(days=1))
+    with sqlite3.connect(db.path) as raw:
+        raw.execute("UPDATE paper_controls SET value='DISARMED' WHERE name='kill_switch'")
+    with pytest.raises(PaperDeskError, match="kill switch"):
+        db.snapshot()
+    intent, mark = request("tradingagents")
+    with pytest.raises(PaperDeskError, match="kill switch"):
+        db.prepare(intent, mark, marks={"US:AAPL": mark})
+    with pytest.raises(PaperDeskError, match="kill switch"):
+        db.initialize(opened_at=AT)

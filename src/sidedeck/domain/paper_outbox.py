@@ -172,6 +172,11 @@ class DurablePaperDesk:
 
     def _restore(self, db: sqlite3.Connection) -> tuple[Ledger, SideDeckPaperDesk]:
         """Rebuild from committed journal each operation; fail on corruption."""
+        switch = db.execute(
+            "SELECT value FROM paper_controls WHERE name='kill_switch'"
+        ).fetchone()
+        if switch != ("ENGAGED",):
+            raise PaperDeskError("paper kill switch is not engaged")
         ledger = Ledger()
         for (raw,) in db.execute(
             "SELECT payload_json FROM paper_events ORDER BY sequence"
