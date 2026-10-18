@@ -37,3 +37,7 @@ The owner requested that **SideDeck manage the portfolios** using their existing
 - Basic historical/real-time feed limits: https://docs.alpaca.markets/us/docs/about-market-data-api
 
 **Supersedes for planned broker integration:** eToro. The previous eToro 403 investigations remain recorded, but no retries are authorised.
+
+## SD-12C — Owner-labelled paper account mapping (not independently verified)
+
+The user reports `ALPACA_API_KEY` was issued for **signaldeckdemo** and `ALPACA_API_KEY2` for **Sidedeckdemo**. The earlier Alpaca screenshot displays **SignalDeckProject** and **Sidedeckdemo account**, so account naming is not yet a verified one-to-one match. The current *provisional* strategy mapping is `tradingagents → ALPACA_API_KEY`, `ai-trading → ALPACA_API_KEY2`. Each pair needs its matching locally stored secret; validate unique provider account IDs **in memory** using the offline-tested, owner-opt-in dual-account read. A first account still used by SignalDeck could contaminate SideDeck's comparative trial. **Paper broker writes remain disabled** until both accounts are distinct, dedicated/isolated, risk reconciled and separately authorised.
