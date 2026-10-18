@@ -292,6 +292,12 @@ class DurablePaperDesk:
             )
             return result
 
+    def order_draft(self, client_order_id: str) -> PaperOrderDraft:
+        """Read an accepted local order by id; no broker I/O or journal edits."""
+        with self._transaction() as db:
+            _, desk = self._restore(db)
+            return desk._track(client_order_id).draft
+
     def snapshot(self) -> dict[str, Any]:
         """Safe local order/ledger state, excluding broker account IDs and keys."""
         with self._transaction() as db:
