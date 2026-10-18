@@ -29,12 +29,13 @@ def test_live_cutoff_excludes_current_utc_day_and_is_not_fixture_date() -> None:
 
 def test_readonly_transport_rejects_ambiguous_and_unapproved_paths() -> None:
     _validate_path("/market-data/search")
-    _validate_path("/market-data/instruments/1001/history/candles/backward/OneDay/1000")
+    _validate_path("/market-data/instruments/1001/history/candles/desc/OneDay/1000")
     for bad in (
-        "/market-data/instruments/1001/history/candles/backward/OneDay/1001",
-        "/market-data/instruments/1001/../trading/history/candles/backward/OneDay/10",
-        "/market-data/instruments/abc/history/candles/backward/OneDay/10",
-        "/market-data/instruments/1001/history/candles/backward/OneDay/10/extra",
+        "/market-data/instruments/1001/history/candles/backward/OneDay/1000",
+        "/market-data/instruments/1001/history/candles/desc/OneDay/1001",
+        "/market-data/instruments/1001/../trading/history/candles/desc/OneDay/10",
+        "/market-data/instruments/abc/history/candles/desc/OneDay/10",
+        "/market-data/instruments/1001/history/candles/desc/OneDay/10/extra",
         "/trading/orders",
         "//other.example/market-data/search",
     ):

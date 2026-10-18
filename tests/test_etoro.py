@@ -55,7 +55,7 @@ def test_resolution_is_exact_and_daily_limit_is_clamped():
     assert len(candles) == 1
     assert candles[0].volume == Decimal("0")
     assert transport.calls[0][1] == {"internalSymbolFull": "AAPL"}
-    assert candles_transport.calls[0][0].endswith("/backward/OneDay/1000")
+    assert candles_transport.calls[0][0].endswith("/desc/OneDay/1000")
 
 
 def test_coverage_does_not_claim_five_years_from_1000_bars():

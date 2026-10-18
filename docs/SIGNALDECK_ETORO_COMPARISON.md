@@ -54,3 +54,10 @@ Per the **owner's September 27 local test reports (not independently reproduced 
 - If the dry-run request shape and local credentials match but a separately approved v2 read still fails, raise the discrepancy with eToro developer support using sanitized endpoint/status/time/request ID, never keys.
 
 **Release note:** This comparison does not grant access to balances/positions, Demo or Real broker APIs, historical candle reads, Tiingo, or any paid provider. Continue offline SideDeck historical-data validation while eToro permissions are investigated.
+
+## SD-11G offline compatibility corrections completed
+
+- The **SideDeck** history GET direction was corrected from the unsupported `backward` value to source-supported **`desc`**. The strict market-data GET allowlist, max-1,000 candle bound, and offline tests were updated. This is a **code-only correction**; no API request has been sent.
+- Added credential-free request contract tests that exercise SideDeck's current v1 search with synthetic header values, and contrast its exact request target with SignalDeck's source-verified v2 search using `query=AAPL&limit=5`. This **does not** activate v2 as a live fallback.
+- **Local investigation still required:** Codex must compare values in both Windows checkouts in-memory (only boolean equality; no hashes/lengths/values), confirm which `.env` is loaded and report presence/absence of proxy settings without exposing their values. GitHub cannot inspect either Windows checkout's ignored `.env`.
+- Reuse of the earlier authenticated eToro test permission is explicitly prohibited. The status remains `LOCAL_ETORO_MARKET_DATA_403` until a fresh read-only owner approval.

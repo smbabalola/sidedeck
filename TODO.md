@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (eToro API 403 support request prepared; candidate Tiingo EOD offline workstream)
+**Updated:** 2026-10-18 (SD-11G offline eToro request correction; local credential equality pending)
 **Verified code SHA:** `0da1ef47f943643fd792285d3f8136bbc287344f` (before this documentation-only update)
 **Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39143425931 — Python 3.12, 78 tests passed, Ruff passed, mypy passed for 25 source files, disposable PostgreSQL, 3 known SQLite warnings.
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -273,7 +273,17 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **Original implementation located:** Private repo `smbabalola/SignalDeck`, reviewed branch `bundle7/complete-demo-lifecycle`. Its eToro REST adapter sends `GET /api/v2/market-data/instruments/search?query=AAPL&limit=5`, `GET /api/v2/market-data/rates?instrumentIds=...` and `GET /api/v1/market-data/instruments/{id}/history/candles/asc/OneDay/10`, using `x-api-key`, `x-user-key`, `x-request-id` and direct `http.client.HTTPSConnection` by default.
 - [x] **Difference to failed SideDeck call:** `GET /api/v1/market-data/search?internalSymbolFull=AAPL`, same documented header names but **`urllib`** transport; exact eToro current official guide still documents v1 search. **Do not assume v2 will work now without permission**.
 - [x] **Prior owner acceptance recalled:** On 2026-09-27 direct PowerShell reportedly returned HTTP 200 for several SignalDeck market/demo reads; previous Codex contexts sometimes received 403. This is owner-reported prior evidence, not a live verification today.
-- [ ] **SD-11F candle direction defect:** SignalDeck uses `asc|desc`; published market-data OpenAPI also enumerates those two values, while SideDeck currently constructs `/history/candles/backward/OneDay/1000`. **This is an untested follow-on compatibility bug**, unrelated to the first 403, which occurred at search. Replace with `desc` in a separate offline-tested code change before any consented history reads. See `docs/SIGNALDECK_ETORO_COMPARISON.md`.
+- [x] **SD-11F candle direction defect:** SignalDeck uses `asc|desc`; published market-data OpenAPI also enumerates those two values, while SideDeck currently constructs `/history/candles/backward/OneDay/1000`. **This is an untested follow-on compatibility bug**, unrelated to the first 403, which occurred at search. Replace with `desc` in a separate offline-tested code change before any consented history reads. See `docs/SIGNALDECK_ETORO_COMPARISON.md`.
 - [ ] **Next offline task:** Locally compare **only boolean equality** of the loaded key pairs across SignalDeck and SideDeck, verify cwd/`.env` selection and proxy environment indicators without displaying values, hashes or keys. Build sanitized request-shape unit tests for v1 vs v2. No network requests.
 - [ ] **Fresh authorisation required:** Only after offline findings should the owner consider **one** newly scoped read-only v2 search request, never broker/account/orders. Old permission remains consumed.
 - [x] **Investigation report:** `docs/SIGNALDECK_ETORO_COMPARISON.md`. The HTTP 403 is a request/access-context failure, **not evidence eToro lacks five years of history**.
+
+## SD-11G — offline SignalDeck request-contract alignment
+
+- [x] Corrected SideDeck `/api/v1/market-data/instruments/{id}/history/candles/desc/OneDay/{n}` from unsupported `backward`; GET allowlist remains strict and bounded to 1,000, no other HTTP paths permitted.
+- [x] Added synthetic tests for v1 query, direction/allowlist, v2 reference request shape, auth header keys/UUID and no network calls. **No v2 live fallback** was activated; the earlier HTTP 403 still occurred before any candle GET.
+- [ ] **SD-11G local only:** Confirm SignalDeck's and SideDeck's actually loaded key values match with booleans only, correct `.env` roots and proxy-config presence. No values, hashes, length metadata or remote requests. Local Codex to report findings.
+- [ ] **Gate:** Fresh explicit owner approval is required before any further authenticated eToro GET, including a single v2 instrument search. Broker and Demo account endpoint access remain forbidden.
+- [ ] **CI evidence:** Update this item with actual GitHub Actions status after code push; do not claim green CI without observing it.
+
+**Detailed handoff:** `docs/SIGNALDECK_ETORO_COMPARISON.md` and `AGENTS.md`.

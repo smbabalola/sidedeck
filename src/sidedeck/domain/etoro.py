@@ -161,7 +161,7 @@ class EtoroHistoricalDataClient:
             raise ValueError("candle limit must be positive")
         count = min(limit, MAX_DAILY_CANDLES)
         payload = self._get(
-            f"/market-data/instruments/{instrument.instrument_id}/history/candles/backward/{DAILY_INTERVAL}/{count}",
+            f"/market-data/instruments/{instrument.instrument_id}/history/candles/desc/{DAILY_INTERVAL}/{count}",
             {},
         )
         candles: list[EtoroCandle] = []
@@ -274,7 +274,7 @@ def _validate_path(path: str) -> None:
     if path == "/market-data/search":
         return
     match = re.fullmatch(
-        r"/market-data/instruments/([1-9][0-9]*)/history/candles/backward/OneDay/([1-9][0-9]*)",
+        r"/market-data/instruments/([1-9][0-9]*)/history/candles/desc/OneDay/([1-9][0-9]*)",
         path,
     )
     if match and int(match.group(2)) <= MAX_DAILY_CANDLES:
