@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
+import re
 import time
 from typing import Any, Literal, Mapping, Protocol, cast
 from uuid import UUID, uuid4
@@ -173,6 +174,9 @@ class EtoroHistoricalDataClient:
             raise EtoroDataError("candle instrument group is malformed")
         for row in rows:
             try:
+                row_id = _instrument_id(row)
+                if row_id is not None and row_id != instrument.instrument_id:
+                    raise EtoroDataError("candle belongs to an unexpected instrument")
                 candle = EtoroCandle(
                     timestamp=_parse_time(row.get("fromDate")),
                     open=_decimal(row["open"]), high=_decimal(row["high"]), low=_decimal(row["low"]),
@@ -199,10 +203,14 @@ class EtoroHistoricalDataClient:
         valid = tuple(candle.validate(cutoff) for candle in candles)
         sessions = {candle.timestamp.date() for candle in valid}
         earliest, latest = valid[0].timestamp, valid[-1].timestamp
-        if exchange_sessions is None:
-            status: CoverageStatus = "UNVERIFIED"
+        if earliest.date() > target:
+            status: CoverageStatus = "INSUFFICIENT_DEPTH"
             gaps: tuple[date, ...] = ()
-            reason = "exchange-session calendar is required; weekdays are not a trading calendar"
+            reason = "earliest available candle is newer than the five-year target date"
+        elif exchange_sessions is None:
+            status = "UNVERIFIED"
+            gaps = ()
+            reason = "five-year span might exist; verified exchange-session calendar is required"
         else:
             expected = frozenset(day for day in exchange_sessions if target <= day <= cutoff.date())
             gaps = tuple(sorted(expected - sessions))
@@ -265,10 +273,12 @@ def _five_years_before(value: date) -> date:
 def _validate_path(path: str) -> None:
     if path == "/market-data/search":
         return
-    if path.startswith("/market-data/instruments/") and "/history/candles/backward/OneDay/" in path:
-        suffix = path.rsplit("/", 1)[-1]
-        if suffix.isdigit() and 0 < int(suffix) <= MAX_DAILY_CANDLES:
-            return
+    match = re.fullmatch(
+        r"/market-data/instruments/([1-9][0-9]*)/history/candles/backward/OneDay/([1-9][0-9]*)",
+        path,
+    )
+    if match and int(match.group(2)) <= MAX_DAILY_CANDLES:
+        return
     raise EtoroDataError("GET path is outside the read-only market-data allowlist")
 
 
