@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (Ollama smoke accepted; upstream rating/data integration defect tracked)  
+**Updated:** 2026-10-18 (SD-10B verified; SD-10C native-network isolation recovery scoped)  
 **Verified integration branch SHA:** `12ae6eaae21e567034536d7d0c0ebb10397848da`  
 **Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39140051347 — Python 3.12, 50 passed, Ruff and mypy (22 source files) green, disposable PostgreSQL; three existing warnings.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -99,6 +99,18 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 
 **Next action for Codex:** Read the updated smoke-test runbook and execute SD-10B-1…6 continuously, preserving untracked/ignored local work; stop only at actual unsafe external data or permission gates.
 
+## SD-10C — Native-network isolation and real graph recovery (2026-10-18)
+
+- [x] **Last independently verified SD-10B baseline:** commit `727fd2924c490feace0c76f7ebf1b88ec5395ad7`; [CI 39140134851](https://github.com/smbabalola/sidedeck/actions/runs/39140134851) succeeded with 50 tests, Ruff/mypy and disposable PostgreSQL. User-reported 49 local passes, 1 local PostgreSQL skip, 3 known SQLite warnings.
+- [x] Exact upstream `TradingAgentsGraph` import verified in disposable Python 3.12, five-level rating adapter fixed. Full graph did **not** finish, due to Yahoo `curl_cffi` native-network attempt; Python-only socket guard was insufficient. No accepted graph rating or trade.
+- [x] **Source-level route identified:** `TradingAgentsGraph.resolve_instrument_context` calls Yahoo-backed `resolve_instrument_identity` before graph execution, and the market analyst's compiled `ToolNode` binds `get_stock_data`, `get_indicators` and `get_verified_market_snapshot` routed to vendors; memory and other routes require independent review.
+- [ ] **SD-10C-1 / Critical:** Build strict synthetic identity/market tool fixture interface, injected **before upstream graph construction**, deny all unspecified tools/symbols/as-of timestamps; never permit live Yahoo fallback.
+- [ ] **SD-10C-2 / Critical:** Prove **OS-level** default-deny native network egress, covering `curl_cffi`/DNS/subprocesses; local Ollama access must be separately allowlisted or mediated. Do not alter user's general Windows firewall/services without approval. If isolation unavailable, skip actual Ollama graph and mark `OS_EGRESS_BOUNDARY_BLOCKED`.
+- [ ] **SD-10C-3 / P1:** After both gates pass, invoke **one** real pinned-upstream Ollama graph with bounded tokens/time and controlled fixture data, capture actual final rating/REVIEW, no executable order/ledger changes. If blocked, run a truly offline compiled upstream graph with deterministic model stubs and label it **stubbed**, not real-LLM graph proof.
+- [ ] **SD-10C-4 / P1:** Test native-deny and compiled-tool binding, CI and redacted evidence; update `TODO.md`/`docs/INTEGRATION_REPORT.md` after execution, push normal commits. Full runbook: [`docs/DATA_ISOLATION_RECOVERY.md`](docs/DATA_ISOLATION_RECOVERY.md).
+
+**Next action:** Codex performs SD-10C-1 through SD-10C-4 **continuously** with no repeat of completed provider/rating tests. No unauthorised market-data provider requests, no paid models, no eToro.
+
 ## Active blockers and mitigations
 
 1. **AI Trading copyright:** Upstream `imranpollob/ai-trading` shows no root licence; do not reuse source without permission. Safe independent protocol/fixture work may proceed.
@@ -121,4 +133,4 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 | 2026-10-18 | SD-10B rating/isolation gate `12ae6ea` | [39140051347](https://github.com/smbabalola/sidedeck/actions/runs/39140051347) | Five-level rating contract fixed; exact graph import verified; one graph attempt stopped at Yahoo `curl_cffi` egress; 50 CI tests green |
 | 2026-10-18 | SD-01–SD-06 offline demo `4a35d412` | [39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) | Track A minimal offline demo verified: 35 CI tests, Ruff, mypy, disposable PostgreSQL passed |
 
-**Next action:** Resolve the disposable TradingAgents runtime installation/data-isolation blocker before claiming an upstream graph run. Use the canonical CLI `python -m sidedeck.demo run` (and `reset-fixture` as a separate command), **not** the unsupported `--reset` flag. Leave broker calls disabled until explicit Demo-only approval. Draft PR #1 remains draft/unmerged.
+**Next action:** SD-10B import and rating contract are complete. Follow `docs/DATA_ISOLATION_RECOVERY.md` for synthetic-data injection and native egress containment before another real graph run. Use the canonical CLI `python -m sidedeck.demo run` (and `reset-fixture` as a separate command), **not** the unsupported `--reset` flag. Leave broker calls disabled until explicit Demo-only approval. Draft PR #1 remains draft/unmerged.
