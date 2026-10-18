@@ -378,3 +378,10 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **SD-12E durable visual fixture:** `python -m sidedeck.paper_outbox_demo --dry-run` safely creates `results/paper_outbox_fixture.sqlite3`, two USD 1000 journals and a fake fill, closes/reopens journal, writes dedicated HTML/JSON views and is restart-idempotent. This never connects to Alpaca or calls a broker, and preserves `results/demo.sqlite3`. The example's fake fill is *not broker evidence*.
 
 - [x] **SD-12E final regression verified:** Code commit `1fa02cb0b77598b49e6813c2e7d718a1153ff090` passed [CI 39160551174](https://github.com/smbabalola/sidedeck/actions/runs/39160551174) and [CI 39160548048](https://github.com/smbabalola/sidedeck/actions/runs/39160548048): **181 tests passed**, 3 existing SQLite warnings, Ruff passed, mypy passed (34 source files), disposable PostgreSQL CI. Added fail-closed handling of corrupted/disengaged persistent kill switch. No provider or broker requests; all fill evidence remains offline/fixture.
+
+## SD-12F — Alpaca paper GET-only receipt matching, implementation (2026-10-18)
+
+- [x] `AlpacaPaperOrderReader` parses the actual documented broker order and FILL activity formats using only injected read-only paper GET, validates SideDeck deterministic client-order ID, approved strategy key slot, limit/day order shape, symbol, price, qty, broker UUID, activity IDs, cumulative totals, timestamps and bounded cursor pagination. Errors and correction gaps fail closed. No live API or account credentials used.
+- [x] `SideDeckPaperReceiptReview` links a persisted `DurablePaperDesk.order_draft` directly to the broker read-only receipt reader and compares the result against the reloaded SQLite journal; reports missing fill evidence without writing a journal event. Does not guess fees or silently attribute another system's orders to SideDeck.
+- [ ] Broker receipt and fee/account-provenance acceptance requires separate user-local read-only tests with verified credentials. Paper order writes remain disabled.
+- [ ] Record actual green CI and tested SHA when complete. Source/documentation: `docs/ALPACA_RECEIPT_RECONCILIATION.md`.

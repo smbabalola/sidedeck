@@ -165,3 +165,7 @@ Open `results/paper_outbox_fixture.html`. The demo uses a dedicated, marked
 `results/paper_outbox_fixture.sqlite3` file. It does not reset or touch
 `results/demo.sqlite3`, and it never accesses Alpaca or reads API credentials.
 The simulated fill is **not evidence of a real paper trade**.
+
+## PAPER broker receipt inspection (code-ready, read-only)
+
+The new `SideDeckPaperReceiptReview` reads a validated durable order and compares it against the paper order/FILL APIs **through an injected GET transport**. It never automatically posts fee-unknown broker fills to the SideDeck ledger and has no submit/cancel capabilities. The scanner is covered with synthetic offline tests; **no authenticated Alpaca requests have been run**. See `docs/ALPACA_RECEIPT_RECONCILIATION.md`.
