@@ -8,7 +8,7 @@ capability.
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from http.client import HTTPMessage
 import json
 import os
@@ -20,6 +20,7 @@ from uuid import UUID
 
 from sidedeck.domain.etoro import (
     ETORO_BASE_URL,
+    _validate_path,
     EtoroHistoricalDataClient,
     MarketDataReadCapability,
     ReadOnlyMarketDataTransport,
@@ -33,6 +34,7 @@ class UrllibReadOnlyTransport(ReadOnlyMarketDataTransport):
         self._headers = dict(headers)
 
     def get(self, path: str, params: Mapping[str, str], request_id: UUID) -> tuple[int, Mapping[str, str], bytes]:
+        _validate_path(path)
         url = f"{ETORO_BASE_URL}{path}"
         if params:
             url = f"{url}?{urlencode(params)}"
@@ -88,12 +90,25 @@ def main() -> int:
             parser.error("ETORO_API_KEY and ETORO_USER_KEY are required only after owner approval")
         transport = UrllibReadOnlyTransport({"x-api-key": api_key, "x-user-key": user_key})
     client = EtoroHistoricalDataClient(transport, capability=MarketDataReadCapability())
-    cutoff = datetime(2026, 1, 6, tzinfo=timezone.utc)
+    if args.dry_run:
+        cutoff = datetime(2026, 1, 6, tzinfo=timezone.utc)
+        exchange_sessions: frozenset[date] | None = frozenset({date(2026, 1, 5)})
+    else:
+        # Only inspect days that must already have finished in UTC. This
+        # deliberately excludes the current UTC date; the provider's
+        # "complete" field may be absent, so today's forming daily bar must
+        # not be accepted merely because its fromDate timestamp is in the past.
+        yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+        cutoff = datetime.combine(yesterday, time.max, tzinfo=timezone.utc)
+        # Do not pretend a one-day fixture is a valid five-year exchange
+        # calendar. Live coverage is only conclusive after independent
+        # exchange-session evidence has been supplied.
+        exchange_sessions = None
     reports = []
     for ticker in ("AAPL", "MSFT", "SPY", "QQQ"):
         resolved = client.resolve_instrument(ticker)
         candles = client.fetch_daily_candles(resolved, cutoff=cutoff)
-        reports.append(client.scan_five_year_daily(resolved, cutoff=cutoff, candles=candles, exchange_sessions=frozenset({date(2026, 1, 5)})).__dict__)
+        reports.append(client.scan_five_year_daily(resolved, cutoff=cutoff, candles=candles, exchange_sessions=exchange_sessions).__dict__)
     print(json.dumps({"mode": "dry-run" if args.dry_run else "live-read-only", "reports": reports}, default=str, sort_keys=True))
     return 0
 
