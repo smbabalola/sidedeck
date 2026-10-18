@@ -2,9 +2,9 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (initial delivery-sprint board)  
-**Verified branch HEAD at creation:** `a2b402d18de9de525ebe97d40ebbe444482b8a4f`  
-**CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39132670450 — successful.  
+**Updated:** 2026-10-18 (Track A acceptance and accelerated integration sprint)  
+**Verified Track A SHA:** `4a35d4120d3a6653250083906f10808b593e8994`  
+**Track A CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39134181178 — 35 passed, Ruff and mypy green, disposable PostgreSQL.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
 
 ## Mandatory maintenance
@@ -35,7 +35,20 @@
 - [x] **SD-03 / P0 — Local execution simulator:** Local simulated orders support fees, spread, partial fills, cancellation, restart-safe artifact/journal persistence and causal run/decision/order/fill/journal lineage; no broker transport exists.
 - [x] **SD-04 / P0 — Two-agent end-to-end fixture runner:** Both independent fixture workers share three timestamped synthetic bundles and separate $1,000 ledgers with BUY/SELL/HOLD/rejection paths.
 - [x] **SD-05 / P0 — Local dashboard & export:** Ignored `results/` contains labelled HTML dashboard, JSON report and CSV export with cash, NAV, P&L, fees, fills, refusals and provenance.
-- [x] **SD-06 / P0 — Full acceptance:** 34 local tests pass with portfolio isolation, risk negatives, replay/restart, duplicate prevention, migration, fixture determinism and simulator lifecycle coverage; local PostgreSQL is skipped because no disposable daemon is available.
+- [x] **SD-06 / P0 — Initial offline MVP acceptance:** 34 local tests pass / 1 PostgreSQL skipped; [final CI 39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) runs Python 3.12, 35 tests including disposable PostgreSQL, Ruff and mypy (19 source files), all green. This verifies a **minimal local demo**, not complete research integration or production-grade replay.
+
+## IMMEDIATE — finish integration-boundary correctness in one batch (no separate approval gate)
+
+These are source-review findings at verified commit `4a35d4120d3a6653250083906f10808b593e8994`. Fix them alongside the next continuous research-adapter sprint. Do **not** reopen P1 or pause after each one.
+
+- [ ] **SD-06H-01 / P0 — Single trusted decision:** `demo.run_demo` calls `coordinator.run(...)` and then `worker.propose(...)` again, executing a separately generated envelope without gating execution on the *accepted* validation result. Return the exact validated immutable envelope/accepted intents from the gateway; never execute unvalidated or rejected proposals. Add a malicious/unstable-worker regression that emits a valid first envelope and an invalid second one.
+- [ ] **SD-06H-02 / P0 — Actual read-only portfolio context:** Demo `AgentRunRequest.cash_usd` remains hardcoded at 1000 across sessions, omits real holdings. Supply ledger-derived cash/holdings at each cutoff and verify workers cannot spoof changes to portfolio identity/state.
+- [ ] **SD-06H-03 / P0 — Post-fill risk invariants:** `RiskGate` currently computes exposure from cost basis and checks only new order notional against the 20% position cap. Validate **market-valued total position/exposure** for add-ons, include fees/spread/slippage before cash commitment, verify available-to-trade amount and revalidate at fill time. Add tests for add-ons exceeding caps and costs causing negative cash. Keep existing max four positions and 1% stop-risk rules.
+- [ ] **SD-06H-04 / P0 — End-to-end idempotency and recovery:** Demonstrate that simulated order/fill IDs, operation IDs and journal events have stable persisted lineage; duplicate/restarted/mid-run crash executions cannot double-post. Use atomic storage or a documented recoverable state machine and tests. Current JSON artifact and SQLite journal are separate writes.
+- [ ] **SD-06H-05 / P1 — Honest dashboard:** The HTML file currently displays a summary table, not the promised equity/drawdown/positions/rejections/lineage panels. Add accurate NAV series, holdings, exposure, drawdown, trade and risk decision sections or clearly mark unavailable values. Distinguish fixture vs actual data throughout; implement a safe scoped fixture reset that cannot recursively delete an arbitrary user directory.
+- [ ] **SD-06H-06 / P1 — Calendar and data provenance:** Demo dates Jan 2–4, 2026 include weekend days. Either explicitly tag all synthetic dates as artificial or use legitimate trading-session dates. Build a clean market calendar/as-of data boundary for genuine research inputs. Test weekends, future knowledge and stale quote semantics.
+
+**Track A:** runnable minimal offline MVP **delivered**. **Track A hardened:** pending SD-06H-01…06; work in parallel with safe SD-07/SD-09 adapter preparation so there is no handoff delay.
 
 ## THEN — genuine research integrations without broker execution
 
@@ -67,6 +80,6 @@
 | 2026-10-18 | P1.2 `cae13cf` | [39131573901](https://github.com/smbabalola/sidedeck/actions/runs/39131573901) | Accepted accounting foundation |
 | 2026-10-18 | P2A `a2b402d` | [39132670450](https://github.com/smbabalola/sidedeck/actions/runs/39132670450) | Accepted fixture proposal gateway |
 | 2026-10-18 | Delivery sprint authorised | See subsequent commit | Living backlog established |
-| 2026-10-18 | SD-01–SD-06 local demo | [39134103922](https://github.com/smbabalola/sidedeck/actions/runs/39134103922) | Track A runnable offline demo complete; 35 CI tests passed |
+| 2026-10-18 | SD-01–SD-06 offline demo `4a35d412` | [39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) | Track A minimal offline demo verified: 35 CI tests, Ruff, mypy, disposable PostgreSQL passed |
 
-**Next action:** Safe code-only TradingAgents adapter preparation is recorded; actual model smoke testing remains credential-gated.
+**Next action:** Read `docs/INTEGRATION_SPRINT.md`. Fix SD-06H-01…06 together with safe SD-07/SD-09 development, continuously commit/test/push without requesting per-task approvals. Actual model smoke tests, source-rights clearance, eToro credentials and authenticated broker execution remain separate owner gates.
