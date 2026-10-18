@@ -135,3 +135,17 @@ def test_leap_day_period_and_zero_volume_are_safe():
     assert parsed[0].volume == Decimal("0")
     report = client(FakeTransport({})).scan_five_year_daily(instrument(), cutoff=cutoff, candles=parsed)
     assert report.status == "INSUFFICIENT_DEPTH"
+
+
+def test_v2_stock_search_can_omit_currency_without_fabricating_provider_verification():
+    # Search supplies the provider ID and type; USD is a local curated-universe
+    # expectation, not currency confirmed by the v2 search endpoint.
+    payload = {"results": [{"instrumentId": 1001, "symbol": "AAPL", "type": "stock", "exchangeId": 1}]}
+    assert client(FakeTransport(payload)).resolve_instrument("AAPL").instrument_id == 1001
+
+
+def test_v2_search_rejects_wrong_currency_or_leveraged_instrument():
+    for extra in ({"currency": "EUR"}, {"isLeveraged": True}, {"isInverse": True}):
+        payload = {"results": [{"instrumentId": 1001, "symbol": "AAPL", "type": "stock", **extra}]}
+        with pytest.raises(EtoroDataError):
+            client(FakeTransport(payload)).resolve_instrument("AAPL")
