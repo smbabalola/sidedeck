@@ -101,8 +101,16 @@ def _day(value: object) -> date:
         raise HistoricalDataError("malformed EOD date") from exc
 
 
-def _check_ohlc(o: Decimal, h: Decimal, l: Decimal, c: Decimal, prefix: str) -> None:
-    if min(o, h, l, c) <= 0 or h < max(o, c) or l > min(o, c) or l > h:
+def _check_ohlc(
+    price_open: Decimal, price_high: Decimal, price_low: Decimal,
+    price_close: Decimal, prefix: str,
+) -> None:
+    if (
+        min(price_open, price_high, price_low, price_close) <= 0
+        or price_high < max(price_open, price_close)
+        or price_low > min(price_open, price_close)
+        or price_low > price_high
+    ):
         raise HistoricalDataError(f"invalid {prefix} OHLC prices")
 
 
