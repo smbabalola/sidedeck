@@ -62,7 +62,7 @@ def test_populated_postgres_migration_persistence_and_rollback() -> None:
         save_events(engine, [conflicting, additional])
     assert {event.idempotency_key for event in load_events(engine)} == {"opening-capital", "buy-after-migration"}
 
-    command.downgrade(config_for(POSTGRES_URL), "base")
+    command.downgrade(config_for(POSTGRES_URL), "0002_harden_journal")
     command.upgrade(config_for(POSTGRES_URL), "head")
     assert {event.idempotency_key for event in load_events(engine)} == {"opening-capital", "buy-after-migration"}
     engine.dispose()
