@@ -3,8 +3,8 @@
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
 **Updated:** 2026-10-18 (Ollama smoke accepted; upstream rating/data integration defect tracked)  
-**Verified integration branch SHA:** `3059971e3f05a84dfb2ae4847b173e1ed47c6d8f`  
-**Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39138613194 — Python 3.12, 42 passed, Ruff and mypy (22 source files) green, disposable PostgreSQL; three existing warnings.  
+**Verified integration branch SHA:** `12ae6eaae21e567034536d7d0c0ebb10397848da`  
+**Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39140051347 — Python 3.12, 50 passed, Ruff and mypy (22 source files) green, disposable PostgreSQL; three existing warnings.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
 
 ## Mandatory maintenance
@@ -118,6 +118,7 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 | 2026-10-18 | Integration hardening + SD-07/SD-09 `3d21d80` | [39135593162](https://github.com/smbabalola/sidedeck/actions/runs/39135593162) | 39 CI tests green, Ruff/mypy/PostgreSQL passed; one initial CI packaging omission fixed |
 | 2026-10-18 | Final integration report `cbee3d0` | [39135705189](https://github.com/smbabalola/sidedeck/actions/runs/39135705189) | Independently verified 39 green tests + PostgreSQL; genuine upstream agent runs and eToro gated |
 | 2026-10-18 | Guarded local model smoke `3059971` | [39138613194](https://github.com/smbabalola/sidedeck/actions/runs/39138613194) | One local Ollama provider-only inference accepted by SideDeck proposal validation; 42 CI tests green; upstream graph remains unverified |
+| 2026-10-18 | SD-10B rating/isolation gate `12ae6ea` | [39140051347](https://github.com/smbabalola/sidedeck/actions/runs/39140051347) | Five-level rating contract fixed; exact graph import verified; one graph attempt stopped at Yahoo `curl_cffi` egress; 50 CI tests green |
 | 2026-10-18 | SD-01–SD-06 offline demo `4a35d412` | [39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) | Track A minimal offline demo verified: 35 CI tests, Ruff, mypy, disposable PostgreSQL passed |
 
 **Next action:** Resolve the disposable TradingAgents runtime installation/data-isolation blocker before claiming an upstream graph run. Use the canonical CLI `python -m sidedeck.demo run` (and `reset-fixture` as a separate command), **not** the unsupported `--reset` flag. Leave broker calls disabled until explicit Demo-only approval. Draft PR #1 remains draft/unmerged.
