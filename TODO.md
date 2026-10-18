@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (user visual demo verified; limited provider tests authorised)  
+**Updated:** 2026-10-18 (Ollama smoke accepted; upstream rating/data integration defect tracked)  
 **Verified integration branch SHA:** `3059971e3f05a84dfb2ae4847b173e1ed47c6d8f`  
 **Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39138613194 — Python 3.12, 42 passed, Ruff and mypy (22 source files) green, disposable PostgreSQL; three existing warnings.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -86,6 +86,18 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **SD-10D / Security:** Check repository history and CI logs for accidental secret inclusion using safe redacted detection and owner notification if found. Never echo potential secret values. Current remote `.env` absent and `.gitignore` ignores it; a historical scan is a separate check.
 
 **Next action:** Resolve the disposable TradingAgents runtime installation/data-isolation blocker before claiming an upstream graph run. Provider-only Ollama evidence is complete. Actual eToro use and unlicensed `imranpollob/ai-trading` source remain blocked.
+
+## Priority integration defect — pinned upstream graph (2026-10-18)
+
+- [x] **Source compatibility inspected:** At pinned `TauricResearch/TradingAgents@e8f5503...`, `TradingAgentsGraph.propagate(...)` returns `(final_state, five-tier rating string or REVIEW)`, **not** a structured trade dictionary. This is verified from upstream `tradingagents/graph/trading_graph.py` and `tradingagents/agents/rating.py`.
+- [ ] **SD-10B-1 / Critical:** Fix `TradingAgentsProposalAdapter` to accept upstream's real five-tier ratings (Buy/Overweight/Hold/Underweight/Sell/REVIEW), preserve signal/evidence, and refuse to synthesize orders, quantities, stops or invalidations. Include tests for all ratings and malformed state. Existing `normalize_decision` accepts dict only and would fail closed on a true upstream rating.
+- [ ] **SD-10B-2 / Critical:** In isolated disposable Python 3.12 environment, investigate why installing the exact pinned licensed TradingAgents dependency set timed out; distinguish install timeout from unsupported dependency. Verify actual import of upstream `TradingAgentsGraph` without any paid model call.
+- [ ] **SD-10B-3 / Critical:** Deny unapproved data egress. Upstream's defaults include `yfinance`, SEC/news and implicit ticker identity lookup. Before a full graph call, inject an approved synthetic/point-in-time tool-data boundary and prove localhost-only Ollama networking. If cannot enforce it, mark `DATA_ISOLATION_BLOCKED`; no purported point-in-time TradingAgents backtest.
+- [ ] **SD-10B-4 / P1:** Once import/data gate passes, run one real multi-agent graph using available local Ollama `llama3.2:3b` with bounded analysts, tokens/time and zero broker tools; accurately report actual rating, calls, time and statuses. **Provider-only Ollama smoke is already verified and need not be repeated.**
+- [ ] **SD-10B-5 / P1:** Update `docs/INTEGRATION_REPORT.md` and `TODO.md` with exact evidence and CI. See **`docs/REAL_AGENT_SMOKE_TEST.md`, section "Next focused task"**. Push normal commits; no merge or credentials.
+- [ ] **SD-10B-6 / Security:** Distinguish graph import, graph invocation, successful graph run, safe data isolation, provider inference and executable proposal acceptance. Zero trade/account mutations unless a separately validated *local-only* simulation is intentionally enabled.
+
+**Next action for Codex:** Read the updated smoke-test runbook and execute SD-10B-1…6 continuously, preserving untracked/ignored local work; stop only at actual unsafe external data or permission gates.
 
 ## Active blockers and mitigations
 
