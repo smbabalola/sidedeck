@@ -138,3 +138,17 @@ $env:PYTHONPATH = "src"
 ```
 
 The CLI does not load `.env`; a local launcher must privately provide both key/secret pairs. It contacts the **paper host only**, at most twice, without retries, and stops if authentication fails. It cannot place or cancel paper orders. No distinct-account assertion should be made based on the fixture dry-run.
+
+## SideDeck paper order review screen (offline)
+
+Run this to view the two separate SideDeck-controlled paper strategy plans, risk
+decisions and assigned Alpaca key slots without provider credentials:
+
+\`\`\`powershell
+$env:PYTHONPATH = "src"
+.venv\Scripts\python.exe -m sidedeck.paper_desk_review --dry-run
+\`\`\`
+
+Open \`results/paper_desk_review.html\`. The static review is a **fixture-only**
+display with **zero Alpaca requests or orders**, and does not represent
+verified account holdings or live strategy performance.

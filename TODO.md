@@ -365,3 +365,5 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **Reconciliation foundation:** verified fill evidence checks strategy/credential slot/order identity, partial-fill quantity, correct buy/sell limit, sensible fees and timing; idempotent journal writes with causation and no cross-strategy posting. This code is offline-only and external fill verification is still pending.
 - [ ] **Before any broker POST:** durable broker outbox/recovery and read-only reconciliation, strict account identity validation, separate explicit owner paper-write consent, kill switch and provider response acceptance. No broker calls are authorised by this coding work.
 - [ ] **Verification:** CI status to be recorded after push; see `docs/SIDEDECK_PAPER_DESK.md`.
+
+- [x] **SD-12D visual paper desk review:** \`python -m sidedeck.paper_desk_review --dry-run\` produces \`results/paper_desk_review.html\` and \`.json\` for two risk-approved synthetic strategy previews. Each displays the correct key slot and cash allocation, with explicit zero actual Alpaca orders; no network or credentials. This is visual, fixture-only acceptance, not paper trading.
