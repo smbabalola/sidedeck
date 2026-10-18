@@ -201,18 +201,18 @@ class DurablePaperDesk:
             "SELECT broker_fill_id,client_order_id,evidence_json "
             "FROM paper_fills ORDER BY rowid"
         ):
-            track = desk._orders.get(order_id)
-            if track is None:
+            found = desk._orders.get(order_id)
+            if found is None:
                 raise PaperDeskError("orphan paper fill evidence")
             evidence = _fill_load(evidence_json)
             if (
                 evidence.broker_fill_id != raw_id
                 or evidence.client_order_id != order_id
-                or evidence.portfolio_id != track.draft.portfolio_id
-                or evidence.key_slot != track.draft.key_slot
+                or evidence.portfolio_id != found.draft.portfolio_id
+                or evidence.key_slot != found.draft.key_slot
             ):
                 raise PaperDeskError("persisted fill crosses strategy identity")
-            track.evidence_by_fill_id[raw_id] = evidence
+            found.evidence_by_fill_id[raw_id] = evidence
         for track in desk._orders.values():
             total = sum((f.quantity for f in track.evidence_by_fill_id.values()), Decimal("0"))
             if total != track.filled_quantity or total > track.draft.quantity:
