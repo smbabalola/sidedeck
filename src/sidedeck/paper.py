@@ -66,7 +66,7 @@ class AlpacaPaperHttpTransport(PaperGetTransport):
             # Never return or log error bodies that could expose account details.
             exc.close()
             return exc.code, b""
-        except URLError as exc:
+        except URLError:
             raise RuntimeError("Alpaca PAPER transport unavailable") from None
 
 
