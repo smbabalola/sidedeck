@@ -356,3 +356,12 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **Provisional SideDeck strategy mapping, no broker writes:** `tradingagents` → `ALPACA_API_KEY` (signaldeckdemo) and `ai-trading` → `ALPACA_API_KEY2` (Sidedeckdemo). This reflects the current two-key setup, **not proof of dedicated unused strategy accounts**. No broker orders are authorised.
 - [ ] **First acceptance prerequisite:** Confirm both matching paper secrets exist in local ignored `.env` and both keys really access *different paper account IDs* using the already-developed consent-gated, 2-request `sidedeck.paper_pair` inspection; do not print account IDs or any key values. **No request is authorised by this owner message alone.**
 - [ ] **Existing-account contamination:** Check whether the first account is still used by SignalDeck (or the second by other software); inspect existing positions/open orders only after distinct owner approval. SideDeck must not appropriate old balance, trade history or existing orders as its own strategy P&L. If the first account is shared, do **not** connect live paper writes until owner opts into dedicated account separation.
+
+
+## SD-12D — SideDeck manages paper-order intent and ledger, offline build
+
+- [x] **Owner go-ahead:** Build, don't block on repeated account-name discussions. Preserve paper key-slot mapping `tradingagents → ALPACA_API_KEY` and `ai-trading → ALPACA_API_KEY2`.
+- [x] **Core order desk:** Added `SideDeckPaperDesk` for deterministic paper limit-order previews and SideDeck `RiskGate` checks against each isolated USD 1,000 ledger; paper writes default permanently disabled in this module. Only one unresolved order per strategy; duplicate proposals get stable `client_order_id`.
+- [x] **Reconciliation foundation:** verified fill evidence checks strategy/credential slot/order identity, partial-fill quantity, correct buy/sell limit, sensible fees and timing; idempotent journal writes with causation and no cross-strategy posting. This code is offline-only and external fill verification is still pending.
+- [ ] **Before any broker POST:** durable broker outbox/recovery and read-only reconciliation, strict account identity validation, separate explicit owner paper-write consent, kill switch and provider response acceptance. No broker calls are authorised by this coding work.
+- [ ] **Verification:** CI status to be recorded after push; see `docs/SIDEDECK_PAPER_DESK.md`.
