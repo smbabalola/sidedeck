@@ -31,6 +31,12 @@ Per the **owner's September 27 local test reports (not independently reproduced 
 
 **Critical nuance:** eToro's **current official API guide** [Find Instrument ID](https://api-portal.etoro.com/guides/get-instrument-id) specifies SideDeck's **v1** search path and `internalSymbolFull` parameter. SignalDeck's older **v2** search might still be accessible, but this cannot be assumed. Do not change live route blindly or classify the 403 as proof of missing historical data.
 
+### Additional candle-route defect found
+
+**Separate from the 403:** SignalDeck's `CandleDirection` enum supports exactly `asc` and `desc`. A published eToro-derived OpenAPI specification also defines `direction` as **`asc|desc`**, meaning SideDeck's `/history/candles/backward/OneDay/1000` would likely fail validation if the instrument search started working. Official docs currently describe `/api/v1` market-data routes; we should retain explicit versioned source tests. Source: https://apis.io/apis/etoro/etoro-market-data-api/ and [SignalDeck enum](https://github.com/smbabalola/SignalDeck/blob/bundle7/complete-demo-lifecycle/backend/app/adapters/market_data/etoro/models.py).
+
+**Offline corrective follow-up:** For approved symbols, change the SideDeck candle route to explicit `desc` (latest-window descending) only after updating unit tests and fixture decoder; never call it without fresh permission. This was **not** the cause of the first observed HTTP 403, because the failed search occurred *before* any candle request.
+
 ## Root cause assessment
 
 1. **Request-path/API-version differences:** real, source-verified and material. Most promising controlled comparison (when newly authorised) is the previously successful **SignalDeck v2 read-only market-data search**, not a speculative rewrite of candle paths.
