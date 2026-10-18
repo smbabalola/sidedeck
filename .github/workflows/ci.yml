@@ -2,7 +2,7 @@ name: SideDeck CI
 
 on:
   push:
-    branches: [main, feat/p1-foundation]
+    branches: [main, feat/p1-foundation, feat/p2-agent-adapters]
   pull_request:
 
 jobs:
