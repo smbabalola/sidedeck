@@ -41,3 +41,25 @@ def test_urllib_transport_normalizes_http_error_without_exposing_body(monkeypatc
     assert status == 429
     assert returned_headers["Retry-After"] == "1"
     assert body == b"private response"
+
+def test_one_symbol_v2_dry_run_does_not_request_candles(monkeypatch, capsys):
+    seen = []
+    original = data_probe._DryRunTransport.get
+
+    def recorded(self, path, params, request_id):
+        seen.append((path, dict(params)))
+        return original(self, path, params, request_id)
+
+    monkeypatch.setattr(data_probe._DryRunTransport, "get", recorded)
+    monkeypatch.setattr("sys.argv", ["data_probe", "--provider", "etoro", "--dry-run", "--single-v2-search", "AAPL"])
+    assert data_probe.main() == 0
+    assert seen == [("/api/v2/market-data/instruments/search", {"query": "AAPL", "limit": "5"})]
+    assert '"kind": "v2-search-only"' in capsys.readouterr().out
+
+
+def test_one_symbol_v2_network_requires_opt_in_even_if_credentials_exist(monkeypatch):
+    monkeypatch.setenv("ETORO_API_KEY", "DUMMY")
+    monkeypatch.setenv("ETORO_USER_KEY", "DUMMY2")
+    monkeypatch.setattr("sys.argv", ["data_probe", "--provider", "etoro", "--single-v2-search", "AAPL"])
+    with pytest.raises(SystemExit):
+        data_probe.main()
