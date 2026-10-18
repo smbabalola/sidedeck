@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (SD-11B independently verified; live-probe cutoff and reporting fixes accepted)
+**Updated:** 2026-10-18 (owner authorised one bounded local eToro historical market-data read; awaiting local evidence)
 **Verified code SHA:** `0da1ef47f943643fd792285d3f8136bbc287344f` (before this documentation-only update)
 **Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39143425931 — Python 3.12, 78 tests passed, Ruff passed, mypy passed for 25 source files, disposable PostgreSQL, 3 known SQLite warnings.
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -207,3 +207,15 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **Separate unchanged external gates:** upstream TradingAgents native-network isolation and graph completion; original AI Trading framework licensing; eToro Demo broker access/real forward research. Do **not** interpret read-only market data as trading permission.
 
 **Owner decision needed next:** Approve one bounded read-only eToro market-data coverage test, or continue using exclusively offline fixture/licensed CSV inputs. Do not ask to re-run completed SD-11B implementation.
+
+## SD-11C — owner-approved one-time market-data coverage read (2026-10-18)
+
+- [x] **Owner authorisation received in this conversation:** One **bounded read-only eToro market-data GET coverage test** for exactly **AAPL, MSFT, SPY and QQQ** using only the owner's *locally held* `ETORO_API_KEY` and `ETORO_USER_KEY`. Authorised requests are the four exact symbol search GETs and at most one 1,000-OneDay-candle GET per validated instrument, plus the existing at-most-one bounded 429 retry per GET. This includes local credential use solely for the scoped test, not disclosure or repository upload.
+- [ ] **SD-11C-1 / local execution:** Codex on the owner's Windows computer checks that locally provisioned eToro credentials exist without printing or committing their values, synchronises the branch **without deleting any local work**, and runs `$env:PYTHONPATH="src"; .\.venv\Scripts\python.exe -m sidedeck.data_probe --provider etoro --market-data-only --allow-read-network --confirm-owner-read-only` **once**. No model/graph runtime; no other URLs or account/positions/orders endpoints; no Demo/Real orders. No scripted recurring repeats.
+- [ ] **SD-11C-2 / validation:** Capture *only safe metadata* for each of AAPL/MSFT/SPY/QQQ: whether the search resolves correctly, historical returned candle count, earliest/latest completed daily timestamps, error type/status if blocked, and five-year daily verdict. Check response-type, currency, missing volume/adjustment evidence and whether weekly or historical close must remain separate. If API response differs, stop additional live requests; correct schema offline with redacted examples, then obtain renewed consent before any further network test.
+- [ ] **SD-11C-3 / reporting:** Mark the actual evidence `LIVE_READ_ONLY_VERIFIED` or `BLOCKED` per instrument; never claim five-year coverage from a max-1,000-row response. The current live probe cannot yield `PASS_5Y_DAILY` without a separately verified exchange calendar; `UNVERIFIED` or `INSUFFICIENT_DEPTH` are legitimate outcomes. Avoid printing raw API response, full URL/query with secrets, account identity, headers, local `.env` or tokens. Update `docs/INTEGRATION_REPORT.md` and this living TODO, run CI if code changes, commit and push safe **documentation/evidence only**.
+- [ ] **Genuine blocker if credentials absent:** This chat/GitHub cannot read the user's local `.env`. If `ETORO_API_KEY` / `ETORO_USER_KEY` are not configured on the Windows machine, mark `LOCAL_ETORO_KEYS_MISSING` and ask owner to provision them **locally**; do not request key values in chat, dump environment variables or invent results.
+- [ ] **Other external gates unchanged:** native network-safe **TradingAgents graph** run, unlicensed original AI Trading source, eToro Demo order access and real-money routes are *not approved* by this market-data authorisation.
+
+**Authorised scope:** one-time locally executed GET-only probe, **not** a persistent entitlement for future pulls, autonomous monitors, broker actions or personal account data. No keys or network request have been used through GitHub by this assistant. Draft PR #1 remains open and unmerged.
+
