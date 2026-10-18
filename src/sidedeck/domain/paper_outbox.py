@@ -97,31 +97,30 @@ class DurablePaperDesk:
                 db.execute(f"PRAGMA user_version = {_VERSION}")
             elif app_id != _APP_ID:
                 raise PaperDeskError("unrelated database")
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS paper_orders(
-                  client_order_id TEXT PRIMARY KEY,
-                  portfolio_id TEXT NOT NULL,
-                  draft_json TEXT NOT NULL,
-                  state TEXT NOT NULL,
-                  broker_order_id TEXT,
-                  filled_quantity TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS paper_fills(
-                  broker_fill_id TEXT PRIMARY KEY,
-                  client_order_id TEXT NOT NULL REFERENCES paper_orders(client_order_id),
-                  evidence_json TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS paper_events(
-                  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                  portfolio_id TEXT NOT NULL,
-                  idempotency_key TEXT NOT NULL,
-                  payload_json TEXT NOT NULL,
-                  UNIQUE(portfolio_id, idempotency_key)
-                );
-                CREATE TABLE IF NOT EXISTS paper_controls(
-                  name TEXT PRIMARY KEY, value TEXT NOT NULL
-                );
-            """)
+            # sqlite3.executescript() implicitly commits, so individual DDL
+            # statements preserve the caller's BEGIN IMMEDIATE transaction.
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS paper_orders("
+                "client_order_id TEXT PRIMARY KEY, portfolio_id TEXT NOT NULL,"
+                "draft_json TEXT NOT NULL, state TEXT NOT NULL,"
+                "broker_order_id TEXT, filled_quantity TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS paper_fills("
+                "broker_fill_id TEXT PRIMARY KEY,"
+                "client_order_id TEXT NOT NULL REFERENCES paper_orders(client_order_id),"
+                "evidence_json TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS paper_events("
+                "sequence INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "portfolio_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,"
+                "payload_json TEXT NOT NULL, UNIQUE(portfolio_id,idempotency_key))"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS paper_controls("
+                "name TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
             db.execute(
                 "INSERT OR IGNORE INTO paper_controls(name,value) VALUES('kill_switch','ENGAGED')"
             )
