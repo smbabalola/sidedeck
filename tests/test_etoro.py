@@ -39,7 +39,7 @@ def candle(ts, instrument_id=1001):
 
 
 def search_payload():
-    return {"items": [{"internalInstrumentId": 1001, "internalSymbolFull": "AAPL", "assetType": "EQUITY", "exchange": "NASDAQ", "currency": "USD", "isLeveraged": False, "isInverse": False}]}
+    return {"results": [{"instrumentId": 1001, "symbol": "AAPL", "type": "stock", "exchangeId": "NASDAQ", "currency": "USD", "isLeveraged": False, "isInverse": False}]}
 
 
 def candle_payload(row):
@@ -54,7 +54,7 @@ def test_resolution_is_exact_and_daily_limit_is_clamped():
     candles = client(candles_transport).fetch_daily_candles(found, limit=5000, cutoff=datetime(2026, 1, 3, tzinfo=timezone.utc))
     assert len(candles) == 1
     assert candles[0].volume == Decimal("0")
-    assert transport.calls[0][1] == {"internalSymbolFull": "AAPL"}
+    assert transport.calls[0][:2] == ("/api/v2/market-data/instruments/search", {"query": "AAPL", "limit": "5"})
     assert candles_transport.calls[0][0].endswith("/desc/OneDay/1000")
 
 
@@ -75,9 +75,9 @@ def test_coverage_does_not_claim_five_years_from_1000_bars():
 
 
 @pytest.mark.parametrize("payload", [
-    {"items": [{"internalInstrumentId": 1001, "internalSymbolFull": "AAPL", "assetType": "EQUITY", "exchange": "NASDAQ", "currency": "USD"}, {"internalInstrumentId": 1002, "internalSymbolFull": "AAPL", "assetType": "EQUITY", "exchange": "NASDAQ", "currency": "USD"}]},
-    {"items": [{"internalInstrumentId": 1001, "internalSymbolFull": "AAPL", "assetType": "CFD", "exchange": "NASDAQ", "currency": "USD"}]},
-    {"items": [{"internalInstrumentId": 1001, "internalSymbolFull": "AAPL", "exchange": "NASDAQ", "currency": "USD"}]},
+    {"results": [{"instrumentId": 1001, "symbol": "AAPL", "type": "stock", "exchangeId": "NASDAQ"}, {"instrumentId": 1002, "symbol": "AAPL", "type": "stock", "exchangeId": "NASDAQ"}]},
+    {"results": [{"instrumentId": 1001, "symbol": "AAPL", "type": "cfd", "exchangeId": "NASDAQ"}]},
+    {"results": [{"instrumentId": 1001, "symbol": "AAPL", "exchangeId": "NASDAQ"}]},
 ])
 def test_instrument_resolution_fails_closed(payload):
     with pytest.raises(EtoroDataError):
