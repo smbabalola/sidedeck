@@ -13,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 import json
 import re
 import time
-from typing import Any, Literal, Mapping, Protocol, cast
+from typing import Any, Literal, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from .instruments import get_instrument_by_id
@@ -146,7 +146,7 @@ class EtoroHistoricalDataClient:
             instrument = EtoroInstrument(
                 instrument_id=int(raw_id),
                 ticker=ticker,
-                asset_type=cast(Literal["EQUITY", "ETF"], "ETF" if kind == "etf" else "EQUITY"),
+                asset_type="ETF" if kind == "etf" else "EQUITY",
                 venue=str(row.get("exchangeId", row.get("exchange", ""))),
                 currency=str(row.get("currency", "USD")).upper(),
                 leveraged=bool(row.get("leveraged", row.get("isLeveraged", False))),
