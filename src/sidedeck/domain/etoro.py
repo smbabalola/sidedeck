@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 from .instruments import get_instrument_by_id
 
-ETORO_BASE_URL = "https://public-api.etoro.com/api/v1"
+ETORO_BASE_URL = "https://public-api.etoro.com"
 DAILY_INTERVAL = "OneDay"
 MAX_DAILY_CANDLES = 1000
 MAX_RESPONSE_BYTES = 2_000_000
@@ -130,22 +130,25 @@ class EtoroHistoricalDataClient:
         ticker = ticker.upper()
         if ticker not in APPROVED_TICKERS:
             raise EtoroDataError("ticker is outside the approved SideDeck universe")
-        payload = self._get("/market-data/search", {"internalSymbolFull": ticker})
-        rows = _rows(payload, keys=("items", "results", "data"))
-        matches = [row for row in rows if row.get("internalSymbolFull") == ticker]
+        payload = self._get("/api/v2/market-data/instruments/search", {"query": ticker, "limit": "5"})
+        rows = _rows(payload, keys=("results",))
+        matches = [row for row in rows if row.get("symbol") == ticker]
         if len(matches) != 1:
             raise EtoroDataError("instrument resolution is not deterministic")
         row = matches[0]
         try:
-            raw_id = row.get("internalInstrumentId", row.get("instrumentId"))
-            if raw_id is None or row.get("assetType") is None or row.get("currency") is None:
-                raise EtoroDataError("instrument metadata is incomplete")
+            raw_id = row.get("instrumentId")
+            kind = str(row.get("type", "")).casefold()
+            if raw_id is None or kind not in {"stock", "stocks", "etf"}:
+                raise EtoroDataError("instrument metadata is incomplete or unsupported")
+            # SignalDeck v2 search may omit currency. USD here is the curated
+            # SideDeck universe expectation, NOT independently verified provider metadata.
             instrument = EtoroInstrument(
                 instrument_id=int(raw_id),
                 ticker=ticker,
-                asset_type=cast(Literal["EQUITY", "ETF"], str(row["assetType"]).upper()),
-                venue=str(row.get("exchange", row.get("venue", ""))),
-                currency=str(row["currency"]).upper(),
+                asset_type=cast(Literal["EQUITY", "ETF"], "ETF" if kind == "etf" else "EQUITY"),
+                venue=str(row.get("exchangeId", row.get("exchange", ""))),
+                currency=str(row.get("currency", "USD")).upper(),
                 leveraged=bool(row.get("leveraged", row.get("isLeveraged", False))),
                 inverse=bool(row.get("inverse", row.get("isInverse", False))),
             )
@@ -161,7 +164,7 @@ class EtoroHistoricalDataClient:
             raise ValueError("candle limit must be positive")
         count = min(limit, MAX_DAILY_CANDLES)
         payload = self._get(
-            f"/market-data/instruments/{instrument.instrument_id}/history/candles/desc/{DAILY_INTERVAL}/{count}",
+            f"/api/v1/market-data/instruments/{instrument.instrument_id}/history/candles/desc/{DAILY_INTERVAL}/{count}",
             {},
         )
         candles: list[EtoroCandle] = []
@@ -271,10 +274,10 @@ def _five_years_before(value: date) -> date:
 
 
 def _validate_path(path: str) -> None:
-    if path == "/market-data/search":
+    if path == "/api/v2/market-data/instruments/search":
         return
     match = re.fullmatch(
-        r"/market-data/instruments/([1-9][0-9]*)/history/candles/desc/OneDay/([1-9][0-9]*)",
+        r"/api/v1/market-data/instruments/([1-9][0-9]*)/history/candles/desc/OneDay/([1-9][0-9]*)",
         path,
     )
     if match and int(match.group(2)) <= MAX_DAILY_CANDLES:
