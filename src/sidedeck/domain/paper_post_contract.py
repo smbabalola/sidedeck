@@ -50,7 +50,8 @@ def validate_paper_post_draft(draft: PaperOrderDraft) -> None:
         raise PaperDeskError("paper order size must be positive whole shares")
     if not draft.limit_price.is_finite() or draft.limit_price <= 0:
         raise PaperDeskError("paper limit price invalid")
-    if draft.limit_price.as_tuple().exponent < -2:
+    exponent = draft.limit_price.as_tuple().exponent
+    if not isinstance(exponent, int) or exponent < -2:
         raise PaperDeskError("paper limit precision must not exceed 2 decimals")
     if draft.quantity * draft.limit_price > MAX_NOTIONAL_USD:
         raise PaperDeskError("paper order exceeds one strategy's USD 1000 allocation")
