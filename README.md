@@ -169,3 +169,7 @@ The simulated fill is **not evidence of a real paper trade**.
 ## PAPER broker receipt inspection (code-ready, read-only)
 
 The new `SideDeckPaperReceiptReview` reads a validated durable order and compares it against the paper order/FILL APIs **through an injected GET transport**. It never automatically posts fee-unknown broker fills to the SideDeck ledger and has no submit/cancel capabilities. The scanner is covered with synthetic offline tests; **no authenticated Alpaca requests have been run**. See `docs/ALPACA_RECEIPT_RECONCILIATION.md`.
+
+## Alpaca PAPER-only request contract (not an activated broker transport)
+
+`sidedeck.domain.paper_post_contract` now validates a SideDeck-created risk-approved draft and constructs the exact POST `https://paper-api.alpaca.markets/v2/orders` request shape. It rejects unknown instruments, fractional quantities, leveraged-sized notional, invalid order IDs/slots, non-limit orders and unsupported price precision. **This builder does not load credentials, open network connections, submit paper orders or support any live broker host.** Controlled actual paper submission awaits an explicit owner-approved activation and paper-account identity audit.
