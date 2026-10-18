@@ -2,9 +2,9 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (SD-11H selected legacy SignalDeck v2 search; CI green; one local AAPL-only read unexecuted)
-**Verified code SHA:** `f1075e48f57e666625a2d8fbad5c612b5f093abc` (tested before this documentation-only update)
-**Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39153964246 — Python 3.12, **103 passed**, three known SQLite warnings, Ruff passed, mypy passed for 26 source files, disposable PostgreSQL CI environment.
+**Updated:** 2026-10-18 (SD-12A SideDeck-managed Alpaca PAPER read-only adapter complete; live account unverified)
+**Verified code SHA:** `ff27ab168f6b4bfbbf8183e8bad5588a6bb069cd` (Alpaca PAPER read-only groundwork)
+**Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39155948631 and https://github.com/smbabalola/sidedeck/actions/runs/39155944560 — Python 3.12, **130 passed**, 3 known SQLite warnings, Ruff passed, mypy passed for 28 source files, disposable PostgreSQL CI environment.
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
 
 ## Mandatory maintenance
@@ -337,4 +337,6 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **SD-12A-3 independent broker accounts:** For two truly broker-separated strategy portfolios, establish two distinct paper accounts + credentials, manually configured and privately mapped to each strategy; don't create accounts or reset balances automatically. Until then, SideDeck internal ledgers remain separate, broker execution disabled.
 - [ ] **SD-12A-4:** Implement robust paper order intent/risk/idempotency/kill switch/reconciliation and audited broker fill postings, with a distinct explicit owner gate before paper writes. **No real/live trading, no crypto/shorts/leverage/options/CFDs.**
 - [ ] **SD-12A-5:** Verify Alpaca historical adjusted daily prices, five-year availability and rights; distinguish historical backtest from ongoing paper execution. Basic feed real-time IEX and recent 15-minute delayed SIP caveats apply.
-- [ ] **Verification:** Record Python CI result after commit; do not claim external Alpaca access or completed paper order management from fixture tests.
+- [x] **Offline verification:** commit `ff27ab168f6b4bfbbf8183e8bad5588a6bb069cd`: [CI 39155948631](https://github.com/smbabalola/sidedeck/actions/runs/39155948631) and [CI 39155944560](https://github.com/smbabalola/sidedeck/actions/runs/39155944560) both green — **130 passed**, three known SQLite warnings, Ruff/mypy (28 source files), disposable PostgreSQL. 27 additional synthetic Alpaca PAPER tests cover no-network opt-in guard, read-only host/headers, one aggregate account, long-only approved positions, orders, nonfinite values, 401/403 fail-closed and error-body redaction. **No Alpaca account or market data has been read.**
+
+**Acceptance handoff:** `docs/ALPACA_PAPER_ACCEPTANCE.md`. First run offline dry-run, verify existence (not values) of local paper key + secret. Next bounded paper account inspection is a distinct opt-in in the user's local Codex environment. No order API until an independent owner write gate after account allocation, risk preflight, kill switch and reconciliation.
