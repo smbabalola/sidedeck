@@ -149,3 +149,20 @@ $env:PYTHONPATH = "src"
 ```
 
 Open `results/paper_desk_review.html`. The page is **fixture-only**, uses SideDeck's actual risk gate, and does **not** reflect authenticated Alpaca positions, orders or real performance. Order submission remains disabled.
+
+## Restart-safe SideDeck paper journal — local demonstration
+
+The offline persistent-paper-order workflow demonstrates two separate USD 1,000
+ledgers, a submitted-*nowhere* order preview, one completely **fake** local fill,
+restart recovery, duplicate-fill avoidance and persistent broker kill switch.
+
+\`\`\`powershell
+$env:PYTHONPATH = "src"
+.venv\Scripts\python.exe -m sidedeck.paper_outbox_demo --dry-run
+\`\`\`
+
+Open \`results/paper_outbox_fixture.html\` to inspect. The tagged
+\`results/paper_outbox_fixture.sqlite3\` is entirely distinct from the
+existing \`results/demo.sqlite3\`, not reset automatically and never attempts
+an Alpaca request. Do not mistake this for a real paper broker fill. It requires
+zero API keys and **cannot** submit paper or live orders.

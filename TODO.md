@@ -374,3 +374,5 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **No broker writes:** Persistent kill switch engaged, no submit or broker cancel method; source data/receipts are still fixture/injected contracts. Existing `results/demo.sqlite3` and user DBs are untouched. This is not yet a live Alpaca paper trading integration.
 - [ ] **Pending integration:** Read-only authenticated paper fill evidence adapter, broker account/strategy mapping, fail-closed handling of cancellations/corrections and account reservations, and broker-order write transport only after distinct owner approval. Review security/CI before live calls.
 - [ ] **Code verification:** Record actual green CI pass count and SHA after push. Runbook: `docs/PAPER_OUTBOX.md`.
+
+- [x] **SD-12E durable visual fixture:** `python -m sidedeck.paper_outbox_demo --dry-run` safely creates `results/paper_outbox_fixture.sqlite3`, two USD 1000 journals and a fake fill, closes/reopens journal, writes dedicated HTML/JSON views and is restart-idempotent. This never connects to Alpaca or calls a broker, and preserves `results/demo.sqlite3`. The example's fake fill is *not broker evidence*.
