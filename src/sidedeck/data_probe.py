@@ -62,9 +62,9 @@ class _DryRunTransport(ReadOnlyMarketDataTransport):
     asset_types = {"AAPL": "EQUITY", "MSFT": "EQUITY", "SPY": "ETF", "QQQ": "ETF"}
 
     def get(self, path: str, params: Mapping[str, str], request_id: UUID) -> tuple[int, Mapping[str, str], bytes]:
-        if path == "/market-data/search":
-            ticker = params["internalSymbolFull"]
-            payload: dict[str, Any] = {"items": [{"internalInstrumentId": self.ids[ticker], "internalSymbolFull": ticker, "assetType": self.asset_types[ticker], "exchange": "FIXTURE", "currency": "USD", "isLeveraged": False, "isInverse": False}]}
+        if path == "/api/v2/market-data/instruments/search":
+            ticker = params["query"]
+            payload: dict[str, Any] = {"results": [{"instrumentId": self.ids[ticker], "symbol": ticker, "type": "etf" if self.asset_types[ticker] == "ETF" else "stock", "exchangeId": "FIXTURE", "currency": "USD", "isLeveraged": False, "isInverse": False}]}
         else:
             instrument_id = int(path.split("/instruments/")[1].split("/")[0])
             payload = {"interval": "OneDay", "candles": [{"instrumentId": instrument_id, "candles": [{"instrumentID": instrument_id, "fromDate": "2026-01-05T21:00:00Z", "open": 100, "high": 105, "low": 99, "close": 102, "volume": 0.0}]}]}
