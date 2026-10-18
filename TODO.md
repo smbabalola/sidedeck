@@ -316,3 +316,12 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - **Code:** commits `decfc16` through `f1075e4` on `feat/p2-agent-adapters`; draft PR stays unmerged. Prior `SD-11F/G` notes are retained as historical findings rather than current route descriptions.
 
 **Next action:** Verify branch CI, then execute at most one bounded AAPL v2 read on the owner's local checkout using the ignored matching key pair; record status without secrets. If denied, stop and escalate to eToro developer support. Continue offline licensed history work independently.
+## SD-11H one-shot v2 search evidence (2026-10-18)
+
+- [x] **Exact authorized diagnostic executed once:** `.venv\Scripts\python.exe -m sidedeck.data_probe --provider etoro --market-data-only --allow-read-network --confirm-owner-read-only --single-v2-search AAPL`.
+- [x] **Credential handling:** Existing ignored `.env` values were loaded privately into the child process only. No values, hashes, headers or URLs containing secrets were displayed, logged, staged or uploaded.
+- [x] **Result:** HTTP `403`; AAPL `RESOLVED=false`; safe error classification `EtoroAccessBlocked` / `market-data access denied`. Automatic retries were disabled (`max_retries=0`).
+- [x] **Scope proof:** No candles, rates, account, portfolio, positions, orders, Demo or Real endpoints were requested. No second symbol or fallback route was attempted.
+- [ ] **Access status:** `V2_SEARCH_BLOCKED`; this does not establish historical-data availability. The one-shot v2 authorization is consumed; further eToro requests require fresh explicit approval.
+
+**Next action:** escalate the sanitized v2 endpoint/status to eToro support or verify portal entitlement out-of-band. Preserve credentials and do not broaden the scope.
