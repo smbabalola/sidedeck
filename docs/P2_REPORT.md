@@ -25,7 +25,9 @@ Executed locally with the isolated environment on Python 3.13.16:
 | `.venv\Scripts\python.exe -m mypy src --no-incremental --follow-imports=silent` | PASS — 15 source files |
 | `.venv\Scripts\python.exe -m alembic upgrade head` | PASS — SQLite migration through `0004_agent_audits` |
 
-Local PostgreSQL remains uncontacted because Docker has no usable daemon. Disposable PostgreSQL CI will provide the final Python 3.12 evidence after push. No existing user database was used.
+Final disposable PostgreSQL CI evidence: [GitHub Actions run 39132588473](https://github.com/smbabalola/sidedeck/actions/runs/39132588473) — Python 3.12, 31 passed, 3 existing SQLite adapter warnings, Ruff passed, and mypy passed for 15 source files.
+
+Local PostgreSQL remains uncontacted because Docker has no usable daemon. The CI PostgreSQL service was disposable and no existing user database was used.
 
 ## Explicit exclusions
 
