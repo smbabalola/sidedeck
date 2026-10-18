@@ -216,3 +216,14 @@ def test_non_fixture_writer_never_dispatches(tmp_path):
         )
     assert a.calls == b.calls == []
     assert db.paper_submission_status(draft.client_order_id) == "NOT_SENT"
+
+
+def test_fixture_ack_accepts_documented_alpaca_http_200(tmp_path):
+    db, draft, _, _, workflow = setup(tmp_path)
+    writer = SimulatedWriter((200, order_ack(draft)))
+    result = workflow.submit_fixture_once(
+        draft.client_order_id, key_slot=draft.key_slot, now=NOW, writer=writer,
+    )
+    assert result.outcome == "FIXTURE_ACKNOWLEDGED"
+    assert len(writer.posts) == 1
+    assert db.paper_submission_status(draft.client_order_id) == "ACKNOWLEDGED"

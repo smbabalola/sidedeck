@@ -131,7 +131,7 @@ class SideDeckPaperSubmission:
         )
         try:
             status, payload = writer.post("/v2/orders", ready.preview)
-            if status != 201:
+            if status not in (200, 201):
                 return PaperSubmissionResult(order_id, "UNCERTAIN_CHECK_PAPER_GET")
             draft = self._desk.order_draft(order_id)
             parsed = _order(payload, draft)

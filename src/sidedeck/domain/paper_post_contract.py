@@ -15,7 +15,7 @@ import re
 from typing import Literal
 from urllib.request import Request
 
-from .alpaca_paper import APPROVED_SYMBOLS, PAPER_HOST
+from .alpaca_paper import APPROVED_SYMBOLS
 from .paper_desk import BROKER_KEY_SLOTS, PaperDeskError, PaperOrderDraft
 
 _ORDER_ID = re.compile(r"sd-(?:ta|ai)-[a-f0-9]{32}\Z")
