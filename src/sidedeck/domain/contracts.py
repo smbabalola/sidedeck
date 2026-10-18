@@ -3,13 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Literal, Self
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ZERO = Decimal("0")
 USD = "USD"
+
+
+class IdempotencyConflict(ValueError):
+    """An idempotency key was reused for different immutable event content."""
 
 
 def utc_now() -> datetime:
@@ -61,9 +65,9 @@ class Contract(BaseModel):
 
 
 class Instrument(Contract):
-    instrument_id: str = Field(min_length=1)
-    ticker: str = Field(min_length=1)
-    asset_type: str
+    instrument_id: str = Field(pattern=r"^US:[A-Z][A-Z0-9.-]*$")
+    ticker: str = Field(pattern=r"^[A-Z][A-Z0-9.-]*$")
+    asset_type: Literal["EQUITY", "ETF"]
     venue: str
     quote_currency: str = USD
     quantity_scale: int = Field(default=0, ge=0, le=8)
@@ -71,10 +75,20 @@ class Instrument(Contract):
     leveraged: bool = False
     inverse: bool = False
 
+    @model_validator(mode="after")
+    def valid_instrument(self) -> Self:
+        if self.instrument_id != f"US:{self.ticker}":
+            raise ValueError("instrument_id must be the canonical US:<TICKER> identifier")
+        if self.quote_currency != USD:
+            raise ValueError("P1 instruments must be USD-denominated")
+        if self.leveraged or self.inverse:
+            raise ValueError("leveraged and inverse instruments are prohibited")
+        return self
+
 
 class MarketSnapshot(Contract):
-    instrument_id: str = Field(min_length=1)
-    ticker: str = Field(min_length=1)
+    instrument_id: str = Field(pattern=r"^US:[A-Z][A-Z0-9.-]*$")
+    ticker: str = Field(pattern=r"^[A-Z][A-Z0-9.-]*$")
     provider: str = Field(min_length=1)
     price_type: PriceType
     currency: str = USD
@@ -103,12 +117,14 @@ class MarketSnapshot(Contract):
             raise ValueError("market timestamp cannot be after ingestion timestamp")
         if self.price_type is PriceType.EOD_CLOSE and self.session is not Session.CLOSED:
             raise ValueError("EOD close snapshots must use the CLOSED session")
+        if self.instrument_id != f"US:{self.ticker}" or self.currency != USD:
+            raise ValueError("snapshot instrument and currency must be canonical USD values")
         return self
 
 
 class ExperimentManifest(Contract):
-    experiment_id: str = Field(min_length=1)
-    configuration_revision: str = Field(min_length=1)
+    experiment_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    configuration_revision: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     created_at: datetime = Field(default_factory=utc_now)
     portfolio_ids: tuple[str, str] = ("tradingagents", "ai-trading")
     starting_capital_usd: Decimal = Decimal("1000")
@@ -123,16 +139,26 @@ class ExperimentManifest(Contract):
     @field_validator("starting_capital_usd")
     @classmethod
     def exact_capital(cls, value: Decimal) -> Decimal:
-        if value != Decimal("1000"):
+        if not value.is_finite() or value != Decimal("1000"):
             raise ValueError("P1 requires exactly USD 1,000 starting capital")
         return value
 
+    @model_validator(mode="after")
+    def fixed_portfolios_and_universe(self) -> Self:
+        if self.portfolio_ids != ("tradingagents", "ai-trading"):
+            raise ValueError("P1 requires exactly the two named competitor portfolios")
+        if len(set(self.instruments)) != len(self.instruments):
+            raise ValueError("manifest instruments must be unique")
+        if any(not instrument.startswith("US:") for instrument in self.instruments):
+            raise ValueError("manifest instruments must use canonical US:<TICKER> IDs")
+        return self
+
 
 class TradeIntent(Contract):
-    experiment_id: str = Field(min_length=1)
-    portfolio_id: str = Field(min_length=1)
-    strategy_id: str = Field(min_length=1)
-    instrument_id: str = Field(min_length=1)
+    experiment_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    portfolio_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    strategy_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    instrument_id: str = Field(pattern=r"^US:[A-Z][A-Z0-9.-]*$")
     side: Side
     quantity: Decimal | None = None
     notional_usd: Decimal | None = None
@@ -153,15 +179,20 @@ class TradeIntent(Contract):
                 raise ValueError("HOLD cannot have a size")
         elif (self.quantity is None) == (self.notional_usd is None):
             raise ValueError("BUY/SELL must specify exactly one of quantity or notional")
+        for name, value in (("quantity", self.quantity), ("notional_usd", self.notional_usd)):
+            if value is not None and (not value.is_finite() or value <= ZERO):
+                raise ValueError(f"{name} must be finite and positive")
+        if self.data_as_of > self.decision_timestamp:
+            raise ValueError("data_as_of cannot be after the decision timestamp")
         return self
 
 
 class Order(Contract):
     order_id: UUID = Field(default_factory=uuid4)
     intent_id: UUID
-    experiment_id: str = Field(min_length=1)
-    portfolio_id: str = Field(min_length=1)
-    instrument_id: str = Field(min_length=1)
+    experiment_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    portfolio_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+    instrument_id: str = Field(pattern=r"^US:[A-Z][A-Z0-9.-]*$")
     side: Side
     quantity: Decimal
     status: OrderStatus = OrderStatus.PROPOSED
@@ -171,6 +202,13 @@ class Order(Contract):
     def positive_quantity(cls, value: Decimal) -> Decimal:
         if not value.is_finite() or value <= ZERO:
             raise ValueError("order quantity must be finite and positive")
+        return value
+
+    @field_validator("side")
+    @classmethod
+    def executable_side(cls, value: Side) -> Side:
+        if value is Side.HOLD:
+            raise ValueError("HOLD cannot become an order")
         return value
 
 
@@ -210,16 +248,17 @@ class Posting(Contract):
 
 class LedgerEvent(Contract):
     event_id: UUID = Field(default_factory=uuid4)
-    portfolio_id: str = Field(min_length=1)
+    portfolio_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     idempotency_key: str = Field(min_length=1)
     occurred_at: datetime
     currency: str = USD
     event_type: EventType
     postings: tuple[Posting, ...] = Field(min_length=2)
-    instrument_id: str | None = None
+    instrument_id: str | None = Field(default=None, pattern=r"^US:[A-Z][A-Z0-9.-]*$")
     quantity: Decimal | None = None
     price: Decimal | None = None
     fee: Decimal = ZERO
+    cost_basis: Decimal | None = None
     causation_id: UUID | None = None
     correlation_id: UUID | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -231,6 +270,10 @@ class LedgerEvent(Contract):
 
     @model_validator(mode="after")
     def balanced(self) -> Self:
+        if self.currency != USD:
+            raise ValueError("P1 ledger events must be denominated in USD")
+        if len({posting.account for posting in self.postings}) != len(self.postings):
+            raise ValueError("ledger event may contain only one posting per account")
         debits = sum((posting.debit for posting in self.postings), ZERO)
         credits = sum((posting.credit for posting in self.postings), ZERO)
         if debits != credits:
@@ -241,6 +284,49 @@ class LedgerEvent(Contract):
             raise ValueError("event price must be finite and positive")
         if self.fee < ZERO:
             raise ValueError("fee cannot be negative")
+        if self.event_type not in {EventType.OPENING_CAPITAL, EventType.BUY_FILL, EventType.SELL_FILL}:
+            raise ValueError(f"unsupported ledger event type: {self.event_type}")
+        actual = {
+            (posting.account, side): amount
+            for posting in self.postings
+            for side, amount in (("debit", posting.debit), ("credit", posting.credit))
+            if amount != ZERO
+        }
+        if self.event_type is EventType.OPENING_CAPITAL:
+            expected = {("cash", "debit"): Decimal("1000"), ("equity", "credit"): Decimal("1000")}
+            if self.instrument_id or self.quantity or self.price or self.fee or actual != expected:
+                raise ValueError("opening event must be exactly USD 1,000 cash against equity")
+        elif self.event_type is EventType.BUY_FILL:
+            if not self.instrument_id or self.quantity is None or self.price is None:
+                raise ValueError("buy fill requires instrument, quantity, and price")
+            gross = self.quantity * self.price
+            expected = {
+                (f"position:{self.instrument_id}", "debit"): gross,
+                ("cash", "credit"): gross + self.fee,
+            }
+            if self.fee:
+                expected[("fees", "debit")] = self.fee
+            if actual != expected:
+                raise ValueError("buy postings do not match gross cost, fee, and cash movement")
+        elif self.event_type is EventType.SELL_FILL:
+            if not self.instrument_id or self.quantity is None or self.price is None or self.cost_basis is None:
+                raise ValueError("sell fill requires instrument, quantity, price, and cost_basis")
+            if not self.cost_basis.is_finite() or self.cost_basis <= ZERO or self.fee > self.quantity * self.price:
+                raise ValueError("sell cost basis and fee are economically invalid")
+            gross = self.quantity * self.price
+            realized = gross - self.cost_basis
+            expected = {
+                ("cash", "debit"): gross - self.fee,
+                (f"position:{self.instrument_id}", "credit"): self.cost_basis,
+            }
+            if self.fee:
+                expected[("fees", "debit")] = self.fee
+            if realized > ZERO:
+                expected[("realized_pnl", "credit")] = realized
+            elif realized < ZERO:
+                expected[("realized_pnl", "debit")] = -realized
+            if actual != expected:
+                raise ValueError("sell postings do not match cash, cost basis, fee, and realized P&L")
         return self
 
     def canonical(self) -> str:

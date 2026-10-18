@@ -1,50 +1,46 @@
-# SideDeck P1 implementation report
+# SideDeck P1/P1.1 implementation report
 
 Date: 2026-10-18  
 Branch: `feat/p1-foundation`  
-Base/head before commit: `966b008`  
-Phase status: complete for review; stopped before P2
+Baseline: `06d41b0567143214a237de1f1701b25f8d3f74f6`
+Phase status: hardened P1 complete for review; stopped before P2
 
-## Changed-file inventory
+## Hardening changes
 
-P1 added the `src/sidedeck/` domain/application/infrastructure package, `tests/`, `pyproject.toml`, `requirements.lock`, `.gitignore`, `.env.example`, Alembic configuration/migration, and canonical root documentation copies. The existing `.env`, invalid-encoding `README.md`, and nested `SideDeck-Blueprint/` were preserved unchanged.
+- Double-entry events now validate economic semantics: opening capital, buy gross/fee/cash, sell cash/cost-basis/fee/realized-P&L postings, USD currency, unique accounts, and supported event types.
+- In-memory and database idempotency keys reject different-content reuse; retries are no-ops, composite `(portfolio_id, idempotency_key)` uniqueness is durable, and writes are transactional.
+- Journal persistence has an autoincrement sequence so equal `occurred_at` timestamps replay in insertion order.
+- NAV requires approved instrument-specific USD snapshots whose market and ingestion timestamps are both at or before the decision cutoff and within the configured freshness window.
+- Trade intents, manifests, orders, ledger events, instruments, and snapshots fail closed on invalid IDs, sizes, times, currencies, portfolios, unsupported events, or prohibited assets.
+- Root `AGENTS.md`, Python 3.12 CI, disposable PostgreSQL CI coverage, and canonical documentation provenance were added.
 
-## Architecture
+## Test evidence
 
-- Pure Pydantic contracts use immutable models, `Decimal` money/quantity/price values, and UTC-aware timestamps.
-- The instrument registry is a fixed US equity/ETF allowlist with whole-share precision by default; unknown/prohibited assets fail closed.
-- `Ledger` is append-only, portfolio-scoped, idempotent, atomically replay-validated, and reconstructs cash, positions, fees, realized P&L, and marked NAV.
-- Persistence is behind a SQLAlchemy repository with an Alembic journal schema. Tests use disposable SQLite fixtures only.
-- No broker, agent, scheduler, external market data, network call, or order submission path exists in P1.
-
-## Commands and results
-
-Executed from the repository root using `.venv` on Python 3.13.16:
+Executed with the isolated `.venv` on Python 3.13.16:
 
 | Command | Result |
 |---|---|
-| `.venv\Scripts\python.exe -m pytest` | PASS — 14 passed in 1.54s |
-| `.venv\Scripts\ruff.exe check .` | PASS — all checks passed |
-| `.venv\Scripts\mypy.exe src --no-incremental --follow-imports=silent` | PASS — 10 source files, no issues |
-| `.venv\Scripts\python.exe -m alembic upgrade head` | PASS — SQLite migration `0001_initial` applied |
+| `.venv\Scripts\python.exe -m pytest` | PASS — 21 passed, 1 skipped |
+| `.venv\Scripts\ruff.exe check .` | PASS |
+| `.venv\Scripts\mypy.exe src --no-incremental --follow-imports=silent` | PASS — 10 source files |
+| `.venv\Scripts\python.exe -m alembic upgrade head` | PASS — disposable SQLite |
+| SQLite Alembic upgrade → downgrade → upgrade | PASS |
+| SQLite retries, conflict, concurrent write, rollback, equal-timestamp replay | PASS |
+| Economic posting, NAV cutoff/freshness, ID and unsupported-event regressions | PASS |
+| Hypothesis deterministic replay/idempotency properties | PASS |
 
-The first test run exposed and fixed one contract default defect; the final suite is green. Alembic emits no final warning after `path_separator=os` was configured.
+The PostgreSQL test is present and runs in CI when `SIDEDECK_TEST_POSTGRES_URL` points to the workflow's disposable service. It was skipped locally because Docker has no usable daemon and connecting to the running PostgreSQL Windows services would risk using an existing user database without approval.
 
 ## Deterministic replay example
 
-Both `tradingagents` and `ai-trading` open with USD 1,000. A `tradingagents` buy of 2 AAPL at USD 100 with USD 1 fee leaves cash at USD 799 and one portfolio position of 2 shares; `ai-trading` remains at USD 1,000 with no position. Selling one share at USD 120 with USD 1 fee leaves cash at USD 918, one share marked at USD 110, gross realized P&L USD 20, net realized P&L USD 18, and NAV USD 1,028. Replaying the same journal produces the same result; replaying the other portfolio is unaffected.
+Both `tradingagents` and `ai-trading` open with USD 1,000. A `tradingagents` buy of 2 AAPL at USD 100 with USD 1 fee leaves cash at USD 799 and cost basis at USD 200. Selling one share at USD 120 with USD 1 fee leaves cash at USD 918, one share marked at USD 110, gross realized P&L USD 20, net realized P&L USD 18, and NAV USD 1,028. Equal timestamps use the durable journal sequence; save/reload/replay preserves the result.
 
-## Database evidence
+## Scope exclusions
 
-Alembic migration and save/reload/replay were verified against disposable SQLite. PostgreSQL migration round-trip remains unverified: PostgreSQL services are running locally, but no disposable database credentials or owner-approved database target was available, so no user database was contacted.
+No credentials, agent integration, external market data, eToro call, broker connection, order submission, real funds, scheduler, or live capability was added or invoked. The unlicensed AI Trading source remains external and unexecuted.
 
-## Scope exclusions verified
+## Unresolved items
 
-No AI integration, broker connection, eToro endpoint, external order submission, credentials, real funds, paid data API, scheduler, or autonomous execution was added or invoked. The unlicensed AI Trading source was not copied or installed.
-
-## P2 entry risks
-
-1. Confirm Python 3.12 support in CI; current proof is Python 3.13.16 compatibility.
-2. Add a disposable PostgreSQL CI/test target before claiming durable database acceptance.
-3. Keep TradingAgents and AI Trading isolated proposal-only workers; resolve AI Trading licensing before any source use.
-4. Define the frozen experiment manifest and time-valid market-data fixture contract before adapter work.
+1. PostgreSQL upgrade/downgrade and persistence evidence remain unverified locally; CI is configured for a disposable PostgreSQL service on Python 3.12.
+2. Python 3.12 has CI configuration but has not run in this local Windows environment, which is Python 3.13.16.
+3. P2 must preserve proposal-only worker isolation and resolve AI Trading licensing before any source use.

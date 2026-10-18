@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -6,6 +6,7 @@ import pytest
 from sidedeck.application.foundation import initialise_two_portfolios
 from sidedeck.domain.accounting import fill_event
 from sidedeck.domain.contracts import EventType, ExperimentManifest, MarketSnapshot, PriceType, Session
+from sidedeck.domain.contracts import IdempotencyConflict
 
 AT = datetime(2026, 1, 2, 21, 0, tzinfo=timezone.utc)
 
@@ -43,14 +44,14 @@ def test_two_portfolios_are_isolated_and_start_at_one_thousand() -> None:
 def test_deterministic_replay_fills_fees_nav_and_realized_pnl() -> None:
     ledger = initialise_two_portfolios(manifest(), AT)
     ledger.append(fill_event("tradingagents", "buy-1", EventType.BUY_FILL, "US:AAPL", Decimal("2"), Decimal("100"), AT, Decimal("1")))
-    ledger.append(fill_event("tradingagents", "sell-1", EventType.SELL_FILL, "US:AAPL", Decimal("1"), Decimal("120"), AT, Decimal("1")))
+    ledger.append(fill_event("tradingagents", "sell-1", EventType.SELL_FILL, "US:AAPL", Decimal("1"), Decimal("120"), AT, Decimal("1"), Decimal("100")))
     state = ledger.replay("tradingagents")
     assert state.cash == Decimal("918")
     assert state.positions["US:AAPL"].quantity == Decimal("1")
     assert state.realized_gross == Decimal("20")
     assert state.realized_net == Decimal("18")
-    assert state.nav({"US:AAPL": mark("110")}) == Decimal("1028")
-    assert ledger.replay("tradingagents").nav({"US:AAPL": mark("110")}) == Decimal("1028")
+    assert state.nav({"US:AAPL": mark("110")}, AT, timedelta(days=1)) == Decimal("1028")
+    assert ledger.replay("tradingagents").nav({"US:AAPL": mark("110")}, AT, timedelta(days=1)) == Decimal("1028")
 
 
 def test_duplicate_event_is_idempotent_and_oversell_is_rejected() -> None:
@@ -58,8 +59,10 @@ def test_duplicate_event_is_idempotent_and_oversell_is_rejected() -> None:
     buy = fill_event("tradingagents", "buy-1", EventType.BUY_FILL, "US:AAPL", Decimal("1"), Decimal("100"), AT)
     assert ledger.append(buy) is True
     assert ledger.append(buy) is False
+    with pytest.raises(IdempotencyConflict):
+        ledger.append(buy.model_copy(update={"metadata": {"changed": True}}))
     with pytest.raises(ValueError, match="sell more"):
-        ledger.append(fill_event("tradingagents", "sell-2", EventType.SELL_FILL, "US:AAPL", Decimal("2"), Decimal("100"), AT))
+        ledger.append(fill_event("tradingagents", "sell-2", EventType.SELL_FILL, "US:AAPL", Decimal("2"), Decimal("100"), AT, cost_basis=Decimal("200")))
 
 
 def test_invalid_cash_and_prohibited_trade_inputs_fail_closed() -> None:

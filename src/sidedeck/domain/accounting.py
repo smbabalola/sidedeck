@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
-from .contracts import EventType, LedgerEvent, MarketSnapshot, Posting, ZERO
-from .instruments import get_instrument, validate_quantity
+from .contracts import EventType, IdempotencyConflict, LedgerEvent, MarketSnapshot, Posting, ZERO
+from .instruments import get_instrument_by_id, validate_quantity
+from .market import validate_snapshot
 
 
 @dataclass
@@ -26,12 +27,15 @@ class PortfolioState:
     def realized_net(self) -> Decimal:
         return self.realized_gross - self.fees
 
-    def nav(self, marks: dict[str, MarketSnapshot]) -> Decimal:
+    def nav(self, marks: dict[str, MarketSnapshot], decision_cutoff: datetime, max_age: timedelta) -> Decimal:
         total = self.cash
         for instrument_id, position in self.positions.items():
             if instrument_id not in marks:
                 raise ValueError(f"missing mark for {instrument_id}")
-            total += position.quantity * marks[instrument_id].price
+            snapshot = validate_snapshot(marks[instrument_id], decision_cutoff, max_age)
+            if snapshot.instrument_id != instrument_id:
+                raise ValueError("mark instrument does not match the held position")
+            total += position.quantity * snapshot.price
         return total
 
 
@@ -40,7 +44,7 @@ class Ledger:
 
     def __init__(self) -> None:
         self._events: list[LedgerEvent] = []
-        self._keys: set[tuple[str, str]] = set()
+        self._keys: dict[tuple[str, str], str] = {}
 
     @property
     def events(self) -> tuple[LedgerEvent, ...]:
@@ -49,6 +53,8 @@ class Ledger:
     def append(self, event: LedgerEvent) -> bool:
         key = (event.portfolio_id, event.idempotency_key)
         if key in self._keys:
+            if self._keys[key] != event.canonical():
+                raise IdempotencyConflict(f"idempotency key conflict: {event.portfolio_id}/{event.idempotency_key}")
             return False
         prior = [old for old in self._events if old.portfolio_id == event.portfolio_id]
         if prior and event.occurred_at < prior[-1].occurred_at:
@@ -64,12 +70,12 @@ class Ledger:
         ):
             raise ValueError("portfolio must be opened before activity")
         self._events.append(event)
-        self._keys.add(key)
+        self._keys[key] = event.canonical()
         try:
             self.replay(event.portfolio_id)
         except Exception:
             self._events.pop()
-            self._keys.remove(key)
+            del self._keys[key]
             raise
         return True
 
@@ -102,6 +108,8 @@ class Ledger:
                 raise ValueError("cannot sell more than the portfolio owns")
             gross = event.quantity * event.price
             average_cost = position.cost_basis / position.quantity
+            if event.cost_basis != average_cost * event.quantity:
+                raise ValueError("sell event cost basis does not match the portfolio lot basis")
             state.cash += gross - event.fee
             position.quantity -= event.quantity
             position.cost_basis -= average_cost * event.quantity
@@ -135,8 +143,9 @@ def fill_event(
     price: Decimal,
     at: datetime,
     fee: Decimal = ZERO,
+    cost_basis: Decimal | None = None,
 ) -> LedgerEvent:
-    instrument = get_instrument(instrument_id.split(":", 1)[-1])
+    instrument = get_instrument_by_id(instrument_id)
     validate_quantity(instrument, quantity)
     gross = quantity * price
     if event_type is EventType.BUY_FILL:
@@ -146,10 +155,17 @@ def fill_event(
             Posting(account="cash", credit=gross + fee),
         )
     elif event_type is EventType.SELL_FILL:
+        if cost_basis is None:
+            raise ValueError("sell fill requires an explicit cost_basis")
         postings = (
             Posting(account="cash", debit=gross - fee),
             *( (Posting(account="fees", debit=fee),) if fee else () ),
-            Posting(account=f"position:{instrument_id}", credit=gross),
+            Posting(account=f"position:{instrument_id}", credit=cost_basis),
+            *(
+                (Posting(account="realized_pnl", credit=gross - cost_basis),)
+                if gross > cost_basis
+                else ((Posting(account="realized_pnl", debit=cost_basis - gross),) if gross < cost_basis else ())
+            ),
         )
     else:
         raise ValueError("fill event must be BUY_FILL or SELL_FILL")
@@ -163,4 +179,5 @@ def fill_event(
         quantity=quantity,
         price=price,
         fee=fee,
+        cost_basis=cost_basis,
     )

@@ -19,6 +19,12 @@ def get_instrument(ticker: str) -> Instrument:
         raise ValueError(f"instrument is not in the approved US equity/ETF universe: {ticker}") from exc
 
 
+def get_instrument_by_id(instrument_id: str) -> Instrument:
+    if not instrument_id.startswith("US:"):
+        raise ValueError(f"instrument ID is not canonical: {instrument_id}")
+    return get_instrument(instrument_id[3:])
+
+
 def validate_quantity(instrument: Instrument, quantity: Decimal) -> Decimal:
     if quantity <= 0 or not quantity.is_finite():
         raise ValueError("quantity must be finite and positive")
