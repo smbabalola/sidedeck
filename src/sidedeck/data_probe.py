@@ -8,10 +8,14 @@ capability.
 from __future__ import annotations
 
 import argparse
+from datetime import date, datetime, timezone
+from http.client import HTTPMessage
+import json
 import os
-from typing import Mapping
+from typing import Any, Mapping
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 from sidedeck.domain.etoro import (
@@ -20,6 +24,8 @@ from sidedeck.domain.etoro import (
     MarketDataReadCapability,
     ReadOnlyMarketDataTransport,
 )
+
+MAX_RESPONSE_BYTES = 2_000_000
 
 
 class UrllibReadOnlyTransport(ReadOnlyMarketDataTransport):
@@ -31,8 +37,36 @@ class UrllibReadOnlyTransport(ReadOnlyMarketDataTransport):
         if params:
             url = f"{url}?{urlencode(params)}"
         request = Request(url, headers={**self._headers, "x-request-id": str(request_id), "Accept": "application/json"}, method="GET")
-        with urlopen(request, timeout=10) as response:  # noqa: S310 - fixed official host and GET only
-            return response.status, dict(response.headers.items()), response.read()
+        opener = build_opener(_NoRedirectHandler())
+        try:
+            with opener.open(request, timeout=10) as response:
+                return response.status, dict(response.headers.items()), response.read(MAX_RESPONSE_BYTES + 1)
+        except HTTPError as exc:
+            body = exc.read(MAX_RESPONSE_BYTES + 1)
+            return exc.code, dict(exc.headers.items()), body
+        except URLError as exc:
+            raise RuntimeError("eToro market-data transport failed") from exc
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request: Request, fp: Any, code: int, msg: str, headers: HTTPMessage, newurl: str) -> None:
+        raise RuntimeError("redirects are not allowed for credential-bearing market-data GETs")
+
+
+class _DryRunTransport(ReadOnlyMarketDataTransport):
+    """Published-shape local fixture; it never opens a socket."""
+
+    ids = {"AAPL": 1001, "MSFT": 1002, "SPY": 1003, "QQQ": 1004}
+    asset_types = {"AAPL": "EQUITY", "MSFT": "EQUITY", "SPY": "ETF", "QQQ": "ETF"}
+
+    def get(self, path: str, params: Mapping[str, str], request_id: UUID) -> tuple[int, Mapping[str, str], bytes]:
+        if path == "/market-data/search":
+            ticker = params["internalSymbolFull"]
+            payload: dict[str, Any] = {"items": [{"internalInstrumentId": self.ids[ticker], "internalSymbolFull": ticker, "assetType": self.asset_types[ticker], "exchange": "FIXTURE", "currency": "USD", "isLeveraged": False, "isInverse": False}]}
+        else:
+            instrument_id = int(path.split("/instruments/")[1].split("/")[0])
+            payload = {"interval": "OneDay", "candles": [{"instrumentId": instrument_id, "candles": [{"instrumentID": instrument_id, "fromDate": "2026-01-05T21:00:00Z", "open": 100, "high": 105, "low": 99, "close": 102, "volume": 0.0}]}]}
+        return 200, {}, json.dumps(payload).encode()
 
 
 def main() -> int:
@@ -41,20 +75,26 @@ def main() -> int:
     parser.add_argument("--market-data-only", action="store_true")
     parser.add_argument("--allow-read-network", action="store_true")
     parser.add_argument("--confirm-owner-read-only", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="use published-shape local fixtures; never opens a socket")
     args = parser.parse_args()
-    if not args.market_data_only or not args.allow_read_network or not args.confirm_owner_read_only:
+    if not args.dry_run and (not args.market_data_only or not args.allow_read_network or not args.confirm_owner_read_only):
         parser.error("requires --market-data-only --allow-read-network --confirm-owner-read-only")
-    api_key = os.environ.get("ETORO_API_KEY")
-    user_key = os.environ.get("ETORO_USER_KEY")
-    if not api_key or not user_key:
-        parser.error("ETORO_API_KEY and ETORO_USER_KEY are required only after owner approval")
-    client = EtoroHistoricalDataClient(
-        UrllibReadOnlyTransport({"x-api-key": api_key, "x-user-key": user_key}),
-        capability=MarketDataReadCapability(),
-    )
-    # The probe currently resolves only; callers must explicitly request and
-    # validate candles through the typed client. No default Yahoo fallback.
-    print(client.resolve_instrument("AAPL"))
+    if args.dry_run:
+        transport: ReadOnlyMarketDataTransport = _DryRunTransport()
+    else:
+        api_key = os.environ.get("ETORO_API_KEY")
+        user_key = os.environ.get("ETORO_USER_KEY")
+        if not api_key or not user_key:
+            parser.error("ETORO_API_KEY and ETORO_USER_KEY are required only after owner approval")
+        transport = UrllibReadOnlyTransport({"x-api-key": api_key, "x-user-key": user_key})
+    client = EtoroHistoricalDataClient(transport, capability=MarketDataReadCapability())
+    cutoff = datetime(2026, 1, 6, tzinfo=timezone.utc)
+    reports = []
+    for ticker in ("AAPL", "MSFT", "SPY", "QQQ"):
+        resolved = client.resolve_instrument(ticker)
+        candles = client.fetch_daily_candles(resolved, cutoff=cutoff)
+        reports.append(client.scan_five_year_daily(resolved, cutoff=cutoff, candles=candles, exchange_sessions=frozenset({date(2026, 1, 5)})).__dict__)
+    print(json.dumps({"mode": "dry-run" if args.dry_run else "live-read-only", "reports": reports}, default=str, sort_keys=True))
     return 0
 
 

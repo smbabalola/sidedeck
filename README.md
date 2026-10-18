@@ -71,3 +71,11 @@ $env:PYTHONPATH = "src"
 ```
 
 Do not run that command until read-only access is explicitly approved. Five-year daily eToro coverage is currently unverified. The existing licensed local CSV import is the prepared fallback; it must be supplied with confirmed usage rights and is never silently combined with or replaced by Yahoo.
+Credential-free dry run for all four approved instruments:
+
+```powershell
+$env:PYTHONPATH = "src"
+.venv\Scripts\python.exe -m sidedeck.data_probe --provider etoro --dry-run
+```
+
+The dry run intentionally reports insufficient depth from fixture data. It does not contact eToro.

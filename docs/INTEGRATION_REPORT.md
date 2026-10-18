@@ -47,3 +47,9 @@ Status: offline-safe synthetic-data hardening and code-ready TradingAgents propo
 - `sidedeck.data_probe` is prepared but inert without `--market-data-only --allow-read-network --confirm-owner-read-only` and both environment variables. No eToro credential was read and no eToro request was made in this sprint.
 - Official documentation reviewed: [Market Data & Real-Time](https://builders.etoro.com/products/market-data-realtime), [API FAQ](https://builders.etoro.com/faq), [API Quick Reference](https://builders.etoro.com/reference), [authentication and API keys](https://builders.etoro.com/learn/authentication-and-api-keys), and [rate-limit guidance](https://builders.etoro.com/learn/rate-limits-and-429-handling). These establish the market-data surface and credential/rate-limit requirements, but not this account's earliest date, daily depth, adjustment policy or storage rights.
 - Coverage verdict: **UNVERIFIED** pending explicit read-only owner approval. The existing licensed local CSV import is the prepared fallback; no automatic Yahoo fallback exists.
+## SD-11B verification
+
+- Search and candle parsing now match the reviewed published wire samples: exact `internalSymbolFull`, verified ID/metadata, nested instrument candle groups, `fromDate`, and zero-volume support.
+- The urllib transport converts `HTTPError` into redacted status handling, retries only bounded 429 responses, caps response size, refuses redirects and allows only market-data search/OneDay candle paths.
+- The offline command `PYTHONPATH=src .venv/Scripts/python.exe -m sidedeck.data_probe --provider etoro --dry-run` produced four reports: AAPL, MSFT, SPY and QQQ, each `INSUFFICIENT_DEPTH` from one fixture candle. No network was opened.
+- Local verification: 73 passed, 1 skipped, 3 known SQLite warnings; Ruff passed; mypy passed for 25 source files; SQLite Alembic upgrade passed. Live coverage remains unverified pending owner approval.

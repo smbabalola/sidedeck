@@ -186,3 +186,13 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 
 **One-pass coding brief:** [`docs/ETORO_API_FIXES.md`](docs/ETORO_API_FIXES.md). Complete SD-11B code fixes without routine review pauses. No further Yahoo/OS firewall work, no paid LLM, no orders/eToro broker access.
 
+## SD-11B completion (2026-10-18)
+
+- [x] **SD-11B-1:** Corrected instrument search to `internalSymbolFull`, require exact symbol match, verified internal instrument ID, asset type, currency and classification metadata; ambiguous, CFD-like and incomplete results fail closed.
+- [x] **SD-11B-2:** Corrected published nested candle groups and `fromDate` parsing, matched group instrument IDs, accepted documented zero volume without inference, bounded response bodies, blocked redirects/arbitrary paths, and normalized `HTTPError` status responses.
+- [x] **SD-11B-3:** `sidedeck.data_probe --provider etoro --dry-run` now scans all four approved instruments and emits redacted coverage reports. Live mode remains gated by explicit owner confirmation and both local key names; it was not run.
+- [x] **SD-11B-4:** No unsupported closing-price stitching was added. Existing licensed CSV import remains the explicit fallback; Yahoo is not used or silently substituted.
+- [x] **SD-11B-5:** Coverage uses leap-safe five-year periods and an explicit exchange-session set. Weekdays are not treated as a market calendar; one 1,000-bar response cannot pass the five-year gate.
+- [x] **SD-11B-6:** Offline tests cover published samples, nested/cross-instrument payloads, zero volume, malformed/future/incomplete candles, 401/403/429 handling, redirects/path safety, leap years and four-symbol dry run. Local: 73 passed, 1 skipped, 3 warnings; Ruff, mypy (25 files) and SQLite Alembic passed. No authenticated request or credential load occurred.
+
+**SD-11B status:** `CODE_READY`; read-only coverage probe is ready for owner approval, but actual account-specific five-year coverage remains `LIVE_COVERAGE_UNVERIFIED`.
