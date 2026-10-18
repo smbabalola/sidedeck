@@ -101,7 +101,7 @@ def test_bounded_get_order_and_activities_and_no_auto_post():
     assert report.paper_filled_qty == 2
     assert report.auto_post_enabled is False
     assert report.paper_trading_enabled is False
-    assert report.missing_fill_activity_ids == (AID,)
+    assert report.unverified_activity_ids == (AID,)
 
 
 def test_ai_trading_key_slot_is_not_interchangeable():
@@ -198,8 +198,8 @@ def test_reconciled_quantity_is_read_only_not_double_posted():
         d, order, fills,
         [{"client_order_id": d.client_order_id, "filled_quantity": "2"}],
     )
-    assert report.needs_review is False
-    assert report.missing_fill_activity_ids == ()
+    assert report.needs_review is True
+    assert report.unverified_activity_ids == (AID,)
     assert not report.auto_post_enabled
 
 
