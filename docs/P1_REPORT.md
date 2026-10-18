@@ -34,7 +34,7 @@ Executed with the isolated `.venv` on Python 3.13.16:
 | Economic posting, NAV cutoff/freshness, ID, portfolio, and unsupported-event regressions | PASS |
 | Hypothesis deterministic replay/idempotency properties | PASS |
 
-Independent pre-hardening evidence: [GitHub Actions run 39130709618](https://github.com/smbabalola/sidedeck/actions/runs/39130709618) passed on Python 3.12 with PostgreSQL schema migration, Ruff, mypy, and 22 tests. The final-gate CI run for this commit will be recorded after push.
+Independent pre-hardening evidence: [GitHub Actions run 39130709618](https://github.com/smbabalola/sidedeck/actions/runs/39130709618) passed on Python 3.12 with PostgreSQL schema migration, Ruff, mypy, and 22 tests. Final P1.2 evidence: [GitHub Actions run 39131490502](https://github.com/smbabalola/sidedeck/actions/runs/39131490502) passed on Python 3.12 with disposable PostgreSQL, 25 tests, Ruff, and mypy. An earlier final-gate attempt ([39131409864](https://github.com/smbabalola/sidedeck/actions/runs/39131409864)) correctly exposed the rollback-test issue that was corrected before the passing run.
 
 The PostgreSQL test provisions a disposable CI service and covers populated legacy migration, sequence-safe post-migration inserts, persistence, replay, rollback, unique-key conflicts, and downgrade/upgrade. It is skipped locally because Docker has no usable daemon; existing PostgreSQL Windows services were not contacted.
 
