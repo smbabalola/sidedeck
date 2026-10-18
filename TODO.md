@@ -284,6 +284,6 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] Added synthetic tests for v1 query, direction/allowlist, v2 reference request shape, auth header keys/UUID and no network calls. **No v2 live fallback** was activated; the earlier HTTP 403 still occurred before any candle GET.
 - [ ] **SD-11G local only:** Confirm SignalDeck's and SideDeck's actually loaded key values match with booleans only, correct `.env` roots and proxy-config presence. No values, hashes, length metadata or remote requests. Local Codex to report findings.
 - [ ] **Gate:** Fresh explicit owner approval is required before any further authenticated eToro GET, including a single v2 instrument search. Broker and Demo account endpoint access remain forbidden.
-- [ ] **CI evidence:** Update this item with actual GitHub Actions status after code push; do not claim green CI without observing it.
+- [x] **Code CI:** `4a8f9dc21ee2ff912cd7f017666b3c5848f154b1` passed [39152259268](https://github.com/smbabalola/sidedeck/actions/runs/39152259268) and [39152256473](https://github.com/smbabalola/sidedeck/actions/runs/39152256473): 99 tests passed / 3 known SQLite warnings, Ruff passed, mypy passed (26 source files), disposable PostgreSQL CI passed. Zero provider/network calls.
 
-**Detailed handoff:** `docs/SIGNALDECK_ETORO_COMPARISON.md` and `AGENTS.md`.
+**Detailed handoff:** `docs/SIGNALDECK_ETORO_COMPARISON.md`, [local-only secret-safe checklist](docs/SIGNALDECK_LOCAL_CHECK.md), and `AGENTS.md`. **Do not claim that the locally ignored key pairs or proxy configuration have been checked through GitHub.**
