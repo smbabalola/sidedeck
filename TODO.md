@@ -134,3 +134,12 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 | 2026-10-18 | SD-01–SD-06 offline demo `4a35d412` | [39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) | Track A minimal offline demo verified: 35 CI tests, Ruff, mypy, disposable PostgreSQL passed |
 
 **Next action:** SD-10B import and rating contract are complete. Follow `docs/DATA_ISOLATION_RECOVERY.md` for synthetic-data injection and native egress containment before another real graph run. Use the canonical CLI `python -m sidedeck.demo run` (and `reset-fixture` as a separate command), **not** the unsupported `--reset` flag. Leave broker calls disabled until explicit Demo-only approval. Draft PR #1 remains draft/unmerged.
+
+## SD-10C execution evidence (2026-10-18)
+
+- [x] **SD-10C-1:** Added `SyntheticResearchBoundary` and deterministic `OfflineTradingAgentsGraph`. The approved tool set is identity, OHLCV, indicators and verified AAPL/USD snapshot at `2026-01-05T21:00:00Z`; unknown tool, ticker, date, source and invalid lookback requests fail closed. Values are labelled `FIXTURE / NOT LIVE MARKET DATA`.
+- [ ] **SD-10C-2:** **BLOCKED — `OS_EGRESS_BOUNDARY_BLOCKED`.** Docker is installed but its Linux daemon is unavailable. WSL is installed but is not an already-provisioned default-deny namespace with an allowlisted Ollama mediation. No Windows firewall/service changes were made. Native `curl_cffi`, DNS and subprocess containment therefore remains unverified.
+- [x] **SD-10C-3 safe fallback:** Ran the fully offline deterministic graph-shaped test twice; it returned `Hold` with identical fixture provenance and zero model/broker/order/ledger mutations. The actual pinned Ollama graph was not attempted after the native isolation gate failed. `UPSTREAM_IMPORT_VERIFIED=true` remains the prior disposable-runtime import evidence; `UPSTREAM_GRAPH_RUN_VERIFIED=false`.
+- [x] **SD-10C-4:** Added regression coverage for deterministic replay, provenance, compiled-tool allowlisting, unknown-tool fail-closed behaviour and mandatory native-isolation policy. Full test, Ruff, mypy, SQLite migration and disposable PostgreSQL CI evidence is recorded with the completion commit below.
+
+**Remaining blocker:** A disposable OS-level default-deny runtime covering native `curl_cffi`/DNS/subprocesses and a separately allowlisted loopback Ollama path. Provisioning it requires external/privileged environment support; the user's system firewall was intentionally left unchanged.

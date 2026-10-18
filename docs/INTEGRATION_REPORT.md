@@ -2,7 +2,7 @@
 
 Date: 2026-10-18  
 Branch: `feat/p2-agent-adapters`  
-Status: offline-safe hardening and code-ready TradingAgents proposal boundary; external model run not verified
+Status: offline-safe synthetic-data hardening and code-ready TradingAgents proposal boundary; external model run not verified
 
 ## Completed safely
 
@@ -14,6 +14,7 @@ Status: offline-safe hardening and code-ready TradingAgents proposal boundary; e
 - Synthetic sessions use weekdays and remain visibly labelled as synthetic, not observed market data.
 - Local CSV market import requires a confirmed usage licence, UTC market/ingestion/publication timestamps, approved USD instruments, stale/future checks and weekday observations.
 - `TradingAgentsProposalAdapter` is a restricted injected boundary for the pinned `TradingAgentsGraph.propagate(ticker, trade_date)` shape. It normalizes only structured BUY/SELL/HOLD proposals with explicit size, stop and invalidation; broker/credential fields and missing metadata fail closed.
+- `SyntheticResearchBoundary` is a SideDeck-owned, deterministic AAPL-only tool seam with fixed USD point-in-time provenance. Its identity, OHLCV, indicator and verified-snapshot calls reject unknown tools, vendors, tickers and dates rather than falling back to Yahoo. `OfflineTradingAgentsGraph` validates the complete sequence with a deterministic `Hold` stub.
 
 ## Verification
 
@@ -29,5 +30,6 @@ Status: offline-safe hardening and code-ready TradingAgents proposal boundary; e
 - Pinned graph follow-up: the exact upstream graph import succeeded in a disposable Python 3.12 environment after targeted dependency repair. One minimal graph invocation was stopped when its Yahoo `curl_cffi` vendor attempted `fc.yahoo.com`; data isolation is therefore blocked, no graph rating was accepted, and no model/order result is claimed.
 
 - The licensed pinned TradingAgents runtime **was installed sufficiently for the exact graph import to succeed** in a disposable Python 3.12 environment. `UPSTREAM_IMPORT_VERIFIED=true`. A graph invocation began but was stopped by an upstream Yahoo `curl_cffi` network attempt, so `UPSTREAM_GRAPH_RUN_VERIFIED=false` and `DATA_ISOLATION_VERIFIED=false`. The prior single Ollama model-only test is separate evidence. See `docs/DATA_ISOLATION_RECOVERY.md` for controlled tool injection and OS-enforced native egress boundaries.
+- SD-10C native isolation remains blocked: Docker's Linux daemon was unavailable and WSL was not an already-provisioned default-deny namespace with an allowlisted Ollama mediation. No Windows firewall/service changes were made, no native `curl_cffi` remote request was repeated, and no real graph was attempted after the failed gate. This is recorded as `OS_EGRESS_BOUNDARY_BLOCKED`, not as evidence that Python-level guards contain native transport.
 - `imranpollob/ai-trading` remains licensing-blocked and was not imported, copied, installed or run.
 - eToro and all broker access/order paths remain disabled.

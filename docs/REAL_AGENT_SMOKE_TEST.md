@@ -77,3 +77,26 @@ Use `reset-fixture` **only** when explicitly restarting a known disposable resul
 7. Keep CI offline with isolated stubs; run pytest, Ruff, mypy, disposable PostgreSQL; update `TODO.md` and `docs/INTEGRATION_REPORT.md` with exact results. Commit and push normally. If no graph execution is possible, supply a precise blocker, required action, and remaining independent deliverables rather than inventing success.
 
 **Release gate:** Genuine multi-agent TradingAgents graph evidence is distinct from a single-provider LLM reply. A five-tier rating must **not** be treated as an order. No eToro and no unlicensed AI Trading source use.
+## SD-10C result - controlled fixture recovery and native isolation gate
+
+The SideDeck-owned synthetic seam is implemented in
+`sidedeck.agents.synthetic_data`. It supplies only a deterministic AAPL
+identity, OHLCV row, indicator values and verified USD snapshot at the fixed
+2026-01-05T21:00:00Z cutoff. Unknown tools, tickers, dates and lookback
+requests fail closed; the tool set has no Yahoo/vendor fallback. The
+`OfflineTradingAgentsGraph` exercises the complete tool sequence and is
+replayable, but is explicitly a deterministic stub and is not upstream graph
+evidence.
+
+Native egress isolation was not verified. Docker is installed but its Linux
+daemon is unavailable, while the available WSL distribution is not a
+pre-provisioned default-deny namespace with a separately allowlisted Ollama
+path. The Windows firewall and services were not changed. Because native
+`curl_cffi`, DNS and subprocess traffic cannot be proven contained under the
+available permissions, no further Yahoo or real Ollama graph call was made.
+Status: `OS_EGRESS_BOUNDARY_BLOCKED`; `DATA_ISOLATION_VERIFIED=false`.
+
+Offline graph evidence: deterministic stub returned `Hold`, preserved
+`fixture://sidedeck/aapl-2026-01-05` provenance on repeated runs, made zero
+model, broker, order or ledger calls. `UPSTREAM_IMPORT_VERIFIED=true` remains
+the prior disposable-runtime import result; `UPSTREAM_GRAPH_RUN_VERIFIED=false`.
