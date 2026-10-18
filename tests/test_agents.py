@@ -201,3 +201,46 @@ def test_tradingagents_adapter_is_blocked_without_explicit_runtime() -> None:
     run_request = request("tradingagents.upstream")
     with pytest.raises(TradingAgentsAdapterBlocked):
         TradingAgentsProposalAdapter().propose(run_request, bundle())
+
+
+@pytest.mark.parametrize("rating", ["Buy", "Overweight", "Hold", "Underweight", "Sell", "REVIEW"])
+def test_tradingagents_rating_contract_is_audited_non_executable_signal(rating: str) -> None:
+    class RatingGraph:
+        def propagate(self, ticker: str, trade_date: str) -> tuple[object, object]:
+            return {"final_trade_decision": rating}, rating
+
+    run_request = request("tradingagents.upstream").model_copy(
+        update={"upstream_sha": TradingAgentsProposalAdapter.upstream_sha, "deterministic_fixture": False}
+    )
+    market_bundle = bundle()
+    envelope = TradingAgentsProposalAdapter(RatingGraph(), enabled=True).propose(run_request, market_bundle)
+    result = ProposalSchemaValidator().validate(run_request, market_bundle, envelope)
+
+    assert result.accepted is True
+    assert envelope.result == "HOLD"
+    assert envelope.upstream_rating == rating.upper()
+    assert envelope.proposals == ()
+
+
+def test_tradingagents_rating_requires_final_state_provenance() -> None:
+    run_request = request("tradingagents.upstream").model_copy(
+        update={"upstream_sha": TradingAgentsProposalAdapter.upstream_sha, "deterministic_fixture": False}
+    )
+    envelope = TradingAgentsProposalAdapter().normalize_decision(
+        run_request, bundle(), "Buy", state={}
+    )
+
+    assert envelope.result == "FAILED"
+    assert envelope.errors == ("MISSING_FINAL_STATE",)
+
+
+def test_tradingagents_rating_rejects_malformed_signal() -> None:
+    run_request = request("tradingagents.upstream").model_copy(
+        update={"upstream_sha": TradingAgentsProposalAdapter.upstream_sha, "deterministic_fixture": False}
+    )
+    envelope = TradingAgentsProposalAdapter().normalize_decision(
+        run_request, bundle(), "Strong Buy", state={"final_trade_decision": "Strong Buy"}
+    )
+
+    assert envelope.result == "FAILED"
+    assert envelope.errors == ("UNSUPPORTED_UPSTREAM_RATING",)

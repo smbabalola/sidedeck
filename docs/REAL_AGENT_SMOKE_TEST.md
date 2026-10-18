@@ -21,10 +21,10 @@ This authorisation is **only for local TradingAgents research/model verification
 ## Implementation and smoke-test sequence (continuous)
 
 - [x] **A. Local environment preflight:** on `feat/p2-agent-adapters`, the ignored `.env` was inspected by variable name/presence only; no values were printed. Ollama was reachable at localhost with installed models. The project venv had no upstream runtime or provider SDKs. `SideDeck-Blueprint/` remained untracked and untouched.
-- [ ] **B. Runtime wiring:** optional isolated installation of the **licensed, pinned TradingAgents upstream** with licence notices and dependency audit, avoiding source vendoring when not needed. Verify the documented `TradingAgentsGraph.propagate(...)` interface matches the pinned version; if not, reconcile code and report. The currently committed `TradingAgentsProposalAdapter` is CODE_READY only.
+- [x] **B. Runtime wiring:** the pinned source was installed in a disposable Python 3.12 environment. The first declarative dependency transaction stalled during Windows package installation; targeted wheel installation of the identified graph dependencies completed, and the exact `TradingAgentsGraph` import then succeeded. The environment was not added to the repository.
 - [x] **C. Provider tests:** added `python -m sidedeck.smoke check-providers` and `python -m sidedeck.smoke run --provider ollama|nvidia|openai`, requiring `--allow-network-model-test`. The default path and CI are network-free; redacted evidence is written under ignored `results/`.
 - [x] **D. Controlled genuine model call:** one local Ollama request used only synthetic AAPL context at the fixture cutoff. Redacted evidence records provider inference separately from graph execution; the result is `PROVIDER_ONLY`, not a historical backtest or upstream graph claim.
-- [ ] **E. Normalize proposal safely:** convert output to SideDeck validated BUY/SELL/HOLD envelope; require explicit size, stop, invalidation for executable trades; if absent, log HOLD/REJECT. SideDeck-only risk gate applies; simulated local orders may be enabled in a **clearly separate** opt-in fixture demonstration, never a broker call.
+- [x] **E. Normalize proposal safely:** the adapter now accepts all upstream five-level ratings and `REVIEW` as audited non-executable signals/HOLD, preserving the rating and requiring final-state provenance. It never fabricates size, stop or invalidation; executable trade dictionaries remain subject to the existing SideDeck gateway and risk gate.
 - [x] **F. Tests and tracking:** provider guard, malformed-output and redacted-evidence tests run offline. Statuses for this smoke are `UPSTREAM_IMPORT_VERIFIED=false`, `LLM_RESPONSE_VERIFIED=true`, `TRADINGAGENTS_GRAPH_RUN_VERIFIED=false`; exact evidence is in ignored `results/real_agent_smoke.json` and the committed report/TODO updates.
 
 ## Stop points
@@ -46,6 +46,13 @@ Use `reset-fixture` **only** when explicitly restarting a known disposable resul
 - 2026-10-18, provider `ollama`, model `llama3.2:3b`, one local request, 56 output tokens, approximately 19.3 seconds.
 - SideDeck normalization produced a structured envelope accepted by the proposal gateway. No executable proposal was sent to a simulator or broker; the run was simulation-only and made zero broker calls.
 - The upstream graph was not run. Installing its pinned dependency set in a disposable temporary venv did not complete within the bounded setup attempt, so upstream import and graph execution remain unverified.
+
+## SD-10B result
+
+- `UPSTREAM_IMPORT_VERIFIED=true`: exact `TradingAgentsGraph` import succeeded in the disposable environment after targeted installation of the missing graph wheels.
+- `UPSTREAM_GRAPH_INVOKED=true`, `UPSTREAM_GRAPH_RUN_VERIFIED=false`: one minimal `market`-analyst graph invocation was attempted with `llama3.2:3b`, zero debate/risk rounds, one tool round and a 96-token cap.
+- `DATA_ISOLATION_VERIFIED=false`: the graph attempted `fc.yahoo.com` cookie/crumb access through its `curl_cffi` Yahoo vendor before reaching a model result. The Python socket guard did not cover that native transport, so the run was stopped and no rating is claimed.
+- `PROVIDER_INFERENCE_VERIFIED=true` refers only to the earlier already-recorded provider-only Ollama test; it was not repeated. `EXECUTABLE_PROPOSAL_VALIDATED=false`; no simulator, ledger, order or broker mutation occurred.
 
 **Interpretation of user screenshot:** the existing browser dashboard is an unstyled engineering table. It is functional but not the final product user experience. Improve presentation separately from genuine model-run verification.
 

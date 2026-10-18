@@ -26,6 +26,7 @@ Status: offline-safe hardening and code-ready TradingAgents proposal boundary; e
 ## External blockers
 
 - Controlled local smoke evidence: Ollama `llama3.2:3b` returned structured JSON in one synthetic-context request; SideDeck proposal validation accepted the normalized envelope. The evidence is provider-only: upstream import and graph execution were not verified, and no proposal was executed.
+- Pinned graph follow-up: the exact upstream graph import succeeded in a disposable Python 3.12 environment after targeted dependency repair. One minimal graph invocation was stopped when its Yahoo `curl_cffi` vendor attempted `fc.yahoo.com`; data isolation is therefore blocked, no graph rating was accepted, and no model/order result is claimed.
 
 - The injected upstream TradingAgents runtime and model/data providers were not installed or executed. The adapter is `CODE_READY`; `UPSTREAM_IMPORT_VERIFIED` and `UPSTREAM_MODEL_RUN_VERIFIED` remain unclaimed pending owner-approved credentials/provider policy.
 - `imranpollob/ai-trading` remains licensing-blocked and was not imported, copied, installed or run.

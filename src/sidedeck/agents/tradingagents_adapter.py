@@ -28,6 +28,7 @@ class TradingAgentsProposalAdapter:
     adapter_id = "tradingagents.upstream"
     upstream_sha = "e8f5503e9b86d5c2710b0c76b1f686703968c9df"
     status = "CODE_READY"
+    ratings = frozenset({"BUY", "OVERWEIGHT", "HOLD", "UNDERWEIGHT", "SELL", "REVIEW"})
 
     def __init__(self, graph: TradingAgentsGraph | None = None, *, enabled: bool = False) -> None:
         self.graph = graph
@@ -39,15 +40,34 @@ class TradingAgentsProposalAdapter:
                 "upstream model/data execution is disabled; use the fixture adapter offline"
             )
         ticker = self._single_ticker(request, bundle)
-        _, decision = self.graph.propagate(ticker, bundle.decision_cutoff_utc.date().isoformat())
-        return self.normalize_decision(request, bundle, decision)
+        state, decision = self.graph.propagate(ticker, bundle.decision_cutoff_utc.date().isoformat())
+        return self.normalize_decision(request, bundle, decision, state=state)
 
     def normalize_decision(
-        self, request: AgentRunRequest, bundle: MarketBundle, decision: Any
+        self, request: AgentRunRequest, bundle: MarketBundle, decision: Any, *, state: Any = None
     ) -> AgentProposalEnvelope:
         now = bundle.decision_cutoff_utc
         inputs_hash = self._input_hash(request, bundle)
         evidence = (EvidenceReference(reference="TradingAgentsGraph.propagate", as_of=now, kind="local"),)
+        if isinstance(decision, str):
+            rating = decision.strip().upper()
+            if rating in self.ratings:
+                if not isinstance(state, dict) or not (
+                    "final_trade_decision" in state or "final_rating" in state
+                ):
+                    return self._blocked(request, bundle, now, evidence, "MISSING_FINAL_STATE")
+                return AgentProposalEnvelope(
+                    run_id=request.run_id, portfolio_id=request.portfolio_id, adapter_id=self.adapter_id,
+                    generated_at=now, data_as_of=now, model_revision=request.adapter_revision,
+                    upstream_sha=self.upstream_sha, decision_inputs_hash=inputs_hash,
+                    prompt_version="upstream-rating-v1", evidence=evidence, result="HOLD",
+                    upstream_rating=rating,
+                    explanation=(
+                        f"TradingAgents research rating {rating} is non-executable; "
+                        "SideDeck requires an independent validated size, stop and invalidation"
+                    ),
+                )
+            return self._blocked(request, bundle, now, evidence, "UNSUPPORTED_UPSTREAM_RATING")
         if not isinstance(decision, dict):
             return self._blocked(request, bundle, now, evidence, "UPSTREAM_DECISION_NOT_STRUCTURED")
         if any(key in decision for key in ("broker", "order", "execute", "endpoint", "credential")):

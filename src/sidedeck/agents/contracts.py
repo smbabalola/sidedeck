@@ -133,6 +133,7 @@ class AgentProposalEnvelope(Contract):
     estimated_model_cost_usd: Decimal = Decimal("0")
     token_usage: int = Field(default=0, ge=0)
     runtime_ms: int = Field(default=0, ge=0)
+    upstream_rating: str | None = Field(default=None, min_length=1, max_length=50)
     errors: tuple[str, ...] = ()
 
     @field_validator("generated_at", "data_as_of")
