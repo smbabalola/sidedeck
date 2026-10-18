@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (SD-10B verified; SD-10C native-network isolation recovery scoped)  
+**Updated:** 2026-10-18 (SD-10C accepted; next sprint eToro daily-history verification, Yahoo-free SideDeck data path)
 **Verified integration branch SHA:** `12ae6eaae21e567034536d7d0c0ebb10397848da`  
 **Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39140051347 — Python 3.12, 50 passed, Ruff and mypy (22 source files) green, disposable PostgreSQL; three existing warnings.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -145,3 +145,20 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 **Remaining blocker:** A disposable OS-level default-deny runtime covering native `curl_cffi`/DNS/subprocesses and a separately allowlisted loopback Ollama path. Provisioning it requires external/privileged environment support; the user's system firewall was intentionally left unchanged.
 
 **SD-10C verification commit:** `8c4566d24d00a7045701202d22703a7f5a3171ae`; local `pytest`: 59 passed, 1 skipped, 3 warnings; Ruff passed; mypy passed (23 source files); SQLite Alembic upgrade passed. GitHub Actions: [run 39140855365](https://github.com/smbabalola/sidedeck/actions/runs/39140855365) — Python 3.12, pytest/Ruff/mypy passed; CI PostgreSQL container initialized and no existing user database was contacted.
+
+
+## SD-11A — next continuous sprint: read-only eToro historical-data feasibility
+
+**Decision:** Stop devoting the immediate sprint to Yahoo access, Windows firewall changes, or unblocking the *live upstream graph* through Yahoo. Pursue a SideDeck-controlled historical-data adapter, preferring eToro as instrument/feed source **if verified**. The native-eject / upstream-tool network-safety blocker is retained separately; data-source substitution does not resolve it.
+
+- [x] **Final SD-10C close-out:** Branch commit `4e02c4f6a4ca8ecff8aa40aeddfb163edad99586` checked remotely. [Final GitHub Actions 39140923450](https://github.com/smbabalola/sidedeck/actions/runs/39140923450) succeeded; preceding [39140855365](https://github.com/smbabalola/sidedeck/actions/runs/39140855365) succeeded. Codex reports local **59 passed / 1 skipped / 3 warnings**; native OS isolation still BLOCKED and no actual Ollama graph run occurred.
+- [x] **eToro API research:** Official eToro Market Data site confirms current rates, OHLC historical candles and historical closing prices; per-account/asset depth unverified. Independent live-tested clients report at most **1,000 candles per interval**, so eToro's OneDay bars may only cover about **four years**. **Five years of daily OHLCV remains UNVERIFIED; weekly candles do not meet the requirement.**
+- [ ] **SD-11A-1:** Verify official search/candle/closing-price schemas, current eligibility, limits and rights. Create an independently testable SideDeck-owned market-data GET-only adapter with injected transport and **no broker methods**.
+- [ ] **SD-11A-2:** Provide a fixture-based scanner for per-instrument five-year daily history: `AAPL`, `MSFT`, `SPY`, `QQQ`, count/date range, gaps, incomplete bars, validity, currency and adjustment treatment. Test max 1000 daily bar response, no pagination and failure cases.
+- [ ] **SD-11A-3:** Determine whether the historical closing-price endpoint can provide older daily closes; if not, select a licensing-compatible 5-year daily OHLCV source/import for the older missing data, with eToro for ongoing updates if allowed. No fabricated daily bars or conversion from weekly to daily.
+- [ ] **SD-11A-4:** Normalize approved data into immutable `MarketBundle` records and controlled research tools; disable Yahoo fallback in SideDeck. An upstream TradingAgents graph **must still have a separate native network egress guard**; prices alone don't prevent its independent Yahoo/SEC/news requests.
+- [ ] **SD-11A-5:** Run offline pytest/Ruff/mypy, disposable PostgreSQL CI, preserve all local secrets; update docs and TODO in implementation commits. Draft PR remains draft/unmerged.
+- [ ] **SD-11A-6 / owner action when ready:** Prepare an explicit opt-in **read-only eToro market-data API** smoke command. **Do not run authenticated eToro requests or load its API credentials without fresh owner approval**; no Demo or Real order endpoints.
+
+**Working plan:** [`docs/ETORO_HISTORICAL_DATA.md`](docs/ETORO_HISTORICAL_DATA.md). Execute SD-11A code-only research/tests in one continuous pass without further minor reviews. Focus on genuine five-year daily data, not a superficially passing stub.
+
