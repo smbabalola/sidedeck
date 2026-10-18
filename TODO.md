@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (owner authorised one bounded local eToro historical market-data read; awaiting local evidence)
+**Updated:** 2026-10-18 (first authorised eToro GET returned 403; token entitlement investigation next, no repeat approval)
 **Verified code SHA:** `0da1ef47f943643fd792285d3f8136bbc287344f` (before this documentation-only update)
 **Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39143425931 — Python 3.12, 78 tests passed, Ruff passed, mypy passed for 25 source files, disposable PostgreSQL, 3 known SQLite warnings.
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -223,7 +223,19 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 
 - [x] **One authorized execution:** The existing live command was run exactly once with locally loaded ignored `ETORO_API_KEY` and `ETORO_USER_KEY`; values were not printed, logged, staged or uploaded. The process was limited to the market-data client and the four approved symbols.
 - [x] **Safe stop:** AAPL instrument search returned HTTP `403` and the client raised `EtoroAccessBlocked`. The fail-closed behavior stopped the run before any candle GET and before MSFT, SPY or QQQ search requests.
-- [x] **Per-instrument result:** AAPL — search blocked, 0 candles, earliest/latest unavailable, five-year daily history unavailable. MSFT — not attempted after fail-closed stop. SPY — not attempted after fail-closed stop. QQQ — not attempted after fail-closed stop. No coverage claim is made for the unattempted instruments.
+- [x] **Per-instrument result:** AAPL — search blocked with HTTP 403, 0 candles retrieved, earliest/latest unavailable, **five-year daily depth UNKNOWN (not tested)**. MSFT, SPY and QQQ — not attempted due to fail-closed stop, five-year daily depth UNKNOWN. **A 403 is an access/permission failure, not evidence that historical data is unavailable.**
 - [ ] **Coverage status:** `BLOCKED` / `LOCAL_ETORO_MARKET_DATA_403`; account-specific daily depth, dates, adjustments, volume and five-year availability remain unverified. No retry or second live run was made.
 
 **Required owner follow-up:** verify that the locally provisioned keys are entitled to the official `/market-data/` search endpoint, then provide fresh approval before any subsequent bounded read-only attempt. No account, portfolio, balance, position, order, Demo or Real endpoint was accessed.
+
+## SD-11D — eToro 403 authorisation investigation (read-only; no API retry approved)
+
+- [x] **Independently verified** commit `94f8dbd7b772f50a93147464d48f59a9c400fd86` is remote branch head at review and [CI 39144154129](https://github.com/smbabalola/sidedeck/actions/runs/39144154129) succeeded. The initial approved probe was **consumed exactly once**: AAPL search GET returned HTTP 403; no subsequent instrument searches or any candle GET occurred. No credentials were printed or uploaded.
+- [x] **Interpretation corrected:** 403 indicates endpoint access denied, **not** that AAPL five-year coverage is unavailable. Status is `LOCAL_ETORO_MARKET_DATA_403 / ACCESS_BLOCKED`; actual depth for AAPL/MSFT/SPY/QQQ remains UNKNOWN.
+- [ ] **Owner UI-only verification (no API requests):** On eToro API Portal `https://api-portal.etoro.com`, review the current API key pair's environment, **read permission/scope for market-data/search**, expiration/revocation and any IP whitelist. Official documentation: `https://builders.etoro.com/learn/authentication-and-api-keys`, `https://api-portal.etoro.com/getting-started/authentication`. Avoid changing keys or scope as a blind troubleshooting step, and **never paste the values into chat/Codex output/GitHub**.
+- [ ] **If permissions appear correct:** Seek eToro developer support confirmation that this key/account has authorised `GET /api/v1/market-data/search?internalSymbolFull=AAPL` access in the chosen environment. Share safe endpoint name, HTTP 403 and UTC time only; never share key values or raw headers. IP whitelist / account eligibility or entitlement may also explain access denial. No automatic retry.
+- [ ] **Next fresh authorisation:** Only after the eToro account permissions are confirmed should a second scoped market-data-only GET be proposed, and only with fresh owner approval. No account/position/order endpoints, no Demo or Real execution.
+- [ ] **Nonblocking parallel work:** Continue SideDeck's existing **licensed local CSV** historical-data import and offline fixtures, checking five-year daily dates, corporate-action adjustments, rights, volume integrity and as-of timestamps; do not silently substitute Yahoo, claim five years from a single 1000-bar response or assert real performance. Find an additional legitimate 5-year daily OHLCV provider only after reviewing cost/licensing.
+- [ ] **Other outstanding releases:** Genuine pinned TradingAgents graph execution still requires a network containment decision; upstream AI Trading source rights unresolved; no eToro Demo trading authorisation given.
+
+**Next action:** owner checks eToro API Portal access settings without issuing another GET; Codex must not rerun the exhausted authorisation. Work on licensing-compatible CSV import/analysis can proceed without waiting on eToro support.
