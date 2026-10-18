@@ -8,7 +8,6 @@ from uuid import uuid4
 
 import pytest
 
-from sidedeck.domain.accounting import Ledger
 from sidedeck.domain.alpaca_paper import AlpacaPaperError
 from sidedeck.domain.contracts import MarketSnapshot, PriceType, Session, Side, TradeIntent
 from sidedeck.domain.paper_desk import PaperDeskError
