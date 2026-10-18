@@ -2,9 +2,9 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (SD-11A code delivered; SD-11B official API compatibility fixes required before live reads)
-**Verified integration branch SHA:** `12ae6eaae21e567034536d7d0c0ebb10397848da`  
-**Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39140051347 — Python 3.12, 50 passed, Ruff and mypy (22 source files) green, disposable PostgreSQL; three existing warnings.  
+**Updated:** 2026-10-18 (SD-11B independently verified; live-probe cutoff and reporting fixes accepted)
+**Verified code SHA:** `0da1ef47f943643fd792285d3f8136bbc287344f` (before this documentation-only update)
+**Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39143425931 — Python 3.12, 78 tests passed, Ruff passed, mypy passed for 25 source files, disposable PostgreSQL, 3 known SQLite warnings.
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
 
 ## Mandatory maintenance
@@ -177,12 +177,12 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 
 - [x] **Verified pushed feature commit** `a7e678a3a6b43f15d4c17bc01d2a51200b6ef0de`, [CI 39141855089](https://github.com/smbabalola/sidedeck/actions/runs/39141855089) and [CI 39141852093](https://github.com/smbabalola/sidedeck/actions/runs/39141852093) both passed. Owner-reported local 68 passed, 1 PostgreSQL skipped, 3 existing warnings; Ruff/mypy/SQLite passed. Draft PR #1 remains unmerged.
 - [x] **SD-11A code only:** Market-data-only injected client, approved universe, synthetic coverage scanner and explicit owner-confirmation CLI exist; no authenticated eToro read occurred, so actual daily depth and trading data correctness remain **UNVERIFIED**.
-- [ ] **SD-11B-1 / Must fix before any real probe:** Official eToro instrument guide specifies `internalSymbolFull=AAPL`, exact match on `internalSymbolFull` and a verified instrument ID. Current code requests `search=AAPL` and defaults critical instrument attributes. Normalise verified live response/metadata, reject ambiguous symbols, CFDs and unverified classification.
-- [ ] **SD-11B-2 / Must fix:** Published candle payload nests `candles` by instrument and timestamps rows using `fromDate`; current flat parser expects `timestamp|date|time`. Check nested group instrument IDs and support documented zero volume without inventing it.
-- [ ] **SD-11B-3 / Must fix:** Current `sidedeck.data_probe` prints only the AAPL instrument resolution. It does **not request or scan history**, so no authenticated five-year test would answer the goal. Implement offline-dry-run and bounded four-symbol history scanner, redacted output.
-- [ ] **SD-11B-4 / Must fix:** `urllib.urlopen` throws `HTTPError` on 429, so current client retries do not work through the real transport. Correct status normalization, documented bounded Retry-After, safe GET URL allowlist and same-host redirect policy.
-- [ ] **SD-11B-5 / Must fix:** A single max-1000 OneDay candle response **cannot** prove five years of approx 1,250 daily sessions; use accurate exchange-calendar coverage, leap-safe five-year periods, gaps/holidays and actual supported historical pagination or a legitimate second source. Do not fabricate data or treat weekly candles as daily.
-- [ ] **SD-11B-6 / Required acceptance:** Full offline schema-fixture tests (including published examples), pytest/Ruff/mypy/PostgreSQL and README/docs. Keep live calls and key use disabled until the owner separately approves only eToro `/market-data/` GET and local secrets. **Actual account-specific depth remains unverified** until that bounded check.
+- [x] **SD-11B-1 / Must fix before any real probe:** Official eToro instrument guide specifies `internalSymbolFull=AAPL`, exact match on `internalSymbolFull` and a verified instrument ID. Current code requests `search=AAPL` and defaults critical instrument attributes. Normalise verified live response/metadata, reject ambiguous symbols, CFDs and unverified classification.
+- [x] **SD-11B-2 / Must fix:** Published candle payload nests `candles` by instrument and timestamps rows using `fromDate`; current flat parser expects `timestamp|date|time`. Check nested group instrument IDs and support documented zero volume without inventing it.
+- [x] **SD-11B-3 / Must fix:** Current `sidedeck.data_probe` prints only the AAPL instrument resolution. It does **not request or scan history**, so no authenticated five-year test would answer the goal. Implement offline-dry-run and bounded four-symbol history scanner, redacted output.
+- [x] **SD-11B-4 / Must fix:** `urllib.urlopen` throws `HTTPError` on 429, so current client retries do not work through the real transport. Correct status normalization, documented bounded Retry-After, safe GET URL allowlist and same-host redirect policy.
+- [x] **SD-11B-5 / Must fix:** A single max-1000 OneDay candle response **cannot** prove five years of approx 1,250 daily sessions; use accurate exchange-calendar coverage, leap-safe five-year periods, gaps/holidays and actual supported historical pagination or a legitimate second source. Do not fabricate data or treat weekly candles as daily.
+- [x] **SD-11B-6 / Required acceptance:** Full offline schema-fixture tests (including published examples), pytest/Ruff/mypy/PostgreSQL and README/docs. Keep live calls and key use disabled until the owner separately approves only eToro `/market-data/` GET and local secrets. **Actual account-specific depth remains unverified** until that bounded check.
 
 **One-pass coding brief:** [`docs/ETORO_API_FIXES.md`](docs/ETORO_API_FIXES.md). Complete SD-11B code fixes without routine review pauses. No further Yahoo/OS firewall work, no paid LLM, no orders/eToro broker access.
 
@@ -196,3 +196,14 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **SD-11B-6:** Offline tests cover published samples, nested/cross-instrument payloads, zero volume, malformed/future/incomplete candles, 401/403/429 handling, redirects/path safety, leap years and four-symbol dry run. Local: 73 passed, 1 skipped, 3 warnings; Ruff, mypy (25 files) and SQLite Alembic passed. No authenticated request or credential load occurred.
 
 **SD-11B status:** `CODE_READY`; read-only coverage probe is ready for owner approval, but actual account-specific five-year coverage remains `LIVE_COVERAGE_UNVERIFIED`.
+
+## SD-11B independent review and live-probe cutoff correction (2026-10-18)
+
+- [x] Independently verified Codex's SD-11B commit `01377cb010b1cb39fcfff6e2de63353a63ac66f0` and [GitHub CI 39142661967](https://github.com/smbabalola/sidedeck/actions/runs/39142661967): **74 passed**, Ruff/mypy/disposable PostgreSQL green. Local author report: 73 passed, 1 PostgreSQL skipped, 3 known warnings.
+- [x] Source review found a **live-only correctness defect** after the green CI: `sidedeck.data_probe` continued using an old fixed **2026-01-06** cutoff and a fake **single-day 2026-01-05 exchange calendar** for real account requests. This would reject current genuine candles and falsely imply historical coverage had been checked. Updated live mode to use a dynamically computed cutoff through the **previous UTC day** (conservatively excluding currently forming daily bars) and pass **no invented calendar**. Dry-run's dated fixture remains unchanged.
+- [x] Tightened exact GET history path syntax, checked nested row instrument IDs, and made history scan return **INSUFFICIENT_DEPTH** when the earliest received observation is demonstrably newer than the five-year target; otherwise it remains **UNVERIFIED** until an actual verified exchange-session calendar is supplied. No five-year pass is fabricated from a single 1,000-bar response.
+- [x] Added offline regressions for actual live-cutoff calculation, untrusted GET paths, absence of invented exchange sessions, recent/old history status, and cross-instrument values. Code HEAD `0da1ef47f943643fd792285d3f8136bbc287344f` passed [CI 39143425931](https://github.com/smbabalola/sidedeck/actions/runs/39143425931) and [CI 39143421549](https://github.com/smbabalola/sidedeck/actions/runs/39143421549): **78 tests passed**, 3 known warnings, Ruff and mypy (25 source files) green, disposable PostgreSQL.
+- [ ] **Only remaining market-data permission gate:** owner-approved **read-only eToro `/market-data/` GET** using locally held `ETORO_API_KEY` and `ETORO_USER_KEY`, with max four approved instruments and bounded calls. No credentials have been read or transmitted in this review; no authenticated eToro request has occurred. The real-data depth, adjustment quality and licence/storage rights remain unverified.
+- [ ] **Separate unchanged external gates:** upstream TradingAgents native-network isolation and graph completion; original AI Trading framework licensing; eToro Demo broker access/real forward research. Do **not** interpret read-only market data as trading permission.
+
+**Owner decision needed next:** Approve one bounded read-only eToro market-data coverage test, or continue using exclusively offline fixture/licensed CSV inputs. Do not ask to re-run completed SD-11B implementation.
