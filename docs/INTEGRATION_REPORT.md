@@ -31,5 +31,12 @@ Status: offline-safe synthetic-data hardening and code-ready TradingAgents propo
 
 - The licensed pinned TradingAgents runtime **was installed sufficiently for the exact graph import to succeed** in a disposable Python 3.12 environment. `UPSTREAM_IMPORT_VERIFIED=true`. A graph invocation began but was stopped by an upstream Yahoo `curl_cffi` network attempt, so `UPSTREAM_GRAPH_RUN_VERIFIED=false` and `DATA_ISOLATION_VERIFIED=false`. The prior single Ollama model-only test is separate evidence. See `docs/DATA_ISOLATION_RECOVERY.md` for controlled tool injection and OS-enforced native egress boundaries.
 - SD-10C native isolation remains blocked: Docker's Linux daemon was unavailable and WSL was not an already-provisioned default-deny namespace with an allowlisted Ollama mediation. No Windows firewall/service changes were made, no native `curl_cffi` remote request was repeated, and no real graph was attempted after the failed gate. This is recorded as `OS_EGRESS_BOUNDARY_BLOCKED`, not as evidence that Python-level guards contain native transport.
+
+## SD-10C verification
+
+- Commit: `8c4566d24d00a7045701202d22703a7f5a3171ae`.
+- Local: 59 passed, 1 skipped (existing local PostgreSQL availability skip), 3 known SQLite datetime-adapter warnings; Ruff passed; mypy passed for 23 source files; SQLite Alembic upgrade passed.
+- CI: [GitHub Actions run 39140855365](https://github.com/smbabalola/sidedeck/actions/runs/39140855365) passed on Python 3.12 with pytest, Ruff and mypy; disposable PostgreSQL container initialization passed. No existing user database was contacted.
+- Offline graph: deterministic `Hold`, repeated replay equality, fixture provenance intact, zero model/broker/order/ledger mutations.
 - `imranpollob/ai-trading` remains licensing-blocked and was not imported, copied, installed or run.
 - eToro and all broker access/order paths remain disabled.

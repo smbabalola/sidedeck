@@ -143,3 +143,5 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **SD-10C-4:** Added regression coverage for deterministic replay, provenance, compiled-tool allowlisting, unknown-tool fail-closed behaviour and mandatory native-isolation policy. Full test, Ruff, mypy, SQLite migration and disposable PostgreSQL CI evidence is recorded with the completion commit below.
 
 **Remaining blocker:** A disposable OS-level default-deny runtime covering native `curl_cffi`/DNS/subprocesses and a separately allowlisted loopback Ollama path. Provisioning it requires external/privileged environment support; the user's system firewall was intentionally left unchanged.
+
+**SD-10C verification commit:** `8c4566d24d00a7045701202d22703a7f5a3171ae`; local `pytest`: 59 passed, 1 skipped, 3 warnings; Ruff passed; mypy passed (23 source files); SQLite Alembic upgrade passed. GitHub Actions: [run 39140855365](https://github.com/smbabalola/sidedeck/actions/runs/39140855365) — Python 3.12, pytest/Ruff/mypy passed; CI PostgreSQL container initialized and no existing user database was contacted.
