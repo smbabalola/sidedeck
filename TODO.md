@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (verified integration sprint and remaining external gates)  
+**Updated:** 2026-10-18 (user visual demo verified; limited provider tests authorised)  
 **Verified integration branch SHA:** `cbee3d03406c250d16574d81df59c37113375cd8`  
 **Latest CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39135705189 — Python 3.12, 39 passed, Ruff and mypy (21 source files) green, disposable PostgreSQL; three existing warnings.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -75,10 +75,22 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **SD-07G / Deferred nonblocking robustness:** `reset_fixture` currently allows deleting any existing directory named `results`; tighten to an explicit project-owned marker, preserving legacy default fixture flow. Do not treat the current offline demo as production hardened.
 - [ ] **SD-10:** Upstream TradingAgents smoke verification, AI Trading rights clearance, observed data and representative forward sessions are not complete, despite all green CI tests.
 
+## Real LLM verification sprint — authorised and awaiting local execution
+
+- [x] **User visual acceptance:** Owner successfully ran `python -m sidedeck.demo run` and opened `results/dashboard.html` in PowerShell on 2026-10-18. Synthetic AAPL/MSFT trades, simulated portfolio summaries, an oversell rejection, and HOLD visibly appeared. **This is fixture acceptance only.**
+- [x] **Private provider configuration reported:** User has Ollama, NVIDIA and OpenAI provider credentials/settings in a local ignored `.env`; not checked into this GitHub repository. Only `.env.example` placeholders are tracked. Never disclose or commit values.
+- [x] **Scoped user authorisation:** Small local **model-only** smoke-test calls using existing local provider configuration, favour no-cost local Ollama / eligible NVIDIA allowance before any OpenAI paid usage. No unrestricted billing, no market-data scraping, no broker APIs. A local code agent must check availability, model and allowance without printing keys.
+- [ ] **SD-10A / Immediate:** Follow `docs/REAL_AGENT_SMOKE_TEST.md`: preflight local provider setup and support explicit opt-in model smoke CLI. Mark provider test versus genuine TradingAgents graph test independently. Offline CI must stay network-free.
+- [ ] **SD-10B / Immediate:** Safely install/verify the pinned licensed TradingAgents runtime in an isolated environment, validate adapter mapping and execute one limited real-model call **only when** provider and data/network constraints can be enforced. Test with synthetic/controlled context, not actual orders. Persist masked cost/time/result evidence.
+- [ ] **SD-10C / UX:** User visual acceptance shows an unstyled plain HTML table, not final UI. Add a presentable comparison dashboard when safe without delaying model verification. No need to repeat completed fixture demo.
+- [ ] **SD-10D / Security:** Check repository history and CI logs for accidental secret inclusion using safe redacted detection and owner notification if found. Never echo potential secret values. Current remote `.env` absent and `.gitignore` ignores it; a historical scan is a separate check.
+
+**Next action:** Codex in the local Windows workspace executes the new smoke-test runbook, uses local ignored `.env` only, tests with explicit low-cost bounds and updates this TODO with evidence. Actual eToro use and unlicensed `imranpollob/ai-trading` source remain blocked.
+
 ## Active blockers and mitigations
 
 1. **AI Trading copyright:** Upstream `imranpollob/ai-trading` shows no root licence; do not reuse source without permission. Safe independent protocol/fixture work may proceed.
-2. **Model credentials / AI cost:** No approved API credentials supplied to Codex or GitHub; genuine model inference cannot be verified until user configures approved secrets locally.
+2. **Model credentials / AI cost:** Owner reports Ollama/NVIDIA/OpenAI configuration in local ignored `.env` and authorises small local smoke tests. Availability, safe provider policy, free allowance and actual model inference remain unverified. **Do not send keys to GitHub or chat.**
 3. **eToro Demo:** User approval, private Demo credentials and endpoint-level scope checks required before authenticated calls/orders; do not auto-attempt access.
 4. **Real quote access:** No provider or point-in-time feed connected. Keep deterministic fixtures clearly marked; no real performance claims.
 5. **Actual forward test:** Requires market sessions and cannot be completed just by writing code.
