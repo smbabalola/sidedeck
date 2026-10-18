@@ -1,10 +1,10 @@
 # SideDeck — Coding agent standing instructions
 
-Read **`TODO.md` first**; it is the single living progress register. Read `docs/DELIVERY_SPRINT.md`, `docs/P2_IMPLEMENTATION.md`, `docs/P1_REPORT.md` and `docs/P2_REPORT.md` before changing architecture.
+Read **`TODO.md` first**; it is the single living progress register. For the current active sprint, read **`docs/INTEGRATION_SPRINT.md`** next, then `docs/DELIVERY_SPRINT.md`, `docs/P2_IMPLEMENTATION.md`, `docs/P1_REPORT.md` and `docs/P2_REPORT.md` before changing architecture.
 
 ## Current authorisation and work style
 
-P0, P1/P1.2 and **P2A are complete**. The project owner has authorised **continuous implementation of the safe, offline SideDeck local demo** (tasks SD-01 to SD-06 in TODO.md) without repeated approval checkpoints. Continue to the next safe unblocked item after each green test. After the demo, code-only proposal-adapter preparation may proceed without credentials or network calls. Do not restart the completed P2A scope.
+P0, P1/P1.2, **P2A, and the minimal offline SideDeck demo (SD-01 through SD-06) are complete**. The project owner has authorised **continuous safe development of the integration-hardening and proposal-only research adapter sprint** (SD-06H and SD-07/SD-09 in TODO.md) without repeated approval checkpoints. Continue to the next safe unblocked item after each green test. Do not restart accepted scope. Real LLM, unlicensed upstream AI Trading execution, authenticated market-data calls and eToro access remain externally gated.
 
 Work on `feat/p2-agent-adapters`; preserve untracked local work, especially `SideDeck-Blueprint/`, and ignored `.env`/`.venv` and databases. Use scoped, reviewed commits and normal pushes; no force pushes, main merges, or destructive actions. Report a material design change in an ADR.
 
