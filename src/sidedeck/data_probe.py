@@ -86,6 +86,7 @@ def main() -> int:
     parser.add_argument("--allow-read-network", action="store_true")
     parser.add_argument("--confirm-owner-read-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="use published-shape local fixtures; never opens a socket")
+    parser.add_argument("--single-v2-search", choices=("AAPL",), help="one bounded read-only v2 search; no candles or other symbols")
     args = parser.parse_args()
     if not args.dry_run and (not args.market_data_only or not args.allow_read_network or not args.confirm_owner_read_only):
         parser.error("requires --market-data-only --allow-read-network --confirm-owner-read-only")
@@ -97,7 +98,13 @@ def main() -> int:
         if not api_key or not user_key:
             parser.error("ETORO_API_KEY and ETORO_USER_KEY are required only after owner approval")
         transport = UrllibReadOnlyTransport({"x-api-key": api_key, "x-user-key": user_key})
-    client = EtoroHistoricalDataClient(transport, capability=MarketDataReadCapability())
+    client = EtoroHistoricalDataClient(
+        transport, capability=MarketDataReadCapability(), max_retries=0 if args.single_v2_search else 1
+    )
+    if args.single_v2_search:
+        resolved = client.resolve_instrument(args.single_v2_search)
+        print(json.dumps({"mode": "dry-run" if args.dry_run else "live-read-only", "kind": "v2-search-only", "ticker": resolved.ticker, "instrument_id": resolved.instrument_id, "status": "RESOLVED"}))
+        return 0
     if args.dry_run:
         cutoff = datetime(2026, 1, 6, tzinfo=timezone.utc)
         exchange_sessions: frozenset[date] | None = frozenset({date(2026, 1, 5)})
