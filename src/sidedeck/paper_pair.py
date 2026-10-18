@@ -11,6 +11,7 @@ import argparse
 from dataclasses import asdict
 import json
 import os
+from typing import Mapping
 
 from sidedeck.domain.alpaca_paper import PaperGetTransport
 from sidedeck.domain.alpaca_paper_pair import DualPaperAccountInspector
@@ -52,7 +53,7 @@ class _DryPairTransport(PaperGetTransport):
     def __init__(self, account_label: str) -> None:
         self._label = account_label
 
-    def get(self, path: str, params: dict[str, str]) -> tuple[int, bytes]:
+    def get(self, path: str, params: Mapping[str, str]) -> tuple[int, bytes]:
         if path != "/v2/account" or params:
             raise AssertionError("dry-run accesses only account identity")
         return 200, json.dumps({
