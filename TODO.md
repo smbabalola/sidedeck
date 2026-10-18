@@ -162,3 +162,12 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 
 **Working plan:** [`docs/ETORO_HISTORICAL_DATA.md`](docs/ETORO_HISTORICAL_DATA.md). Execute SD-11A code-only research/tests in one continuous pass without further minor reviews. Focus on genuine five-year daily data, not a superficially passing stub.
 
+## SD-11A eToro historical-data adapter (2026-10-18)
+
+- [x] **Read-only client:** Added `EtoroHistoricalDataClient` with injected transport, fixed official host, explicit `market-data-read` capability, deterministic approved-instrument resolution, no order methods/imports, bounded 429 retry and redacted status errors. No eToro credentials or authenticated requests were used.
+- [x] **Coverage scanner:** Added typed daily-candle validation and five-year report statuses. Requests clamp at 1,000 candles; incomplete/future/malformed/duplicate data and OHLCV violations fail closed. No missing sessions are fabricated.
+- [x] **Probe/fallback:** Added an explicit three-flag `sidedeck.data_probe` command that cannot start without owner confirmation and both eToro key names. Existing licensed CSV import is the prepared fallback; Yahoo is not a fallback.
+- [ ] **Coverage gate — UNVERIFIED:** Official docs confirm market-data search/candles/historical-closing-price surfaces, but owner-specific earliest date, five-year daily depth, volume quality, adjustments and storage rights require an authorised read-only GET. Do not run the probe until that approval is provided.
+- [x] **Offline evidence:** `pytest` 68 passed / 1 skipped / 3 warnings; Ruff passed; mypy passed for 25 source files; SQLite Alembic upgrade passed. No network calls were made by tests.
+
+**Next action:** obtain explicit owner approval for a read-only eToro market-data GET with permitted credentials/environment, then run one bounded coverage probe for AAPL/MSFT/SPY/QQQ. Until then, remain on the offline adapter and licensed CSV fallback; preserve TradingAgents native-network safety restrictions.

@@ -63,3 +63,11 @@ Disposable PostgreSQL coverage runs in GitHub Actions. The local environment doe
 ## Integrations
 
 The TradingAgents adapter preparation is protocol-only and fixture-backed; actual upstream model execution requires separate owner-approved model access and remains opt-in. The `imranpollob/ai-trading` source is not imported, copied, installed, or executed because its licensing is unresolved. eToro and all broker execution remain outside this project.
+The credential-free eToro historical-data boundary is read-only and transport-injected. Its later live probe requires all three explicit flags and owner-approved environment credentials; it has no order or Yahoo fallback:
+
+```powershell
+$env:PYTHONPATH = "src"
+.venv\Scripts\python.exe -m sidedeck.data_probe --provider etoro --market-data-only --allow-read-network --confirm-owner-read-only
+```
+
+Do not run that command until read-only access is explicitly approved. Five-year daily eToro coverage is currently unverified. The existing licensed local CSV import is the prepared fallback; it must be supplied with confirmed usage rights and is never silently combined with or replaced by Yahoo.

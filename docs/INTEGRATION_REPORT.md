@@ -40,3 +40,10 @@ Status: offline-safe synthetic-data hardening and code-ready TradingAgents propo
 - Offline graph: deterministic `Hold`, repeated replay equality, fixture provenance intact, zero model/broker/order/ledger mutations.
 - `imranpollob/ai-trading` remains licensing-blocked and was not imported, copied, installed or run.
 - eToro and all broker access/order paths remain disabled.
+## SD-11A eToro historical-data preparation
+
+- `sidedeck.domain.etoro.EtoroHistoricalDataClient` is a typed, read-only, transport-injected boundary. It has no order imports or methods, accepts only the fixed official eToro API host, resolves only SideDeck's approved AAPL/MSFT/SPY/QQQ instruments, rejects leveraged/CFD-like or non-USD variants, clamps daily requests to 1,000 candles, retries only bounded HTTP 429 responses, and never falls back to Yahoo.
+- Candle validation rejects malformed timestamps, future or incomplete sessions, duplicate timestamps, bad volume and invalid OHLC relationships. `CoverageReport` returns `PASS_5Y_DAILY`, `INSUFFICIENT_DEPTH` or `UNVERIFIED`; it does not fill gaps or turn weekly data into daily history.
+- `sidedeck.data_probe` is prepared but inert without `--market-data-only --allow-read-network --confirm-owner-read-only` and both environment variables. No eToro credential was read and no eToro request was made in this sprint.
+- Official documentation reviewed: [Market Data & Real-Time](https://builders.etoro.com/products/market-data-realtime), [API FAQ](https://builders.etoro.com/faq), [API Quick Reference](https://builders.etoro.com/reference), [authentication and API keys](https://builders.etoro.com/learn/authentication-and-api-keys), and [rate-limit guidance](https://builders.etoro.com/learn/rate-limits-and-429-handling). These establish the market-data surface and credential/rate-limit requirements, but not this account's earliest date, daily depth, adjustment policy or storage rights.
+- Coverage verdict: **UNVERIFIED** pending explicit read-only owner approval. The existing licensed local CSV import is the prepared fallback; no automatic Yahoo fallback exists.
