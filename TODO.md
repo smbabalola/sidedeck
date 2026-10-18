@@ -239,3 +239,16 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **Other outstanding releases:** Genuine pinned TradingAgents graph execution still requires a network containment decision; upstream AI Trading source rights unresolved; no eToro Demo trading authorisation given.
 
 **Next action:** owner checks eToro API Portal access settings without issuing another GET; Codex must not rerun the exhausted authorisation. Work on licensing-compatible CSV import/analysis can proceed without waiting on eToro support.
+
+
+## SD-11D — credential-format and portal-permission check (2026-10-18)
+
+- [x] **Owner's eToro settings screenshot:** The currently viewed `signaldeckdemokey` entry is under **Main** account, has **Market Data → Read** enabled, no IP allowlisting configured and no expiration entered. `Trading — Real → Write` was not selected in the displayed permissions. **This is UI evidence only; it does not prove the local key pair belongs to that entry or is entitled to the endpoint.**
+- [x] **Codex local no-network configuration review:** Ignored `.env` exists and has exactly one `ETORO_API_KEY` and `ETORO_USER_KEY`; each nonempty, printable ASCII, unquoted, no internal/edge whitespace and mutually distinct. No values, hashes or secrets were displayed, uploaded or logged. The previous live attempt expressly loaded these variables from `.env`; PowerShell does not automatically inject them into its environment.
+- [x] **Clarify local environment flag:** `ETORO_ENVIRONMENT` is classified locally as demo/test; the current SideDeck `src/sidedeck/data_probe.py` **does not read this variable**, uses the same official market-data host regardless of it, and only supplies the API key/user key/request UUID to `/market-data/search`. **The local environment label alone did not cause the 403.** The **eToro account / key issuance environment** must still be checked independently; key display name is not sufficient evidence.
+- [ ] **Most useful offline next check:** Confirm in the portal UI which actual Public API Key and User Key were originally obtained for this precise active key/account pairing, without exposing either value. An older/mismatched user key cannot be ruled out merely by nonempty formatting. Do not issue new keys or make additional authenticated requests blindly.
+- [ ] **eToro support escalation if key pairing is confirmed:** Ask eToro to verify the market-data search endpoint entitlement for this Main-account key despite `Market Data → Read` selected and no IP/expiry restrictions. Include sanitized endpoint and prior HTTP 403, never API values, headers or raw body.
+- [ ] **Permission gate:** Previous one-shot market-data read authorisation was consumed; **no new authenticated eToro calls** until key/account issue is resolved and owner separately re-approves. No broker/portfolio/order access is authorised.
+
+**Primary source:** eToro public API auth docs specify `x-api-key` (application), `x-user-key` (user) and `x-request-id` UUID; eToro also classifies 403 as forbidden by scope and requires matching account/environment. See `https://builders.etoro.com/learn/authentication-and-api-keys` and `https://api-portal.etoro.com/getting-started/authentication`.
+
