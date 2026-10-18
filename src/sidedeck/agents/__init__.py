@@ -11,6 +11,7 @@ from .contracts import (
 )
 from .fixtures import AITradingFixtureWorker, TradingAgentsFixtureWorker
 from .gateway import AgentRunCoordinator, ProposalSchemaValidator
+from .tradingagents_preparation import TradingAgentsPreparation
 
 __all__ = [
     "AITradingFixtureWorker",
@@ -25,5 +26,6 @@ __all__ = [
     "ProposalSchemaValidator",
     "SqlAuditStore",
     "TradingAgentsFixtureWorker",
+    "TradingAgentsPreparation",
     "ValidationResult",
 ]

@@ -168,6 +168,8 @@ class TradeIntent(Contract):
     model_revision: str = Field(min_length=1)
     decision_timestamp: datetime
     data_as_of: datetime
+    stop_price: Decimal | None = None
+    invalidation: str | None = None
 
     @field_validator("decision_timestamp", "data_as_of")
     @classmethod
@@ -186,6 +188,8 @@ class TradeIntent(Contract):
                 raise ValueError(f"{name} must be finite and positive")
         if self.data_as_of > self.decision_timestamp:
             raise ValueError("data_as_of cannot be after the decision timestamp")
+        if self.stop_price is not None and (not self.stop_price.is_finite() or self.stop_price <= ZERO):
+            raise ValueError("stop_price must be finite and positive")
         return self
 
 

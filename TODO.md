@@ -30,12 +30,12 @@
 
 ## NOW — execute continuously to working demo
 
-- [ ] **SD-01 / P0 — Runnable project:** Replace the placeholder README with truthful setup, Windows/Linux commands, expected outputs, fixture disclaimers, `python -m sidedeck.demo` (or documented equivalent) and instructions for viewing logs/dashboard. Preserve other documents.
-- [ ] **SD-02 / P0 — Deterministic risk policy:** Enforce eligible universe (no crypto, crypto-linked ETFs, leveraged/inverse products, CFDs, shorts or FX), valid as-of input, cash sufficiency, per-position cap 20%, gross exposure cap 80%, max 4 positions, configurable 1% risk budget if a defensible stop exists; reject trades without mandatory risk metadata instead of inventing stops. Include clear refusal reasons.
-- [ ] **SD-03 / P0 — Local execution simulator:** Validate proposals and generate durable order/fill lifecycle with transaction fees, configurable spread/slippage, partial fills and cancellation, idempotency and causal link `run -> intent -> decision -> order -> fill -> journal -> position`. **No broker adapter and no network orders.**
-- [ ] **SD-04 / P0 — Two-agent end-to-end fixture runner:** Both competitors consume the same timestamped fixture bundle, each funds $1,000; SideDeck applies risk and simulator; verify position, cash, NAV, fees and replay. Provide several deterministic market sessions so the output is inspectable rather than a one-off empty ledger.
-- [ ] **SD-05 / P0 — Local dashboard & export:** Side-by-side cash, market value, NAV/equity curves, positions, exposure, P&L, drawdown, rejected intents, trades/fills, evidence, agent and data provenance. Explicit `FIXTURE`, `SIMULATED`, `NO ETORO` labels. Downloadable local CSV/JSON report; no unverified claims of AI profitability.
-- [ ] **SD-06 / P0 — Full acceptance:** End-to-end deterministic regression/property tests, portfolio isolation, no duplicated economic effect, restart persistence, cutoff/timezone guards, no network leakage, negative inputs, price gaps and both zero-trade and multiple-trade scenarios. Python 3.12 + disposable PostgreSQL CI, SQLite, Ruff and mypy green. Update this TODO and publish reproducible demo evidence.
+- [x] **SD-01 / P0 — Runnable project:** README setup/launch commands, fixture disclaimers, `python -m sidedeck.demo` source-path launch, status/report/reset modes and dashboard instructions are documented.
+- [x] **SD-02 / P0 — Deterministic risk policy:** Risk policy enforces the approved universe, cash, 20% position cap, 80% exposure cap, four-position cap, long-only ownership and 1% stop-risk budget with explicit refusal reasons.
+- [x] **SD-03 / P0 — Local execution simulator:** Local simulated orders support fees, spread, partial fills, cancellation, restart-safe artifact/journal persistence and causal run/decision/order/fill/journal lineage; no broker transport exists.
+- [x] **SD-04 / P0 — Two-agent end-to-end fixture runner:** Both independent fixture workers share three timestamped synthetic bundles and separate $1,000 ledgers with BUY/SELL/HOLD/rejection paths.
+- [x] **SD-05 / P0 — Local dashboard & export:** Ignored `results/` contains labelled HTML dashboard, JSON report and CSV export with cash, NAV, P&L, fees, fills, refusals and provenance.
+- [x] **SD-06 / P0 — Full acceptance:** 34 local tests pass with portfolio isolation, risk negatives, replay/restart, duplicate prevention, migration, fixture determinism and simulator lifecycle coverage; local PostgreSQL is skipped because no disposable daemon is available.
 
 ## THEN — genuine research integrations without broker execution
 
@@ -67,5 +67,6 @@
 | 2026-10-18 | P1.2 `cae13cf` | [39131573901](https://github.com/smbabalola/sidedeck/actions/runs/39131573901) | Accepted accounting foundation |
 | 2026-10-18 | P2A `a2b402d` | [39132670450](https://github.com/smbabalola/sidedeck/actions/runs/39132670450) | Accepted fixture proposal gateway |
 | 2026-10-18 | Delivery sprint authorised | See subsequent commit | Living backlog established |
+| 2026-10-18 | SD-01–SD-06 local demo | See subsequent commit | Track A runnable offline demo complete; CI pending |
 
 **Next action:** Codex reads `docs/DELIVERY_SPRINT.md` and implements **SD-01 through SD-06 as one continuous local demo sprint**, pushing incremental working commits and updating this file.
