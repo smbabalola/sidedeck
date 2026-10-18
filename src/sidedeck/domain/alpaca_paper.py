@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
+import re
+from uuid import UUID
 from typing import Any, Literal, Mapping, Protocol
 
 from .instruments import ALLOWED_INSTRUMENTS
@@ -18,7 +20,12 @@ from .instruments import ALLOWED_INSTRUMENTS
 PAPER_HOST = "https://paper-api.alpaca.markets"
 APPROVED_SYMBOLS = frozenset(ALLOWED_INSTRUMENTS)
 MAX_PAYLOAD_BYTES = 1_000_000
-_ALLOWED_GET = frozenset({"/v2/account", "/v2/positions", "/v2/orders"})
+_ALLOWED_GET = frozenset({
+    "/v2/account", "/v2/positions", "/v2/orders",
+    "/v2/orders:by_client_order_id", "/v2/account/activities/FILL",
+})
+_CLIENT_ID = re.compile(r"sd-(?:ta|ai)-[a-f0-9]{32}\Z")
+_ACTIVITY_TOKEN = re.compile(r"[A-Za-z0-9:_-]{1,200}\Z")
 
 
 class AlpacaPaperError(ValueError):
@@ -37,6 +44,32 @@ def validate_paper_get(path: str, params: Mapping[str, str]) -> None:
     """No arbitrary host/path, account mutation, broker write or hidden query."""
     if path not in _ALLOWED_GET:
         raise AlpacaPaperError("route outside paper account read allowlist")
+    if path == "/v2/orders:by_client_order_id":
+        value = params.get("client_order_id")
+        if (
+            set(params) != {"client_order_id"}
+            or not isinstance(value, str) or not _CLIENT_ID.fullmatch(value)
+        ):
+            raise AlpacaPaperError("unapproved SideDeck client order lookup")
+        return
+    if path == "/v2/account/activities/FILL":
+        expected_keys = {"order_id", "direction", "page_size"}
+        if "page_token" in params:
+            expected_keys.add("page_token")
+            if not _ACTIVITY_TOKEN.fullmatch(params["page_token"]):
+                raise AlpacaPaperError("invalid activity page cursor")
+        try:
+            order_id = UUID(params["order_id"])
+        except (KeyError, ValueError, TypeError) as exc:
+            raise AlpacaPaperError("activity lookup requires a broker UUID") from exc
+        if (
+            set(params) != expected_keys
+            or str(order_id) != params["order_id"]
+            or params["direction"] != "asc"
+            or params["page_size"] != "100"
+        ):
+            raise AlpacaPaperError("unapproved activity lookup")
+        return
     expected = {"status": "open", "limit": "100"} if path == "/v2/orders" else {}
     if dict(params) != expected:
         raise AlpacaPaperError("unapproved paper account query parameters")
