@@ -264,4 +264,6 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **SD-11E-3 / owner gate:** Create a separate **Tiingo personal account** if suitable and confirm terms before provisioning any token locally; a Tiingo live GET requires **fresh explicit permission**. No API calls or credential use are approved by this docs/code sprint.
 - [ ] **SD-11E-4:** Full real licensed five-year daily EOD verification for AAPL/MSFT/SPY/QQQ, publication availability and store/use rights required before genuine market backtests. Keep TradingAgents actual graph isolation and AI Trading licensing as separate pending gates.
 
-**Next action:** Submit support request via eToro's signed-in customer-service centre; in parallel ask local Codex to implement SD-11E-1/2 offline. Repo remains an isolated personal research prototype; eToro Demo and real-money order capabilities stay disabled.
+**Verified code milestone:** `cab8dc6c5b020f30cd19681dd25596b05fd08451`; [GitHub CI 39150920040](https://github.com/smbabalola/sidedeck/actions/runs/39150920040) — Python 3.12, **95 passed**, three existing SQLite warnings, Ruff passed, mypy passed for 26 files and disposable PostgreSQL initialized. Offline Tiingo payload parser is checked in; **zero actual Tiingo observations** and no live network/credential requests.
+
+**Next action:** Submit the prepared support request through eToro's signed-in customer-service centre; separately continue licence-aware, offline historical-series replay and data-vintage controls. No API calls or broker routes are authorised.
