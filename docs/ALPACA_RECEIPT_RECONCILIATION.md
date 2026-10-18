@@ -39,3 +39,9 @@ Sources:
 - https://docs.alpaca.markets/us/reference/getorderbyclientorderid
 - https://docs.alpaca.markets/us/reference/getaccountactivitiesbyactivitytype-1
 - https://docs.alpaca.markets/us/docs/account-activities
+
+## Additional identity control
+
+Each read-only discrepancy report now includes `broker_binding_verified`, comparing Alpaca's returned broker-order UUID against the order identity already acknowledged and durably stored by SideDeck. **This does not prove the credentials belong to separate paper accounts.** Any unverified/mismatched binding, unknown fees or fill correction evidence keeps the report in review and broker writes disabled.
+
+Quantity agreement is insufficient to determine which specific FILL activity IDs were previously posted. The report therefore lists `unverified_activity_ids`, not asserted missing IDs, until the journal stores verified receipt-level provenance.
