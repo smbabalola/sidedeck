@@ -122,6 +122,15 @@ class DurablePaperDesk:
                 "name TEXT PRIMARY KEY, value TEXT NOT NULL)"
             )
             db.execute(
+                "CREATE TABLE IF NOT EXISTS paper_submissions("
+                "client_order_id TEXT PRIMARY KEY REFERENCES paper_orders(client_order_id),"
+                "key_slot TEXT NOT NULL,"
+                "phase TEXT NOT NULL,"
+                "account_fingerprint TEXT NOT NULL,"
+                "attempt_count INTEGER NOT NULL,"
+                "created_utc TEXT NOT NULL)"
+            )
+            db.execute(
                 "INSERT OR IGNORE INTO paper_controls(name,value) VALUES('kill_switch','ENGAGED')"
             )
 
@@ -305,6 +314,75 @@ class DurablePaperDesk:
         """Read an accepted local order by id; no broker I/O or journal edits."""
         draft, _ = self.order_binding(client_order_id)
         return draft
+
+    def stage_paper_submission(
+        self, client_order_id: str, *, key_slot: str,
+        account_fingerprint: str, now: datetime,
+    ) -> None:
+        """Claim exact order for one possible PAPER dispatch, atomically.
+
+        This intentionally stores UNCERTAIN *before* an external request. No
+        method can claim an order twice, even if the first call timed out.
+        """
+        now = require_utc(now)
+        if not account_fingerprint or len(account_fingerprint) > 128:
+            raise PaperDeskError("invalid paper account binding reference")
+        with self._transaction() as db:
+            _, desk = self._restore(db)
+            row = desk._track(client_order_id)
+            if (row.status is not DeskOrderStatus.PREPARED
+                or row.broker_order_id is not None
+                or row.draft.key_slot != key_slot):
+                raise PaperDeskError("paper draft cannot be dispatched from this slot")
+            prior = db.execute(
+                "SELECT phase FROM paper_submissions WHERE client_order_id=?",
+                (client_order_id,),
+            ).fetchone()
+            if prior is not None:
+                raise PaperDeskError("paper order already claimed; reconcile, never resubmit")
+            db.execute(
+                "INSERT INTO paper_submissions VALUES (?,?,?,?,?,?)",
+                (client_order_id, key_slot, "UNCERTAIN", account_fingerprint,
+                 1, now.isoformat()),
+            )
+
+    def record_paper_acknowledgement(
+        self, client_order_id: str, *, broker_order_id: str,
+        key_slot: str, account_fingerprint: str,
+    ) -> None:
+        """Persist one provider-validated paper acknowledgement only."""
+        with self._transaction() as db:
+            _, desk = self._restore(db)
+            row = desk._track(client_order_id)
+            claimed = db.execute(
+                "SELECT phase,key_slot,account_fingerprint,attempt_count "
+                "FROM paper_submissions WHERE client_order_id=?",
+                (client_order_id,),
+            ).fetchone()
+            if claimed is None or claimed[0] not in ("UNCERTAIN", "ACKNOWLEDGED"):
+                raise PaperDeskError("paper order has no valid durable dispatch claim")
+            if claimed[1:] != (key_slot, account_fingerprint, 1):
+                raise PaperDeskError("paper acknowledgement crosses account binding")
+            desk.acknowledge(client_order_id, broker_order_id=broker_order_id)
+            db.execute(
+                "UPDATE paper_orders SET state=?,broker_order_id=? WHERE client_order_id=?",
+                (row.status.value, broker_order_id, client_order_id),
+            )
+            db.execute(
+                "UPDATE paper_submissions SET phase='ACKNOWLEDGED' "
+                "WHERE client_order_id=?", (client_order_id,),
+            )
+
+    def paper_submission_status(self, client_order_id: str) -> str:
+        """Read whether a dispatch might already have reached the broker."""
+        with self._transaction() as db:
+            _, desk = self._restore(db)
+            desk._track(client_order_id)
+            record = db.execute(
+                "SELECT phase FROM paper_submissions WHERE client_order_id=?",
+                (client_order_id,),
+            ).fetchone()
+            return str(record[0]) if record is not None else "NOT_SENT"
 
     def snapshot(self) -> dict[str, Any]:
         """Safe local order/ledger state, excluding broker account IDs and keys."""
