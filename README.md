@@ -141,14 +141,11 @@ The CLI does not load `.env`; a local launcher must privately provide both key/s
 
 ## SideDeck paper order review screen (offline)
 
-Run this to view the two separate SideDeck-controlled paper strategy plans, risk
-decisions and assigned Alpaca key slots without provider credentials:
+Review the two isolated SideDeck strategy proposals and their assigned Alpaca key slots without credentials or any API traffic:
 
-\`\`\`powershell
+```powershell
 $env:PYTHONPATH = "src"
 .venv\Scripts\python.exe -m sidedeck.paper_desk_review --dry-run
-\`\`\`
+```
 
-Open \`results/paper_desk_review.html\`. The static review is a **fixture-only**
-display with **zero Alpaca requests or orders**, and does not represent
-verified account holdings or live strategy performance.
+Open `results/paper_desk_review.html`. The page is **fixture-only**, uses SideDeck's actual risk gate, and does **not** reflect authenticated Alpaca positions, orders or real performance. Order submission remains disabled.
