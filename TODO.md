@@ -219,3 +219,11 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 
 **Authorised scope:** one-time locally executed GET-only probe, **not** a persistent entitlement for future pulls, autonomous monitors, broker actions or personal account data. No keys or network request have been used through GitHub by this assistant. Draft PR #1 remains open and unmerged.
 
+## SD-11C live probe evidence (2026-10-18)
+
+- [x] **One authorized execution:** The existing live command was run exactly once with locally loaded ignored `ETORO_API_KEY` and `ETORO_USER_KEY`; values were not printed, logged, staged or uploaded. The process was limited to the market-data client and the four approved symbols.
+- [x] **Safe stop:** AAPL instrument search returned HTTP `403` and the client raised `EtoroAccessBlocked`. The fail-closed behavior stopped the run before any candle GET and before MSFT, SPY or QQQ search requests.
+- [x] **Per-instrument result:** AAPL — search blocked, 0 candles, earliest/latest unavailable, five-year daily history unavailable. MSFT — not attempted after fail-closed stop. SPY — not attempted after fail-closed stop. QQQ — not attempted after fail-closed stop. No coverage claim is made for the unattempted instruments.
+- [ ] **Coverage status:** `BLOCKED` / `LOCAL_ETORO_MARKET_DATA_403`; account-specific daily depth, dates, adjustments, volume and five-year availability remain unverified. No retry or second live run was made.
+
+**Required owner follow-up:** verify that the locally provisioned keys are entitled to the official `/market-data/` search endpoint, then provide fresh approval before any subsequent bounded read-only attempt. No account, portfolio, balance, position, order, Demo or Real endpoint was accessed.

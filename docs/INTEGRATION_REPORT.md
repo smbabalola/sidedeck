@@ -53,3 +53,6 @@ Status: offline-safe synthetic-data hardening and code-ready TradingAgents propo
 - The urllib transport converts `HTTPError` into redacted status handling, retries only bounded 429 responses, caps response size, refuses redirects and allows only market-data search/OneDay candle paths.
 - The offline command `PYTHONPATH=src .venv/Scripts/python.exe -m sidedeck.data_probe --provider etoro --dry-run` produced four reports: AAPL, MSFT, SPY and QQQ, each `INSUFFICIENT_DEPTH` from one fixture candle. No network was opened.
 - Local verification: 73 passed, 1 skipped, 3 known SQLite warnings; Ruff passed; mypy passed for 25 source files; SQLite Alembic upgrade passed. Live coverage remains unverified pending owner approval.
+## SD-11C authorized live-read result
+
+The existing four-symbol live probe was executed exactly once with locally stored credentials. The first AAPL instrument-search GET returned HTTP 403, was classified as `EtoroAccessBlocked`, and stopped the run before any candle request or subsequent symbol search. Safe result: AAPL blocked with zero candles and no dates; MSFT, SPY and QQQ not attempted. Five-year daily coverage remains unverified. No response body, credentials, account metadata or non-market-data endpoint was recorded.
