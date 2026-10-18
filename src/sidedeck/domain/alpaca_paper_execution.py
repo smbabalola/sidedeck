@@ -82,6 +82,7 @@ class PaperOrderDiscrepancy:
     journal_filled_qty: Decimal
     unverified_activity_ids: tuple[str, ...]
     needs_review: bool
+    broker_binding_verified: bool
     # Never turn a legacy FILL activity into ledger money by guessing fees.
     auto_post_enabled: Literal[False] = False
     paper_trading_enabled: Literal[False] = False
@@ -210,6 +211,7 @@ class AlpacaPaperOrderReader:
 def compare_paper_order(
     draft: PaperOrderDraft, broker_order: PaperOrderRead,
     fills: tuple[PaperFillRead, ...], journal_orders: list[dict[str, str]],
+    *, broker_binding_verified: bool = False,
 ) -> PaperOrderDiscrepancy:
     """Calculate discrepancy, never mutate ledger or fabricate commission."""
     rows = [row for row in journal_orders if row.get("client_order_id") == draft.client_order_id]
@@ -232,7 +234,9 @@ def compare_paper_order(
         # already posted. Keep every receipt unverified until the journal has
         # an authenticated fill-ID, fee and correction provenance mapping.
         unverified_activity_ids=tuple(activity.activity_id for activity in fills),
-        needs_review=bool(fills) or differing or broker_order.status in {
-            "canceled", "rejected", "expired", "replaced",
-        },
+        needs_review=(
+            not broker_binding_verified or bool(fills) or differing
+            or broker_order.status in {"canceled", "rejected", "expired", "replaced"}
+        ),
+        broker_binding_verified=broker_binding_verified,
     )

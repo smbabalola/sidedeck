@@ -28,10 +28,11 @@ class SideDeckPaperReceiptReview:
     def inspect(
         self, client_order_id: str, *, observed_at: datetime,
     ) -> PaperOrderDiscrepancy:
-        draft = self._desk.order_draft(client_order_id)
+        draft, _ = self._desk.order_binding(client_order_id)
         order, fills = self._reader.fetch(draft, observed_at=observed_at)
         # Reload the journal *after* reading broker evidence, so the returned
         # comparison sees concurrent fills that may have been persisted.
+        _, bound_order_id = self._desk.order_binding(client_order_id)
         snapshot = self._desk.snapshot()
         strategy = snapshot["strategies"].get(draft.portfolio_id)
         if not isinstance(strategy, dict):
@@ -39,4 +40,7 @@ class SideDeckPaperReceiptReview:
         rows = strategy.get("orders")
         if not isinstance(rows, list):
             raise AlpacaPaperError("invalid durable paper journal order list")
-        return compare_paper_order(draft, order, fills, rows)
+        return compare_paper_order(
+            draft, order, fills, rows,
+            broker_binding_verified=bound_order_id == order.order_id,
+        )

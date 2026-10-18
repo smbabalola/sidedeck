@@ -71,6 +71,7 @@ def test_receipt_lookup_matches_local_durable_order_and_never_posts_fills(tmp_pa
     ).inspect(first.client_order_id, observed_at=AT + timedelta(minutes=5))
     assert result.portfolio_id == "tradingagents"
     assert result.needs_review and not result.auto_post_enabled
+    assert result.broker_binding_verified is False
     assert result.paper_filled_qty == Decimal("1")
     assert result.journal_filled_qty == Decimal("0")
     assert result.unverified_activity_ids == (FILL_ID,)
@@ -120,3 +121,17 @@ def test_restart_reconciliation_only_reports_and_never_creates_orders(tmp_path):
     assert a == b
     assert db2.snapshot() == old
     assert a.paper_trading_enabled is False
+
+
+def test_readonly_binding_proves_broker_id_only_when_journal_ack_matches(tmp_path):
+    db = DurablePaperDesk(tmp_path / "paper.sqlite3")
+    db.initialize(opened_at=AT - timedelta(minutes=3))
+    first = draft(db, "tradingagents")
+    db.acknowledge(first.client_order_id, broker_order_id=BID)
+    t = FixturePaper(first)
+    report = SideDeckPaperReceiptReview(
+        db, t, key_slot=first.key_slot,
+    ).inspect(first.client_order_id, observed_at=AT + timedelta(minutes=5))
+    assert report.broker_binding_verified is True
+    assert report.needs_review is True  # fee provenance is still unknown
+    assert report.auto_post_enabled is False
