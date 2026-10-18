@@ -80,7 +80,7 @@ class PaperOrderDiscrepancy:
     paper_order_status: str
     paper_filled_qty: Decimal
     journal_filled_qty: Decimal
-    missing_fill_activity_ids: tuple[str, ...]
+    unverified_activity_ids: tuple[str, ...]
     needs_review: bool
     # Never turn a legacy FILL activity into ledger money by guessing fees.
     auto_post_enabled: Literal[False] = False
@@ -228,8 +228,11 @@ def compare_paper_order(
         paper_order_status=broker_order.status,
         paper_filled_qty=broker_order.filled_qty,
         journal_filled_qty=stored,
-        missing_fill_activity_ids=(
-            tuple(activity.activity_id for activity in fills) if differing else ()
-        ),
-        needs_review=differing or broker_order.status in {"canceled", "rejected", "expired", "replaced"},
+        # Quantity reconciliation alone cannot prove which FILL IDs were
+        # already posted. Keep every receipt unverified until the journal has
+        # an authenticated fill-ID, fee and correction provenance mapping.
+        unverified_activity_ids=tuple(activity.activity_id for activity in fills),
+        needs_review=bool(fills) or differing or broker_order.status in {
+            "canceled", "rejected", "expired", "replaced",
+        },
     )
