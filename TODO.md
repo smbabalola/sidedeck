@@ -2,9 +2,9 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (SD-11G offline eToro request correction; local credential equality pending)
-**Verified code SHA:** `0da1ef47f943643fd792285d3f8136bbc287344f` (before this documentation-only update)
-**Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39143425931 — Python 3.12, 78 tests passed, Ruff passed, mypy passed for 25 source files, disposable PostgreSQL, 3 known SQLite warnings.
+**Updated:** 2026-10-18 (SD-11H selected legacy SignalDeck v2 search; CI green; one local AAPL-only read unexecuted)
+**Verified code SHA:** `f1075e48f57e666625a2d8fbad5c612b5f093abc` (tested before this documentation-only update)
+**Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39153964246 — Python 3.12, **103 passed**, three known SQLite warnings, Ruff passed, mypy passed for 26 source files, disposable PostgreSQL CI environment.
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
 
 ## Mandatory maintenance
@@ -311,8 +311,8 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - **Mixed-version behavior is intentional:** Daily candles stay on `GET /api/v1/market-data/instruments/{id}/history/candles/desc/OneDay/{n}`, matching SignalDeck's v1 candles. Fixed HTTPS host, per-request UUID, bounded response size, market-data-only GET allowlist, 401/403 fail-closed and no broker endpoints remain enforced.
 - **Normalization caveat:** Legacy v2 search may omit currency; USD is an expectation from SideDeck's curated US symbol universe, **not an independently observed provider currency or broker-instrument certification**. Reject an explicitly non-USD, leveraged, inverse, unsupported-type or ambiguous match. Historical data and tradability remain unverified.
 - **Scoped local diagnostic:** A new `--single-v2-search AAPL` mode needs explicit read-only CLI flags and makes at most one AAPL instrument GET, zero candle/rate/trading/portfolio requests and zero automatic retries. It does not auto-load the local `.env`. The latest owner permission covers this one bounded local read only; mark it consumed after execution. No secret access or network call was conducted through GitHub.
-- **Verification:** Offline synthetic tests added for v2 search shape, strict allowlist, live opt-in guard, AAPL-only/no-candle dry run and response type checks. CI result must be recorded after completion, not assumed. The prior real SideDeck v1 HTTP 403 remains historical evidence; **v2 HTTP status is unknown**.
+- **Verification:** Offline synthetic tests added for v2 search shape, strict allowlist, live opt-in guard, AAPL-only/no-candle dry run and response type checks. **CI green:** [39153964246](https://github.com/smbabalola/sidedeck/actions/runs/39153964246), code SHA `f1075e4`: **103 passed**, 3 existing SQLite warnings, Ruff passed, mypy passed on 26 source files. This confirms offline implementation only, not an authenticated eToro HTTP 200. The prior real SideDeck v1 HTTP 403 remains historical evidence; **v2 HTTP status is unknown**.
 - **External blockers:** No proof v2 is currently accessible; no five-year daily historical coverage and no broker Demo/Real orders. No unrestricted repeat probe authorized.
-- **Code:** commits `decfc16` through `a6d2ddd` on `feat/p2-agent-adapters`; draft PR stays unmerged. Prior `SD-11F/G` notes are retained as historical findings rather than current route descriptions.
+- **Code:** commits `decfc16` through `f1075e4` on `feat/p2-agent-adapters`; draft PR stays unmerged. Prior `SD-11F/G` notes are retained as historical findings rather than current route descriptions.
 
 **Next action:** Verify branch CI, then execute at most one bounded AAPL v2 read on the owner's local checkout using the ignored matching key pair; record status without secrets. If denied, stop and escalate to eToro developer support. Continue offline licensed history work independently.
