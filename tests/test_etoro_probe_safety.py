@@ -84,7 +84,7 @@ def test_live_probe_uses_dynamic_cutoff_and_never_fabricates_exchange_sessions(
             candles: tuple[()], exchange_sessions: object,
         ) -> SimpleNamespace:
             seen.append((cutoff, exchange_sessions))
-            return SimpleNamespace(__dict__={"ticker": instrument.ticker, "status": "UNVERIFIED"})  # type: ignore[attr-defined]
+            return SimpleNamespace(ticker=instrument.ticker, status="UNVERIFIED")
 
     # Dummy in-memory test variables; no owner .env or actual network transport.
     monkeypatch.setenv("ETORO_API_KEY", "test-only-placeholder")
