@@ -37,7 +37,7 @@ def test_urllib_transport_normalizes_http_error_without_exposing_body(monkeypatc
             raise HTTPError(request.full_url, 429, "rate limited", headers, __import__("io").BytesIO(b"private response"))
 
     monkeypatch.setattr(data_probe, "build_opener", lambda handler: Opener())
-    status, returned_headers, body = data_probe.UrllibReadOnlyTransport({"x-api-key": "redacted"}).get("/market-data/search", {}, uuid4())
+    status, returned_headers, body = data_probe.UrllibReadOnlyTransport({"x-api-key": "redacted"}).get("/api/v2/market-data/instruments/search", {"query": "AAPL", "limit": "5"}, uuid4())
     assert status == 429
     assert returned_headers["Retry-After"] == "1"
     assert body == b"private response"
