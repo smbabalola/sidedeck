@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (first authorised eToro GET returned 403; token entitlement investigation next, no repeat approval)
+**Updated:** 2026-10-18 (eToro API 403 support request prepared; candidate Tiingo EOD offline workstream)
 **Verified code SHA:** `0da1ef47f943643fd792285d3f8136bbc287344f` (before this documentation-only update)
 **Latest code CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39143425931 — Python 3.12, 78 tests passed, Ruff passed, mypy passed for 25 source files, disposable PostgreSQL, 3 known SQLite warnings.
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -252,3 +252,16 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 
 **Primary source:** eToro public API auth docs specify `x-api-key` (application), `x-user-key` (user) and `x-request-id` UUID; eToro also classifies 403 as forbidden by scope and requires matching account/environment. See `https://builders.etoro.com/learn/authentication-and-api-keys` and `https://api-portal.etoro.com/getting-started/authentication`.
 
+
+## SD-11E — eToro support and historical-data alternative (2026-10-18)
+
+- [x] **Source research:** eToro official support ticket route https://www.etoro.com/customer-service/ and developer community https://builders.etoro.com/community confirmed. An account-authenticated ticket cannot be submitted from GitHub/chat; draft details are ready for user to paste without keys. For tracing, user may privately supply a request UUID to eToro support if available.
+- [x] **eToro blocker unchanged:** One approved `/market-data/search` GET returned HTTP 403 despite a key reported active with Market Data — Read; both local credentials reportedly came from same key setup, valid nonempty formatting. Do not repeat without separate permission; no five-year eToro data verdict.
+- [x] **Alternative researched:** Tiingo EOD free individual plan advertises 30+ years of available price history and raw/adjusted OHLCV plus dividends/splits; internal personal use only, no redistribution. Individual AAPL/MSFT/SPY/QQQ coverage and personal research entitlement still need to be verified by a future authorised local test. Sources and developer brief: `docs/HISTORICAL_DATA_ALTERNATIVE.md`.
+- [x] **New code:** Added **offline-only** `sidedeck.domain.tiingo_eod` parser with approval flag, typed/Decimal raw & adjusted EOD records, validated dates, corporate actions, a provenance digest and verified-session five-year coverage assessment. Data remains `point_in_time_verified=false` even when date coverage passes. No transport/token/access to eToro or Tiingo; no actual historical data and no claim of backtest success.
+- [ ] **SD-11E-1:** Inspect raw/adjusted field consistency, collection timestamp vintage, corporate-action corrections, 5-year dates/holidays and licensing with provider/owner. Implement private, licence-respecting raw-data storage and converter for user-supplied licensed EOD CSV/JSON. Existing `market_import.py` accepts **one snapshot/instrument**, not a five-year series; avoid misusing it.
+- [ ] **SD-11E-2:** Add deterministic historical replay with past-only market bundles, walk-forward splits, risk controls, transaction costs, SPY/cash benchmarks and no performance claim from fixture prices.
+- [ ] **SD-11E-3 / owner gate:** Create a separate **Tiingo personal account** if suitable and confirm terms before provisioning any token locally; a Tiingo live GET requires **fresh explicit permission**. No API calls or credential use are approved by this docs/code sprint.
+- [ ] **SD-11E-4:** Full real licensed five-year daily EOD verification for AAPL/MSFT/SPY/QQQ, publication availability and store/use rights required before genuine market backtests. Keep TradingAgents actual graph isolation and AI Trading licensing as separate pending gates.
+
+**Next action:** Submit support request via eToro's signed-in customer-service centre; in parallel ask local Codex to implement SD-11E-1/2 offline. Repo remains an isolated personal research prototype; eToro Demo and real-money order capabilities stay disabled.

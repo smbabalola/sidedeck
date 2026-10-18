@@ -79,3 +79,7 @@ $env:PYTHONPATH = "src"
 ```
 
 The dry run intentionally reports insufficient depth from fixture data. It does not contact eToro.
+
+## Optional candidate for five-year EOD research (not connected)
+
+Tiingo's free individual EOD data plan is a potential licence-compatible source for **personal internal use**. SideDeck now includes a pure offline Tiingo-style JSON validator in `src/sidedeck/domain/tiingo_eod.py` and tests, **not a network adapter or a real backtest**. It checks raw/adjusted OHLCV, dividends, splits and a five-year exchange-calendar coverage gate. It never treats today's retrospectively adjusted prices as contemporaneously available historical observations. See `docs/HISTORICAL_DATA_ALTERNATIVE.md` and the living TODO. No Tiingo token or live call is required or authorised.
