@@ -97,6 +97,7 @@ class MarketSnapshot(Contract):
     price: Decimal
     market_timestamp: datetime
     ingestion_timestamp: datetime
+    publication_timestamp: datetime | None = None
     session: Session
     quality: str = Field(min_length=1)
     snapshot_id: UUID = Field(default_factory=uuid4)
@@ -108,15 +109,19 @@ class MarketSnapshot(Contract):
             raise ValueError("price must be finite and positive")
         return value
 
-    @field_validator("market_timestamp", "ingestion_timestamp")
+    @field_validator("market_timestamp", "ingestion_timestamp", "publication_timestamp")
     @classmethod
-    def utc_timestamps(cls, value: datetime) -> datetime:
+    def utc_timestamps(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return value
         return require_utc(value)
 
     @model_validator(mode="after")
     def no_future_market_data(self) -> Self:
         if self.market_timestamp > self.ingestion_timestamp:
             raise ValueError("market timestamp cannot be after ingestion timestamp")
+        if self.publication_timestamp is not None and self.publication_timestamp > self.ingestion_timestamp:
+            raise ValueError("publication timestamp cannot be after ingestion timestamp")
         if self.price_type is PriceType.EOD_CLOSE and self.session is not Session.CLOSED:
             raise ValueError("EOD close snapshots must use the CLOSED session")
         if self.instrument_id != f"US:{self.ticker}" or self.currency != USD:

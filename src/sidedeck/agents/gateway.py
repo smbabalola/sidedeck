@@ -92,6 +92,12 @@ class AgentRunCoordinator:
         self.validator = validator or ProposalSchemaValidator()
 
     def run(self, request: AgentRunRequest, bundle: MarketBundle, worker: FixtureWorker) -> AgentRunRecord:
+        record, _ = self.run_validated(request, bundle, worker)
+        return record
+
+    def run_validated(
+        self, request: AgentRunRequest, bundle: MarketBundle, worker: FixtureWorker
+    ) -> tuple[AgentRunRecord, AgentProposalEnvelope]:
         started = datetime.now(timezone.utc)
         envelope = worker.propose(request, bundle)
         result = self.validator.validate(request, bundle, envelope)
@@ -112,4 +118,4 @@ class AgentRunCoordinator:
             sanitized_output=output,
         )
         self.store.append(record, envelope)
-        return record
+        return record, envelope

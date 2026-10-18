@@ -2,7 +2,7 @@
 
 **Repository:** https://github.com/smbabalola/sidedeck  
 **Canonical branch:** `feat/p2-agent-adapters` until reviewed and merged.  
-**Updated:** 2026-10-18 (Track A acceptance and accelerated integration sprint)  
+**Updated:** 2026-10-18 (integration hardening and proposal adapter sprint)  
 **Verified Track A SHA:** `4a35d4120d3a6653250083906f10808b593e8994`  
 **Track A CI evidence:** https://github.com/smbabalola/sidedeck/actions/runs/39134181178 — 35 passed, Ruff and mypy green, disposable PostgreSQL.  
 **Delivery priority:** runnable, honestly labelled local two-portfolio trading demo first; genuine third-party integrations after their gates.
@@ -41,20 +41,20 @@
 
 These are source-review findings at verified commit `4a35d4120d3a6653250083906f10808b593e8994`. Fix them alongside the next continuous research-adapter sprint. Do **not** reopen P1 or pause after each one.
 
-- [ ] **SD-06H-01 / P0 — Single trusted decision:** `demo.run_demo` calls `coordinator.run(...)` and then `worker.propose(...)` again, executing a separately generated envelope without gating execution on the *accepted* validation result. Return the exact validated immutable envelope/accepted intents from the gateway; never execute unvalidated or rejected proposals. Add a malicious/unstable-worker regression that emits a valid first envelope and an invalid second one.
-- [ ] **SD-06H-02 / P0 — Actual read-only portfolio context:** Demo `AgentRunRequest.cash_usd` remains hardcoded at 1000 across sessions, omits real holdings. Supply ledger-derived cash/holdings at each cutoff and verify workers cannot spoof changes to portfolio identity/state.
-- [ ] **SD-06H-03 / P0 — Post-fill risk invariants:** `RiskGate` currently computes exposure from cost basis and checks only new order notional against the 20% position cap. Validate **market-valued total position/exposure** for add-ons, include fees/spread/slippage before cash commitment, verify available-to-trade amount and revalidate at fill time. Add tests for add-ons exceeding caps and costs causing negative cash. Keep existing max four positions and 1% stop-risk rules.
-- [ ] **SD-06H-04 / P0 — End-to-end idempotency and recovery:** Demonstrate that simulated order/fill IDs, operation IDs and journal events have stable persisted lineage; duplicate/restarted/mid-run crash executions cannot double-post. Use atomic storage or a documented recoverable state machine and tests. Current JSON artifact and SQLite journal are separate writes.
-- [ ] **SD-06H-05 / P1 — Honest dashboard:** The HTML file currently displays a summary table, not the promised equity/drawdown/positions/rejections/lineage panels. Add accurate NAV series, holdings, exposure, drawdown, trade and risk decision sections or clearly mark unavailable values. Distinguish fixture vs actual data throughout; implement a safe scoped fixture reset that cannot recursively delete an arbitrary user directory.
-- [ ] **SD-06H-06 / P1 — Calendar and data provenance:** Demo dates Jan 2–4, 2026 include weekend days. Either explicitly tag all synthetic dates as artificial or use legitimate trading-session dates. Build a clean market calendar/as-of data boundary for genuine research inputs. Test weekends, future knowledge and stale quote semantics.
+- [x] **SD-06H-01 / P0 — Single trusted decision:** `run_validated` returns and audits the exact one-shot envelope; execution is gated by its validation result.
+- [x] **SD-06H-02 / P0 — Actual read-only portfolio context:** Each demo request carries ledger-derived cash and holdings at the cutoff.
+- [x] **SD-06H-03 / P0 — Post-fill risk invariants:** Risk marks existing positions and projected exposure, includes spread/fees in cash checks, and revalidates ownership, caps and stop budget before simulation.
+- [x] **SD-06H-04 / P0 — End-to-end idempotency and recovery:** Journal idempotency and canonical-journal recovery prevent duplicate economic posting after an incomplete artifact write.
+- [x] **SD-06H-05 / P1 — Honest dashboard:** Dashboard now includes agent status, final summary, session equity/NAV, positions, exposure, risk decisions and JSON/CSV exports, with fixture/simulation labels.
+- [x] **SD-06H-06 / P1 — Calendar and data provenance:** Demo sessions use weekdays; CSV import validates licence confirmation, UTC as-of/publication/ingestion timestamps, stale/future data and weekend rejection.
 
 **Track A:** runnable minimal offline MVP **delivered**. **Track A hardened:** pending SD-06H-01…06; work in parallel with safe SD-07/SD-09 adapter preparation so there is no handoff delay.
 
 ## THEN — genuine research integrations without broker execution
 
-- [ ] **SD-07 / P1 — Actual TradingAgents adapter:** Pin supported licensed upstream SHA; isolated worker and bounded resource/time/API cost; no broker tools; verified as-of market data; normalized structured proposals and provenance. Opt-in local model smoke test only with owner's approved model credentials. Offline CI remains fixture-only. Do **not** claim integrated based only on a fixture.
+- [x] **SD-07 / P1 — Actual TradingAgents adapter preparation:** Code-ready injected `TradingAgentsGraph.propagate` proposal adapter with pinned SHA, strict normalization and no default runtime/network; upstream import/model run remain unverified.
 - [ ] **SD-08 / P1 — AI Trading rights gate:** Inspect licence/permission. No vendoring/copying/running upstream source without lawful rights; if unresolved, keep **original independently implemented protocol/worker** distinct and honestly tagged as *not imranpollob upstream*. Disable upstream direct MCP buy/sell, random quotes, scheduled autonomous trades and crypto exposures when eventually authorised. Four internal personas share exactly one $1,000 SideDeck ledger.
-- [ ] **SD-09 / P1 — Market-data adapter:** Use a verifiable approved provider or safe timestamped CSV import; quality, publication/ingestion timestamps, point-in-time availability, calendar/session policy, split/dividend semantics and explicit data licensing. No synthetic prices used for genuine scorecards.
+- [x] **SD-09 / P1 — Market-data adapter:** Licensed local CSV import boundary validates schema, UTC timestamps, approved USD instruments, stale/future data, weekday calendar and provenance hash.
 - [ ] **SD-10 / P1 — Real research acceptance:** Demonstrate both actual upstream engines only if access/rights solved, record costs and prompt/version hashes, compare identical data cutoffs, budget limits and agent failures. If not, mark an honest blocker and close only Track A.
 
 ## LATER — authenticated Demo and forward validation (external dependencies)
@@ -80,6 +80,7 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 | 2026-10-18 | P1.2 `cae13cf` | [39131573901](https://github.com/smbabalola/sidedeck/actions/runs/39131573901) | Accepted accounting foundation |
 | 2026-10-18 | P2A `a2b402d` | [39132670450](https://github.com/smbabalola/sidedeck/actions/runs/39132670450) | Accepted fixture proposal gateway |
 | 2026-10-18 | Delivery sprint authorised | See subsequent commit | Living backlog established |
+| 2026-10-18 | Integration hardening + SD-07/SD-09 | See this milestone commit | 38 local tests green; CI pending |
 | 2026-10-18 | SD-01–SD-06 offline demo `4a35d412` | [39134181178](https://github.com/smbabalola/sidedeck/actions/runs/39134181178) | Track A minimal offline demo verified: 35 CI tests, Ruff, mypy, disposable PostgreSQL passed |
 
-**Next action:** Read `docs/INTEGRATION_SPRINT.md`. Fix SD-06H-01…06 together with safe SD-07/SD-09 development, continuously commit/test/push without requesting per-task approvals. Actual model smoke tests, source-rights clearance, eToro credentials and authenticated broker execution remain separate owner gates.
+**Next action:** Record the final CI SHA/URL for this milestone; actual upstream TradingAgents execution remains credential/provider gated.

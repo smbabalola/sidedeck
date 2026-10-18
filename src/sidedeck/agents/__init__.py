@@ -12,6 +12,7 @@ from .contracts import (
 from .fixtures import AITradingFixtureWorker, TradingAgentsFixtureWorker
 from .gateway import AgentRunCoordinator, ProposalSchemaValidator
 from .tradingagents_preparation import TradingAgentsPreparation
+from .tradingagents_adapter import TradingAgentsAdapterBlocked, TradingAgentsProposalAdapter
 
 __all__ = [
     "AITradingFixtureWorker",
@@ -27,5 +28,7 @@ __all__ = [
     "SqlAuditStore",
     "TradingAgentsFixtureWorker",
     "TradingAgentsPreparation",
+    "TradingAgentsAdapterBlocked",
+    "TradingAgentsProposalAdapter",
     "ValidationResult",
 ]

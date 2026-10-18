@@ -34,6 +34,8 @@ class RiskPolicy:
     max_positions: int = 4
     risk_budget_pct: Decimal = Decimal("0.01")
     max_snapshot_age_seconds: int = 86400
+    fee_rate: Decimal = Decimal("0.001")
+    spread_bps: Decimal = Decimal("5")
 
 
 @dataclass(frozen=True)
@@ -59,10 +61,24 @@ class RiskGate:
         snapshot: MarketSnapshot,
         *,
         portfolio_value: Decimal,
+        marks: dict[str, MarketSnapshot] | None = None,
     ) -> RiskDecision:
-        requested = intent.notional_usd or ((intent.quantity or ZERO) * snapshot.price)
-        projected = sum((position.cost_basis for position in state.positions.values()), ZERO) + requested
-        reject = self._reject_reason(intent, state, snapshot, portfolio_value, requested, projected)
+        execution_price = self._execution_price(intent.side, snapshot.price)
+        requested = intent.notional_usd or ((intent.quantity or ZERO) * execution_price)
+        market_requested = intent.notional_usd or ((intent.quantity or ZERO) * snapshot.price)
+        fees = (requested * self.policy.fee_rate).quantize(Decimal("0.01"))
+        current_values = self._current_values(state, marks or {snapshot.instrument_id: snapshot})
+        existing_position_value = current_values.get(intent.instrument_id, ZERO)
+        projected = sum(current_values.values(), ZERO)
+        if intent.side is Side.BUY:
+            projected += market_requested
+        elif intent.side is Side.SELL:
+            projected -= min(existing_position_value, market_requested)
+        reject = self._reject_reason(
+            intent, state, snapshot, portfolio_value, requested, projected,
+            existing_position_value, fees,
+            market_requested,
+        )
         return RiskDecision(
             decision_id=uuid4(),
             intent_id=uuid4(),
@@ -82,6 +98,9 @@ class RiskGate:
         portfolio_value: Decimal,
         requested: Decimal,
         projected: Decimal,
+        existing_position_value: Decimal,
+        fees: Decimal,
+        market_requested: Decimal,
     ) -> RiskReason | None:
         try:
             instrument = get_instrument_by_id(intent.instrument_id)
@@ -99,9 +118,9 @@ class RiskGate:
         if portfolio_value <= ZERO:
             return RiskReason.INSUFFICIENT_CASH
         if intent.side is Side.BUY:
-            if state.cash < requested:
+            if state.cash < requested + fees:
                 return RiskReason.INSUFFICIENT_CASH
-            if requested > portfolio_value * self.policy.max_position_pct:
+            if existing_position_value + market_requested > portfolio_value * self.policy.max_position_pct:
                 return RiskReason.POSITION_CAP
             if projected > portfolio_value * self.policy.max_exposure_pct:
                 return RiskReason.EXPOSURE_CAP
@@ -121,3 +140,19 @@ class RiskGate:
         if intent.stop_price is None or intent.quantity is None:
             return ZERO
         return max(ZERO, (snapshot.price - intent.stop_price) * intent.quantity)
+
+    def _execution_price(self, side: Side, price: Decimal) -> Decimal:
+        spread = self.policy.spread_bps / Decimal("10000")
+        return price * (Decimal("1") + spread if side is Side.BUY else Decimal("1") - spread)
+
+    @staticmethod
+    def _current_values(
+        state: PortfolioState, marks: dict[str, MarketSnapshot]
+    ) -> dict[str, Decimal]:
+        values: dict[str, Decimal] = {}
+        for instrument_id, position in state.positions.items():
+            mark = marks.get(instrument_id)
+            if mark is None:
+                raise ValueError(f"missing mark for held position {instrument_id}")
+            values[instrument_id] = position.quantity * mark.price
+        return values

@@ -16,6 +16,8 @@ def validate_snapshot(snapshot: MarketSnapshot, as_of: datetime, max_age: timede
     market_time = snapshot.market_timestamp
     if market_time > cutoff or snapshot.ingestion_timestamp > cutoff:
         raise ValueError("snapshot is future-dated relative to decision cutoff")
+    if snapshot.publication_timestamp is not None and snapshot.publication_timestamp > cutoff:
+        raise ValueError("snapshot publication is future-dated relative to decision cutoff")
     if cutoff - market_time > max_age:
         raise ValueError("snapshot is stale")
     if snapshot.price_type is PriceType.EOD_CLOSE and snapshot.session.value != "CLOSED":

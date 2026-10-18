@@ -15,6 +15,8 @@ from sidedeck.agents import (
     ProposalSchemaValidator,
     TradingAgentsFixtureWorker,
     SqlAuditStore,
+    TradingAgentsAdapterBlocked,
+    TradingAgentsProposalAdapter,
 )
 from sidedeck.domain.accounting import Ledger
 from sidedeck.domain.contracts import MarketSnapshot, PriceType, Session, Side, TradeIntent
@@ -173,3 +175,29 @@ def test_sql_audit_store_round_trips_immutable_run(tmp_path) -> None:
     with pytest.raises(ValueError, match="run_id"):
         store.append(record, TradingAgentsFixtureWorker().propose(run_request, bundle()))
     engine.dispose()
+
+
+def test_tradingagents_adapter_uses_one_injected_graph_and_normalizes_proposal() -> None:
+    calls: list[tuple[str, str]] = []
+
+    class FakeGraph:
+        def propagate(self, ticker: str, trade_date: str) -> tuple[object, object]:
+            calls.append((ticker, trade_date))
+            return {}, {"action": "BUY", "ticker": "AAPL", "quantity": "1", "stop_price": "95", "invalidation": "test stop"}
+
+    run_request = request("tradingagents.upstream")
+    run_request = run_request.model_copy(update={"upstream_sha": TradingAgentsProposalAdapter.upstream_sha})
+    market_bundle = bundle()
+    adapter = TradingAgentsProposalAdapter(FakeGraph(), enabled=True)
+    envelope = adapter.propose(run_request, market_bundle)
+    result = ProposalSchemaValidator().validate(run_request, market_bundle, envelope)
+
+    assert result.accepted is True
+    assert envelope.proposals[0].side is Side.BUY
+    assert calls == [("AAPL", "2026-01-02")]
+
+
+def test_tradingagents_adapter_is_blocked_without_explicit_runtime() -> None:
+    run_request = request("tradingagents.upstream")
+    with pytest.raises(TradingAgentsAdapterBlocked):
+        TradingAgentsProposalAdapter().propose(run_request, bundle())

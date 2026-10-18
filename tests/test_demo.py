@@ -6,8 +6,8 @@ from decimal import Decimal
 from uuid import uuid4
 
 from sidedeck.demo import run_demo
-from sidedeck.domain.accounting import Ledger, opening_event
-from sidedeck.domain.contracts import MarketSnapshot, PriceType, Session, Side, TradeIntent
+from sidedeck.domain.accounting import Ledger, fill_event, opening_event
+from sidedeck.domain.contracts import EventType, MarketSnapshot, PriceType, Session, Side, TradeIntent
 from sidedeck.domain.risk import RiskGate, RiskReason
 from sidedeck.domain.simulator import SimulatedOrder
 
@@ -33,6 +33,35 @@ def test_risk_gate_enforces_cash_position_exposure_and_stop_budget() -> None:
     assert decision.reason is RiskReason.POSITION_CAP
 
 
+def test_risk_gate_marks_existing_position_and_includes_execution_costs() -> None:
+    at = datetime(2026, 1, 2, 21, tzinfo=timezone.utc)
+    snapshot = MarketSnapshot(
+        instrument_id="US:AAPL", ticker="AAPL", provider="fixture", price_type=PriceType.EOD_CLOSE,
+        price=Decimal("100"), market_timestamp=at, ingestion_timestamp=at,
+        session=Session.CLOSED, quality="FIXTURE",
+    )
+    ledger = Ledger()
+    ledger.append(opening_event("tradingagents", at))
+    ledger.append(fill_event("tradingagents", "initial", EventType.BUY_FILL, "US:AAPL", Decimal("1"), Decimal("100"), at))
+    add_on = TradeIntent(
+        experiment_id="demo", portfolio_id="tradingagents", strategy_id="s", instrument_id="US:AAPL",
+        side=Side.BUY, quantity=Decimal("1"), rationale="test", model_revision="fixture",
+        decision_timestamp=at, data_as_of=at, stop_price=Decimal("95"), invalidation="test stop",
+    )
+
+    decision = RiskGate().evaluate(
+        add_on, ledger.replay("tradingagents"), snapshot,
+        portfolio_value=Decimal("1000"), marks={"US:AAPL": snapshot},
+    )
+
+    assert decision.accepted is True
+    too_large = add_on.model_copy(update={"quantity": Decimal("2")})
+    assert RiskGate().evaluate(
+        too_large, ledger.replay("tradingagents"), snapshot,
+        portfolio_value=Decimal("1000"), marks={"US:AAPL": snapshot},
+    ).reason is RiskReason.POSITION_CAP
+
+
 def test_demo_has_two_independent_ledgers_and_restart_safe_report(tmp_path) -> None:
     first = run_demo(tmp_path / "results")
     second = run_demo(tmp_path / "results")
@@ -43,6 +72,10 @@ def test_demo_has_two_independent_ledgers_and_restart_safe_report(tmp_path) -> N
     assert (tmp_path / "results" / "dashboard.html").read_text(encoding="utf-8").find("NO ETORO") >= 0
     report = json.loads((tmp_path / "results" / "report.json").read_text(encoding="utf-8"))
     assert report["label"].startswith("FIXTURE")
+    (tmp_path / "results" / "demo.json").unlink()
+    recovered = run_demo(tmp_path / "results")
+    assert "Reconstructed from canonical SQLite journal" in recovered["recovery"]
+    assert recovered["summary"] == first["summary"]
 
 
 def test_simulated_order_supports_partial_fill_and_cancel() -> None:
