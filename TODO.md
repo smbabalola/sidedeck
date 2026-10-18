@@ -396,3 +396,9 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **CI evidence:** record actual test totals and green workflow after completion.
 
 - [x] **SD-12G fixed paper POST contract:** Adds `paper_post_contract.py` validating prepared strategy draft against fixed Alpaca **paper-only** host, LIMIT/DAY payload, whole-share quantities, USD 1,000 allocation, key-slot and deterministic SideDeck order ID. Produces nonexecuting unauthenticated `urllib.Request` object for offline contract tests. There is no HTTP sender or credential access, paper broker writes remain disabled.
+
+## SD-12H — Paper HTTP writer constructed, disabled (2026-10-18)
+
+- [x] Adds `AlpacaPaperPostTransport` as an **unwired, permanently disabled-by-default** module using only `https://paper-api.alpaca.markets/v2/orders`, strict POST LIMIT/DAY payload validated against an existing SideDeck draft, exact order-scoped short-lived permit and paper credential pair held only in memory. The default flag `NETWORK_PAPER_WRITES_ENABLED = False` fails before any HTTP operation; no product CLI imports or enables it.
+- [x] Mock-opener unit tests for fixed paper host, credentials only in memory, request body, timeout/403 redaction, redirect denial, no retry, stale permit, blocked account-slot and owner consent. No API secrets accessed and no network calls in CI.
+- [ ] **External activation gate:** This transport is not yet linked to the durable submission workflow. Before enabling real paper POST, require owner approval for a bounded paper order, authenticated distinct-paper-account mapping, the durable UNCERTAIN claim and cash/risk revalidation with real quotes. No real-money broker host is supported. Do NOT toggle the disabled flag as a shortcut.

@@ -173,3 +173,5 @@ The new `SideDeckPaperReceiptReview` reads a validated durable order and compare
 ## Alpaca PAPER-only request contract (not an activated broker transport)
 
 `sidedeck.domain.paper_post_contract` now validates a SideDeck-created risk-approved draft and constructs the exact POST `https://paper-api.alpaca.markets/v2/orders` request shape. It rejects unknown instruments, fractional quantities, leveraged-sized notional, invalid order IDs/slots, non-limit orders and unsupported price precision. **This builder does not load credentials, open network connections, submit paper orders or support any live broker host.** Controlled actual paper submission awaits an explicit owner-approved activation and paper-account identity audit.
+
+Alpaca PAPER POST transport contract has been added with a default-off network gate. Nothing invokes it; no broker POST occurs. See `src/sidedeck/domain/alpaca_paper_http_post.py` and `docs/PAPER_SUBMISSION_PROTOCOL.md`.
