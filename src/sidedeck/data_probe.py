@@ -71,6 +71,14 @@ class _DryRunTransport(ReadOnlyMarketDataTransport):
         return 200, {}, json.dumps(payload).encode()
 
 
+def completed_daily_cutoff(now: datetime) -> datetime:
+    """Conservatively exclude the current UTC date and its forming daily bars."""
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("live probe clock must be timezone-aware")
+    previous_day = now.astimezone(timezone.utc).date() - timedelta(days=1)
+    return datetime.combine(previous_day, time.max, tzinfo=timezone.utc)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only eToro historical market-data probe")
     parser.add_argument("--provider", choices=("etoro",), required=True)
@@ -94,15 +102,9 @@ def main() -> int:
         cutoff = datetime(2026, 1, 6, tzinfo=timezone.utc)
         exchange_sessions: frozenset[date] | None = frozenset({date(2026, 1, 5)})
     else:
-        # Only inspect days that must already have finished in UTC. This
-        # deliberately excludes the current UTC date; the provider's
-        # "complete" field may be absent, so today's forming daily bar must
-        # not be accepted merely because its fromDate timestamp is in the past.
-        yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
-        cutoff = datetime.combine(yesterday, time.max, tzinfo=timezone.utc)
-        # Do not pretend a one-day fixture is a valid five-year exchange
-        # calendar. Live coverage is only conclusive after independent
-        # exchange-session evidence has been supplied.
+        cutoff = completed_daily_cutoff(datetime.now(timezone.utc))
+        # A real five-year PASS needs a separately verified exchange calendar.
+        # A missing calendar must not be replaced by one synthetic session.
         exchange_sessions = None
     reports = []
     for ticker in ("AAPL", "MSFT", "SPY", "QQQ"):
