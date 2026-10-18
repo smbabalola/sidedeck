@@ -54,7 +54,11 @@ def _save_events_once(engine: Engine, pending: list[LedgerEvent]) -> None:
                         f"idempotency key conflict: {event.portfolio_id}/{event.idempotency_key}"
                     )
                 continue
-            existing_by_id = session.get(JournalEventRecord, str(event.event_id))
+            existing_by_id = session.scalar(
+                select(JournalEventRecord).where(
+                    JournalEventRecord.event_id == str(event.event_id)
+                )
+            )
             if existing_by_id is not None:
                 if existing_by_id.payload != payload:
                     raise PersistenceConflict(f"event UUID conflict: {event.event_id}")
