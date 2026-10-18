@@ -267,3 +267,12 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 **Verified code milestone:** `cab8dc6c5b020f30cd19681dd25596b05fd08451`; [GitHub CI 39150920040](https://github.com/smbabalola/sidedeck/actions/runs/39150920040) — Python 3.12, **95 passed**, three existing SQLite warnings, Ruff passed, mypy passed for 26 files and disposable PostgreSQL initialized. Offline Tiingo payload parser is checked in; **zero actual Tiingo observations** and no live network/credential requests.
 
 **Next action:** Submit the prepared support request through eToro's signed-in customer-service centre; separately continue licence-aware, offline historical-series replay and data-vintage controls. No API calls or broker routes are authorised.
+
+## SD-11F — Original SignalDeck eToro HTTP-200 comparison (2026-10-18)
+
+- [x] **Original implementation located:** Private repo `smbabalola/SignalDeck`, reviewed branch `bundle7/complete-demo-lifecycle`. Its eToro REST adapter sends `GET /api/v2/market-data/instruments/search?query=AAPL&limit=5`, `GET /api/v2/market-data/rates?instrumentIds=...` and `GET /api/v1/market-data/instruments/{id}/history/candles/asc/OneDay/10`, using `x-api-key`, `x-user-key`, `x-request-id` and direct `http.client.HTTPSConnection` by default.
+- [x] **Difference to failed SideDeck call:** `GET /api/v1/market-data/search?internalSymbolFull=AAPL`, same documented header names but **`urllib`** transport; exact eToro current official guide still documents v1 search. **Do not assume v2 will work now without permission**.
+- [x] **Prior owner acceptance recalled:** On 2026-09-27 direct PowerShell reportedly returned HTTP 200 for several SignalDeck market/demo reads; previous Codex contexts sometimes received 403. This is owner-reported prior evidence, not a live verification today.
+- [ ] **Next offline task:** Locally compare **only boolean equality** of the loaded key pairs across SignalDeck and SideDeck, verify cwd/`.env` selection and proxy environment indicators without displaying values, hashes or keys. Build sanitized request-shape unit tests for v1 vs v2. No network requests.
+- [ ] **Fresh authorisation required:** Only after offline findings should the owner consider **one** newly scoped read-only v2 search request, never broker/account/orders. Old permission remains consumed.
+- [x] **Investigation report:** `docs/SIGNALDECK_ETORO_COMPARISON.md`. The HTTP 403 is a request/access-context failure, **not evidence eToro lacks five years of history**.
