@@ -229,6 +229,8 @@ class SideDeckPaperDesk:
         """Append verified PAPER fill only to matching strategy's local ledger."""
         track = self._track(evidence.client_order_id)
         draft = track.draft
+        if track.status is DeskOrderStatus.CANCELLED:
+            raise PaperDeskError("closed paper order cannot accept new fills")
         if not track.broker_order_id or track.broker_order_id != evidence.broker_order_id:
             raise PaperDeskError("fill is not tied to acknowledged paper order")
         if (
