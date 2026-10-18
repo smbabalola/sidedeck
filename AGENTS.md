@@ -1,10 +1,10 @@
 # SideDeck — Coding agent standing instructions
 
-Read **`TODO.md` first**; it is the single living progress register. For the current active sprint, read **`docs/INTEGRATION_SPRINT.md`** next, then `docs/DELIVERY_SPRINT.md`, `docs/P2_IMPLEMENTATION.md`, `docs/P1_REPORT.md` and `docs/P2_REPORT.md` before changing architecture.
+Read **`TODO.md` first**; it is the single living progress register. For the current active sprint, read **`docs/REAL_AGENT_SMOKE_TEST.md`** and **`docs/INTEGRATION_SPRINT.md`** next, then `docs/DELIVERY_SPRINT.md`, `docs/P2_IMPLEMENTATION.md`, `docs/P1_REPORT.md` and `docs/P2_REPORT.md` before changing architecture.
 
 ## Current authorisation and work style
 
-P0, P1/P1.2, **P2A, and the minimal offline SideDeck demo (SD-01 through SD-06) are complete**. The project owner has authorised **continuous safe development of the integration-hardening and proposal-only research adapter sprint** (SD-06H and SD-07/SD-09 in TODO.md) without repeated approval checkpoints. Continue to the next safe unblocked item after each green test. Do not restart accepted scope. Real LLM, unlicensed upstream AI Trading execution, authenticated market-data calls and eToro access remain externally gated.
+P0, P1/P1.2, **P2A, and the minimal offline SideDeck demo (SD-01 through SD-06) are complete**. The project owner has authorised **continuous safe development of the integration-hardening and proposal-only research adapter sprint** (SD-06H and SD-07/SD-09 in TODO.md) without repeated approval checkpoints. Continue to the next safe unblocked item after each green test. Do not restart accepted scope. The owner has now authorised **small, locally controlled NVIDIA/Ollama/OpenAI model-only smoke tests** with existing ignored `.env` credentials, governed by `docs/REAL_AGENT_SMOKE_TEST.md`. This does not authorise unrestricted paid calls, disclosure/commit of credentials, unlicensed upstream AI Trading execution, broker/eToro requests or real trading.
 
 Work on `feat/p2-agent-adapters`; preserve untracked local work, especially `SideDeck-Blueprint/`, and ignored `.env`/`.venv` and databases. Use scoped, reviewed commits and normal pushes; no force pushes, main merges, or destructive actions. Report a material design change in an ADR.
 
@@ -16,7 +16,7 @@ Work on `feat/p2-agent-adapters`; preserve untracked local work, especially `Sid
 - Do not call eToro endpoints or submit real/Demo broker orders without a fresh, explicit owner permission and provisioned **Demo-only** access. Local deterministic simulated fills are authorised and must be marked as such.
 - Do not contact existing user databases. PostgreSQL verification runs in a disposable CI/container test database only.
 - Never copy, vendor, modify or run `imranpollob/ai-trading` source without rights clearance. An independently authored protocol fixture is not the upstream engine.
-- Actual paid AI calls and external data access require owner-approved secrets/provider policies. The TradingAgents licensed adapter may be coded and tested offline with fixtures, but a live model smoke test is separately gated.
+- Limited model-only provider calls are owner-authorised for local testing subject to the runbook's privacy, call-count, allowance and provider policy checks. The TradingAgents licensed adapter may be tested using local ignored `.env` credentials, but actual upstream graph runtime vs provider-only inference must be independently evidenced. No secret values in source, logs, git or chat.
 - AI model outputs are **proposals**, never direct orders. SideDeck owns validation, risk, local execution simulation, accounting, identity and persistence.
 - Use `Decimal` for money/prices/quantities, UTC-aware time and validated as-of market bundles. Missing/stale/future/fabricated-as-real data fail closed.
 - Separate the two USD 1,000 portfolios. No cash, fill, fee or idempotency cross-contamination.
