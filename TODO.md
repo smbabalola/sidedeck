@@ -325,3 +325,16 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] **Access status:** `V2_SEARCH_BLOCKED`; this does not establish historical-data availability. The one-shot v2 authorization is consumed; further eToro requests require fresh explicit approval.
 
 **Next action:** escalate the sanitized v2 endpoint/status to eToro support or verify portal entitlement out-of-band. Preserve credentials and do not broaden the scope.
+
+
+## SD-12A — owner selects Alpaca PAPER controlled exclusively by SideDeck (2026-10-18)
+
+- [x] **Decision:** Alpaca PAPER becomes preferred future broker. **SideDeck remains the only portfolio control plane**, maintaining separate `tradingagents` and `ai-trading` strategy ledgers at USD 1,000 each. This does not establish two broker accounts from one paper key. No paper/live Alpaca request or broker order has been executed.
+- [x] **Paper read-only groundwork:** `src/sidedeck/domain/alpaca_paper.py` parses PAPER account cash/equity/buying power/restrictions, long-only positions and open orders with strict read GET paths. `src/sidedeck/paper.py` implements inert fixture `--dry-run` and opt-in paper-account inspection. All network access requires explicit flags plus locally loaded key and secret. Never auto-submit/cancel orders.
+- [x] **Licensing/architecture:** Paper host is locked to `https://paper-api.alpaca.markets`. Market-data service is separate. New architecture decision: `docs/ADR-002-alpaca-paper-control-plane.md`.
+- [ ] **SD-12A-1 local credential check:** Confirm `ALPACA_API_KEY` **and paper secret** under supported environment name(s) in ignored local `.env`. No credential values, hashes or account IDs in logs/commits. Check dashboard-issued paper keys. Default process does not load `.env`.
+- [ ] **SD-12A-2 owner/local verification:** Require bounded explicit read-only authorisation before first account/positions/open-orders GET. Do not equate paper account default (often USD 100k) with SideDeck allocated USD 1k.
+- [ ] **SD-12A-3 independent broker accounts:** For two truly broker-separated strategy portfolios, establish two distinct paper accounts + credentials, manually configured and privately mapped to each strategy; don't create accounts or reset balances automatically. Until then, SideDeck internal ledgers remain separate, broker execution disabled.
+- [ ] **SD-12A-4:** Implement robust paper order intent/risk/idempotency/kill switch/reconciliation and audited broker fill postings, with a distinct explicit owner gate before paper writes. **No real/live trading, no crypto/shorts/leverage/options/CFDs.**
+- [ ] **SD-12A-5:** Verify Alpaca historical adjusted daily prices, five-year availability and rights; distinguish historical backtest from ongoing paper execution. Basic feed real-time IEX and recent 15-minute delayed SIP caveats apply.
+- [ ] **Verification:** Record Python CI result after commit; do not claim external Alpaca access or completed paper order management from fixture tests.

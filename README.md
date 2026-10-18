@@ -92,3 +92,22 @@ The dry run intentionally reports insufficient depth from fixture data. It does 
 ## Optional candidate for five-year EOD research (not connected)
 
 Tiingo's free individual EOD data plan is a potential licence-compatible source for **personal internal use**. SideDeck now includes a pure offline Tiingo-style JSON validator in `src/sidedeck/domain/tiingo_eod.py` and tests, **not a network adapter or a real backtest**. It checks raw/adjusted OHLCV, dividends, splits and a five-year exchange-calendar coverage gate. It never treats today's retrospectively adjusted prices as contemporaneously available historical observations. See `docs/HISTORICAL_DATA_ALTERNATIVE.md` and the living TODO. No Tiingo token or live call is required or authorised.
+
+## SideDeck-managed Alpaca PAPER portfolio (initial read-only integration)
+
+Alpaca PAPER is the preferred eventual simulated broker, while **SideDeck remains the only strategy and portfolio management control plane**. Source: [architecture decision](docs/ADR-002-alpaca-paper-control-plane.md). **This initial integration does not transmit paper orders, reconcile fills or verify any provider account.** It is an offline-tested broker inspection interface only. Do not confuse SideDeck's independent USD 1,000 strategy ledgers with one aggregate broker paper account.
+
+Run completely offline without keys:
+
+```powershell
+$env:PYTHONPATH = "src"
+.venv\Scripts\python.exe -m sidedeck.paper --dry-run
+```
+
+A future bounded read-only paper-account inspection (account summary, approved long positions and open orders only) requires separate owner approval, both paper key and secret privately loaded into the process, and all opt-in flags:
+
+```powershell
+.venv\Scripts\python.exe -m sidedeck.paper --paper-only --allow-read-network --confirm-owner-paper-read-only
+```
+
+The application **does not auto-load `.env`**. The key variable is `ALPACA_API_KEY` and the matching paper secret must be in `ALPACA_SECRET_KEY`, `ALPACA_API_SECRET_KEY`, or `APCA_API_SECRET_KEY`. Never paste the values into chat or commit them. The client uses **only** `https://paper-api.alpaca.markets` and GET account, positions and open orders; redirects and retries are blocked. One account's buying power may be greater than the two SideDeck allocations and **is not shared with either strategy**. Broker orders will be added only after two distinct paper accounts (if broker separation desired), order-level risk/idempotency, reconciliation and additional explicit authorisation. No eToro or live brokerage calls are made by this module.
