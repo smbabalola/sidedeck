@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from typing import Iterable
 
 from sqlalchemy import DateTime, Engine, Integer, String, Text, UniqueConstraint, create_engine, select
@@ -25,6 +26,10 @@ class JournalEventRecord(Base):
     payload: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class PersistenceConflict(RuntimeError):
+    """A generated event UUID was reused for different immutable content."""
+
+
 def create_database(url: str) -> Engine:
     return create_engine(url, future=True)
 
@@ -33,53 +38,61 @@ def create_schema(engine: Engine) -> None:
     Base.metadata.create_all(engine)
 
 
+def _save_events_once(engine: Engine, pending: list[LedgerEvent]) -> None:
+    with Session(engine) as session, session.begin():
+        for event in pending:
+            payload = event.canonical()
+            existing_by_key = session.scalar(
+                select(JournalEventRecord).where(
+                    JournalEventRecord.portfolio_id == event.portfolio_id,
+                    JournalEventRecord.idempotency_key == event.idempotency_key,
+                )
+            )
+            if existing_by_key is not None:
+                if existing_by_key.payload != payload:
+                    raise IdempotencyConflict(
+                        f"idempotency key conflict: {event.portfolio_id}/{event.idempotency_key}"
+                    )
+                continue
+            existing_by_id = session.get(JournalEventRecord, str(event.event_id))
+            if existing_by_id is not None:
+                if existing_by_id.payload != payload:
+                    raise PersistenceConflict(f"event UUID conflict: {event.event_id}")
+                continue
+            session.add(
+                JournalEventRecord(
+                    event_id=str(event.event_id),
+                    portfolio_id=event.portfolio_id,
+                    idempotency_key=event.idempotency_key,
+                    occurred_at=event.occurred_at,
+                    payload=payload,
+                )
+            )
+            session.flush()
+
+
 def save_events(engine: Engine, events: Iterable[LedgerEvent]) -> None:
     pending = list(events)
-    try:
-        with Session(engine) as session, session.begin():
-            for event in pending:
-                payload = event.canonical()
-                existing = session.scalar(
-                    select(JournalEventRecord).where(
-                        JournalEventRecord.portfolio_id == event.portfolio_id,
-                        JournalEventRecord.idempotency_key == event.idempotency_key,
-                    )
-                )
-                if existing is not None:
-                    if existing.payload != payload:
-                        raise IdempotencyConflict(
-                            f"idempotency key conflict: {event.portfolio_id}/{event.idempotency_key}"
-                        )
-                    continue
-                session.add(
-                    JournalEventRecord(
-                        event_id=str(event.event_id),
-                        portfolio_id=event.portfolio_id,
-                        idempotency_key=event.idempotency_key,
-                        occurred_at=event.occurred_at,
-                        payload=payload,
-                    )
-                )
-                session.flush()
-    except IntegrityError as exc:
-        with Session(engine) as session:
-            for event in pending:
-                existing = session.scalar(
-                    select(JournalEventRecord).where(
-                        JournalEventRecord.portfolio_id == event.portfolio_id,
-                        JournalEventRecord.idempotency_key == event.idempotency_key,
-                    )
-                )
-                if existing is not None:
-                    if existing.payload != event.canonical():
-                        raise IdempotencyConflict(
-                            f"idempotency key conflict: {event.portfolio_id}/{event.idempotency_key}"
-                        ) from exc
-                    return
-        raise
+    last_error: IntegrityError | None = None
+    for _attempt in range(3):
+        try:
+            _save_events_once(engine, pending)
+            return
+        except IntegrityError as exc:
+            # The entire batch transaction has rolled back. Retry the whole
+            # batch so colliding retries are resolved while noncolliding events
+            # are not silently dropped.
+            last_error = exc
+    assert last_error is not None
+    raise last_error
 
 
 def load_events(engine: Engine) -> list[LedgerEvent]:
     with Session(engine) as session:
         rows = session.scalars(select(JournalEventRecord).order_by(JournalEventRecord.journal_sequence)).all()
-        return [LedgerEvent.model_validate_json(row.payload) for row in rows]
+        events: list[LedgerEvent] = []
+        for row in rows:
+            payload = json.loads(row.payload)
+            payload["event_id"] = row.event_id
+            events.append(LedgerEvent.model_validate(payload))
+        return events

@@ -133,6 +133,12 @@ def test_order_rejects_hold_and_event_rejects_unsupported_or_economic_mismatch()
             event_type=EventType.MARK,
             postings=(Posting(account="cash", debit=Decimal("1")), Posting(account="equity", credit=Decimal("1"))),
         )
+    with pytest.raises(ValidationError):
+        LedgerEvent(
+            portfolio_id="unauthorized", idempotency_key="bad-portfolio", occurred_at=AT,
+            event_type=EventType.OPENING_CAPITAL,
+            postings=(Posting(account="cash", debit=Decimal("1000")), Posting(account="equity", credit=Decimal("1000"))),
+        )
 
 
 def test_fill_postings_match_cash_cost_basis_fees_and_realized_pnl() -> None:

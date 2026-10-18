@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from .contracts import EventType, IdempotencyConflict, LedgerEvent, MarketSnapshot, Posting, ZERO
+from .contracts import AUTHORIZED_PORTFOLIOS, EventType, IdempotencyConflict, LedgerEvent, MarketSnapshot, Posting, ZERO
 from .instruments import get_instrument_by_id, validate_quantity
 from .market import validate_snapshot
 
@@ -51,6 +51,8 @@ class Ledger:
         return tuple(self._events)
 
     def append(self, event: LedgerEvent) -> bool:
+        if event.portfolio_id not in AUTHORIZED_PORTFOLIOS:
+            raise ValueError("portfolio is not authorized for the P1 experiment")
         key = (event.portfolio_id, event.idempotency_key)
         if key in self._keys:
             if self._keys[key] != event.canonical():
@@ -80,6 +82,8 @@ class Ledger:
         return True
 
     def replay(self, portfolio_id: str) -> PortfolioState:
+        if portfolio_id not in AUTHORIZED_PORTFOLIOS:
+            raise ValueError("portfolio is not authorized for the P1 experiment")
         state = PortfolioState(portfolio_id=portfolio_id)
         for event in self._events:
             if event.portfolio_id == portfolio_id:

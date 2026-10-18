@@ -1,18 +1,22 @@
-# SideDeck P1/P1.1 implementation report
+# SideDeck P1/P1.2 implementation report
 
 Date: 2026-10-18  
 Branch: `feat/p1-foundation`  
 Baseline: `06d41b0567143214a237de1f1701b25f8d3f74f6`
-Phase status: hardened P1 complete for review; stopped before P2
+Phase status: final persistence gate complete for review; stopped before P2
 
 ## Hardening changes
 
-- Double-entry events now validate economic semantics: opening capital, buy gross/fee/cash, sell cash/cost-basis/fee/realized-P&L postings, USD currency, unique accounts, and supported event types.
+- Double-entry events validate economic semantics: opening capital, buy gross/fee/cash, sell cash/cost-basis/fee/realized-P&L postings, USD currency, unique accounts, and supported event types.
 - In-memory and database idempotency keys reject different-content reuse; retries are no-ops, composite `(portfolio_id, idempotency_key)` uniqueness is durable, and writes are transactional.
-- Journal persistence has an autoincrement sequence so equal `occurred_at` timestamps replay in insertion order.
+- Journal persistence has an autoincrement sequence so equal `occurred_at` timestamps replay in insertion order. PostgreSQL sequence state is reset after populated migration.
+- Legacy same-portfolio equal-timestamp journals fail safely instead of being UUID-reordered.
+- `save_events` retries the entire atomic batch after a uniqueness race, resolving equivalent retries while retaining all noncolliding events.
+- `operation_id` is the stable semantic operation identity; generated `event_id` identifies a journal row. Same key plus equivalent payload is a no-op with a new event UUID; different payload is an explicit conflict.
 - NAV requires approved instrument-specific USD snapshots whose market and ingestion timestamps are both at or before the decision cutoff and within the configured freshness window.
 - Trade intents, manifests, orders, ledger events, instruments, and snapshots fail closed on invalid IDs, sizes, times, currencies, portfolios, unsupported events, or prohibited assets.
-- Root `AGENTS.md`, Python 3.12 CI, disposable PostgreSQL CI coverage, and canonical documentation provenance were added.
+- Only `tradingagents` and `ai-trading` can create or mutate ledger events through the application/domain boundary.
+- Root `AGENTS.md`, Python 3.12 CI, disposable PostgreSQL CI coverage, and canonical documentation provenance are present.
 
 ## Test evidence
 
@@ -20,16 +24,19 @@ Executed with the isolated `.venv` on Python 3.13.16:
 
 | Command | Result |
 |---|---|
-| `.venv\Scripts\python.exe -m pytest` | PASS — 21 passed, 1 skipped |
+| `.venv\Scripts\python.exe -m pytest` | PASS — 24 passed, 1 skipped; 3 SQLite adapter deprecation warnings |
 | `.venv\Scripts\ruff.exe check .` | PASS |
 | `.venv\Scripts\mypy.exe src --no-incremental --follow-imports=silent` | PASS — 10 source files |
 | `.venv\Scripts\python.exe -m alembic upgrade head` | PASS — disposable SQLite |
 | SQLite Alembic upgrade → downgrade → upgrade | PASS |
-| SQLite retries, conflict, concurrent write, rollback, equal-timestamp replay | PASS |
-| Economic posting, NAV cutoff/freshness, ID and unsupported-event regressions | PASS |
+| Populated legacy SQLite migration and immediate post-migration insert | PASS |
+| SQLite ambiguous-order rejection, retries, conflicts, concurrent batches, rollback, and replay | PASS |
+| Economic posting, NAV cutoff/freshness, ID, portfolio, and unsupported-event regressions | PASS |
 | Hypothesis deterministic replay/idempotency properties | PASS |
 
-The PostgreSQL test is present and runs in CI when `SIDEDECK_TEST_POSTGRES_URL` points to the workflow's disposable service. It was skipped locally because Docker has no usable daemon and connecting to the running PostgreSQL Windows services would risk using an existing user database without approval.
+Independent pre-hardening evidence: [GitHub Actions run 39130709618](https://github.com/smbabalola/sidedeck/actions/runs/39130709618) passed on Python 3.12 with PostgreSQL schema migration, Ruff, mypy, and 22 tests. The final-gate CI run for this commit will be recorded after push.
+
+The PostgreSQL test provisions a disposable CI service and covers populated legacy migration, sequence-safe post-migration inserts, persistence, replay, rollback, unique-key conflicts, and downgrade/upgrade. It is skipped locally because Docker has no usable daemon; existing PostgreSQL Windows services were not contacted.
 
 ## Deterministic replay example
 
@@ -41,6 +48,7 @@ No credentials, agent integration, external market data, eToro call, broker conn
 
 ## Unresolved items
 
-1. PostgreSQL upgrade/downgrade and persistence evidence remain unverified locally; CI is configured for a disposable PostgreSQL service on Python 3.12.
-2. Python 3.12 has CI configuration but has not run in this local Windows environment, which is Python 3.13.16.
-3. P2 must preserve proposal-only worker isolation and resolve AI Trading licensing before any source use.
+1. Local PostgreSQL upgrade/downgrade and persistence evidence remain unverified because Docker has no usable daemon and existing PostgreSQL Windows services were not contacted. Disposable PostgreSQL coverage is configured in CI.
+2. The local environment is Python 3.13.16; Python 3.12 is exercised by CI.
+3. Three local SQLite adapter tests emit a Python 3.12 datetime-adapter deprecation warning from SQLAlchemy; no correctness failure.
+4. P2 must preserve proposal-only worker isolation and resolve AI Trading licensing before any source use.

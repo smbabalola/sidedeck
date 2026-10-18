@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
+import json
 from typing import Any, Literal, Self
 from uuid import UUID, uuid4
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 ZERO = Decimal("0")
 USD = "USD"
+AUTHORIZED_PORTFOLIOS = ("tradingagents", "ai-trading")
 
 
 class IdempotencyConflict(ValueError):
@@ -247,6 +249,7 @@ class Posting(Contract):
 
 
 class LedgerEvent(Contract):
+    operation_id: UUID = Field(default_factory=uuid4)
     event_id: UUID = Field(default_factory=uuid4)
     portfolio_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
     idempotency_key: str = Field(min_length=1)
@@ -270,6 +273,8 @@ class LedgerEvent(Contract):
 
     @model_validator(mode="after")
     def balanced(self) -> Self:
+        if self.portfolio_id not in AUTHORIZED_PORTFOLIOS:
+            raise ValueError("portfolio is not authorized for the P1 experiment")
         if self.currency != USD:
             raise ValueError("P1 ledger events must be denominated in USD")
         if len({posting.account for posting in self.postings}) != len(self.postings):
@@ -330,4 +335,10 @@ class LedgerEvent(Contract):
         return self
 
     def canonical(self) -> str:
-        return self.model_dump_json(round_trip=True)
+        # event_id is a generated journal-row identity. Retries compare the
+        # stable operation_id plus semantic payload, not a new event UUID.
+        return json.dumps(
+            self.model_dump(mode="json", round_trip=True, exclude={"event_id"}),
+            separators=(",", ":"),
+            sort_keys=True,
+        )
