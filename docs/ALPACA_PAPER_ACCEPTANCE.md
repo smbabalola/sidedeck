@@ -30,3 +30,7 @@ Record in `TODO.md` only status booleans, denied HTTP status, blocked account re
 4. Separately authorize/verify Alpaca's historical data API, NYSE/Nasdaq calendar, five-year adjusted daily OHLCV, data usage rights and vintage. Existing fixture portfolio dashboard must stay labelled synthetic.
 
 **Security:** provider domain allowlist and private `.env` are not evidence of paper-key provenance; neither the current integration nor unit tests can verify credentials. The owner must never share secrets in chat.
+
+## Confirmed by owner; requires local provider verification (2026-10-18)
+
+Owner reports first paper-account label **signaldeckdemo** linked to `ALPACA_API_KEY`, and second **Sidedeckdemo** linked to `ALPACA_API_KEY2`. Strategy mapping is provisionally `tradingagents`/first key and `ai-trading`/second key. Do not assume the first owner label equals screenshot's **SignalDeckProject** until verified against the provider's distinct account IDs privately. Before even considering PAPER orders, confirm neither account carries activity from another app/experiment, especially the original SignalDeck system. Existing broker cash (often USD 100,000) is not either SideDeck USD 1,000 ledger. Current permission is to document the mapping only, **not to authenticate against Alpaca or place any order**.
