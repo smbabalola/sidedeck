@@ -13,7 +13,7 @@ from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from enum import StrEnum
 import hashlib
 import json
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 from .accounting import Ledger, PortfolioState, fill_event
