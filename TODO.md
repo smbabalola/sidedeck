@@ -287,3 +287,15 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] **Code CI:** `4a8f9dc21ee2ff912cd7f017666b3c5848f154b1` passed [39152259268](https://github.com/smbabalola/sidedeck/actions/runs/39152259268) and [39152256473](https://github.com/smbabalola/sidedeck/actions/runs/39152256473): 99 tests passed / 3 known SQLite warnings, Ruff passed, mypy passed (26 source files), disposable PostgreSQL CI passed. Zero provider/network calls.
 
 **Detailed handoff:** `docs/SIGNALDECK_ETORO_COMPARISON.md`, [local-only secret-safe checklist](docs/SIGNALDECK_LOCAL_CHECK.md), and `AGENTS.md`. **Do not claim that the locally ignored key pairs or proxy configuration have been checked through GitHub.**
+## SD-11G offline SignalDeck/SideDeck parity findings (2026-10-18)
+
+- **Result:** `OFFLINE_LOAD_MISMATCH`.
+- **Checkout presence:** `CHECKOUT_SIGNALDECK_PRESENT=true`; `CHECKOUT_SIDEDECK_PRESENT=true`.
+- **Credential file booleans:** `SIGNALDECK_FILE_BOTH_PRESENT=true`; `SIDEDECK_FILE_BOTH_PRESENT=true`; `DOTENV_SAME_API_KEY=true`; `DOTENV_SAME_USER_KEY=true`; `DOTENV_SAME_KEY_PAIR=true`.
+- **Formatting:** `SIGNALDECK_FORMAT_CLEAN=true`; `SIDEDECK_FORMAT_CLEAN=true` — nonempty, printable, no quotes, edge whitespace, internal whitespace or non-ASCII characters. No values, hashes, lengths or prefixes were recorded.
+- **Loading:** SignalDeck source uses Pydantic `env_file=".env"` with `ETORO_*`/`SIGNALDECK_ETORO_*` aliases, so its checkout-local settings loader can read the matching pair. SideDeck `data_probe.py` reads process environment only. `SIGNALDECK_RUNTIME_ENV_BOTH_PRESENT=false`; `SIDEDECK_RUNTIME_ENV_BOTH_PRESENT=false`; a plain SideDeck launch therefore does not auto-load its `.env`.
+- **Proxy booleans:** `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` were absent from both `.env` files and the process environment. User and machine proxy settings were disabled/unconfigured; WinHTTP was direct. No proxy values were printed or stored.
+- **Request contract:** offline eToro request-shape/safety tests passed: **8 passed**. SignalDeck’s legacy v2 shape and SideDeck’s v1 shape remain different; no v2 fallback or network call was attempted.
+- **Account status:** Matching local file values do **not** prove correspondence to the currently active eToro account or endpoint entitlement. No eToro request was made.
+
+**Safe next action:** if SideDeck is ever separately re-authorized to run, load the local `.env` into the process through a secret-safe launcher or explicitly provision process variables; do not alter either credential file. No fresh eToro permission is implied by this offline comparison.
