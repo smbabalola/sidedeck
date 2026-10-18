@@ -52,7 +52,8 @@ def test_five_year_depth_is_insufficient_without_early_dates_and_unverified_with
     client = EtoroHistoricalDataClient(NoNetwork(), capability=MarketDataReadCapability())  # type: ignore[arg-type]
     instrument = EtoroInstrument(1001, "AAPL", "EQUITY", "NASDAQ")
     cutoff = datetime(2026, 10, 17, tzinfo=timezone.utc)
-    candle = lambda at: EtoroCandle(at, Decimal("100"), Decimal("110"), Decimal("90"), Decimal("101"), Decimal("0"))
+    def candle(at: datetime) -> EtoroCandle:
+        return EtoroCandle(at, Decimal("100"), Decimal("110"), Decimal("90"), Decimal("101"), Decimal("0"))
     recent = client.scan_five_year_daily(instrument, cutoff=cutoff, candles=(candle(cutoff),))
     assert recent.status == "INSUFFICIENT_DEPTH"
     older = client.scan_five_year_daily(
