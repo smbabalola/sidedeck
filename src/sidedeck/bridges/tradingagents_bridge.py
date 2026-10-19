@@ -25,7 +25,7 @@ def extract_action(value: object) -> str:
     match = re.fullmatch(r"(?:FINAL (?:TRADE|TRANSACTION) (?:PROPOSAL|DECISION):\s*)(BUY|SELL|HOLD)[.!]?", text)
     if match:
         return match.group(1)
-    raise ValueError("TradingAgents decision is not unambiguous")
+    # Current upstream also returns OVERWEIGHT, UNDERWEIGHT or REVIEW.\n    # They are not order instructions, so reject until sizing policy is approved.\n    raise ValueError("TradingAgents decision is not an unambiguous BUY/SELL/HOLD")
 
 
 def main() -> int:
