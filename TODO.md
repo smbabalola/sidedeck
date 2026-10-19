@@ -41,7 +41,8 @@
   mypy passed; Alembic
   `0001` through `0007` upgrade/downgrade passed; offline acceptance passed
   with `P4_DECISION=NO-GO`.
-- CI for this correction: [run 39250451185](https://github.com/smbabalola/sidedeck/actions/runs/39250451185),
-  in progress when recorded; completion is not claimed.
+- CI evidence: [run 39250451185](https://github.com/smbabalola/sidedeck/actions/runs/39250451185)
+  completed successfully for the preceding implementation SHA. No newer
+  Actions run for the final documentation tip was observed at handoff.
 - Decision: `P4_DECISION=NO-GO` until authenticated evidence and a separately
   approved one-time operator authorization exist.
