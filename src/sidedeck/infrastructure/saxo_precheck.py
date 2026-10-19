@@ -30,10 +30,10 @@ class _NoRedirect(HTTPRedirectHandler):
 
 def precheck_payload(scope: SaxoAccountScope, *, uic: int = 211,
                      amount: int = 1) -> dict[str, Any]:
-    if uic != 211 or type(amount) is not int or amount != 1:
-        raise ValueError("precheck restricted to one AAPL:xnas Stock share")
+    if uic not in (211, 23241352, 46019839, 247) or type(amount) is not int or amount != 1:
+        raise ValueError("precheck restricted to one share of an allowlisted NASDAQ stock")
     return {
-        "AccountKey": scope.account_key, "Uic": 211, "AssetType": "Stock",
+        "AccountKey": scope.account_key, "Uic": uic, "AssetType": "Stock",
         "BuySell": "Buy", "Amount": 1, "OrderType": "Market",
         "OrderDuration": {"DurationType": "DayOrder"},
         "FieldGroups": ["Costs"], "ManualOrder": True,
@@ -72,14 +72,14 @@ def parse_precheck(data: dict[str, Any]) -> PrecheckDecision:
     return PrecheckDecision("Ok", False, "execution_gate_still_disabled", amount, currency)
 
 
-def run_sim_precheck(scope: SaxoAccountScope, *, timeout_seconds: float = 10) -> PrecheckDecision:
+def run_sim_precheck(scope: SaxoAccountScope, *, uic: int = 211, timeout_seconds: float = 10) -> PrecheckDecision:
     """One broker precheck POST, strictly SIM-only; /orders is never called."""
     if timeout_seconds <= 0 or timeout_seconds > 30:
         raise ValueError("invalid timeout")
     token = os.environ.get("SAXO_SIM_ACCESS_TOKEN")
     if not token:
         raise SaxoPrecheckError("Saxo SIM token unavailable")
-    payload = json.dumps(precheck_payload(scope)).encode("utf-8")
+    payload = json.dumps(precheck_payload(scope, uic=uic)).encode("utf-8")
     req = Request(
         _PRECHECK_URL, data=payload, method="POST",
         headers={"Authorization": "Bearer " + token, "Accept": "application/json",
