@@ -11,11 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sidedeck.application.ai_agents import AgentUnavailable, ExternalJsonAgent
+from sidedeck.application.p5_model_config import load_model_settings
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="P5 research-only external agent comparison")
     parser.add_argument("--ticker", default="SOFI")
+    parser.add_argument("--models-config", required=True, help="versioned non-secret JSON file")
     parser.add_argument("--tradingagents-python", required=True)
     parser.add_argument("--hedge-fund-bridge", required=True,
                         help="approved absolute path to JSON-output research bridge")
@@ -25,6 +27,7 @@ def main() -> int:
     if not Path(args.hedge_fund_bridge).is_file():
         print("P5_DECISION=NO-GO (hedge fund bridge missing)")
         return 2
+    settings = load_model_settings(args.models_config)
     now = datetime.now(timezone.utc)
     agents = (
         ExternalJsonAgent(
@@ -32,11 +35,15 @@ def main() -> int:
             revision="upstream-unpinned-local",
             command=(args.tradingagents_python, "-m",
                      "sidedeck.bridges.tradingagents_bridge"),
+            model_provider=settings.portfolios["tradingagents"].default.provider,
+            model_id=settings.portfolios["tradingagents"].default.model,
         ),
         ExternalJsonAgent(
             upstream="virattt/ai-hedge-fund", portfolio_id="ai-trading",
             revision="upstream-unpinned-local",
             command=(args.hedge_fund_python, args.hedge_fund_bridge),
+            model_provider=settings.portfolios["ai-trading"].default.provider,
+            model_id=settings.portfolios["ai-trading"].default.model,
         ),
     )
     output: list[dict[str, str]] = []
@@ -46,7 +53,10 @@ def main() -> int:
             result = agent.run(args.ticker, now)
             output.append({"portfolio": result.portfolio_id, "upstream": result.upstream,
                            "status": "RESEARCH_ONLY", "decision": result.decision,
-                           "rationale": result.rationale})
+                           "rationale": result.rationale,
+                           "model_config_fingerprint": settings.fingerprint,
+                           "model_provider": agent.model_provider or "",
+                           "model_id": agent.model_id or ""})
         except (AgentUnavailable, ValueError) as exc:
             failures += 1
             output.append({"portfolio": agent.portfolio_id, "upstream": agent.upstream,
