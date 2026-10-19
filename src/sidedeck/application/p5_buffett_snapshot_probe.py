@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import traceback
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -27,11 +28,15 @@ def snapshot_probe(path: str, ticker: str, as_of: str) -> dict[str, Any]:
     try:
         snapshot = cls.build_snapshot(object.__new__(cls), ticker, as_of, LocalFiledDataClient(path))
     except Exception as exc:
+        frames = traceback.extract_tb(exc.__traceback__)
+        last = frames[-1] if frames else None
         return {
             "ticker": ticker, "as_of": as_of,
             "snapshot_contract": str(signature),
             "snapshot_status": "UNAVAILABLE",
             "error_type": type(exc).__name__,
+            "error_detail": str(exc)[:300],
+            "error_location": (f"{last.name}:{last.lineno}" if last else "unknown"),
             "approved": False, "buffett_ready": False,
             "broker_execution": "DISABLED",
         }
