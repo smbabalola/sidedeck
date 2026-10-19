@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from typing import Any
 from decimal import Decimal
 
 from sidedeck.application.saxo_instrument_readiness import detail_path
@@ -13,7 +14,7 @@ SHORTLIST = {"SOFI": 23241352, "PLTR": 46019839, "INTC": 247}
 CASH_CAP_EUR = Decimal("200")
 
 
-def identity_valid(details: dict, ticker: str, uic: int, account_key: str) -> bool:
+def identity_valid(details: dict[str, Any], ticker: str, uic: int, account_key: str) -> bool:
     return (details.get("Uic") == uic
             and details.get("Symbol") == ticker + ":xnas"
             and details.get("AssetType") == "Stock"
