@@ -54,8 +54,10 @@ def validate_continuation(path: str, scope: SaxoAccountScope, order_id: str) -> 
         "EntryType": ["All"], "IncludeSubAccounts": ["false"],
         "$top": ["100"], "OrderId": [order_id],
     }
-    if query != expected:
+    if set(query) - set(expected) - {"$skip"} or any(query.get(key) != value for key, value in expected.items()):
         raise ValueError("execution history cursor changed account or order scope")
+    if "$skip" in query and (len(query["$skip"]) != 1 or not query["$skip"][0].isdigit()):
+        raise ValueError("invalid execution history pagination cursor")
     return path
 
 
@@ -141,10 +143,13 @@ def parse_executions(
     account_currency: str,
     price_currency: str,
     fees_currency: str,
+    authorized_quantity: Decimal,
 ) -> tuple[BrokerExecution, ...]:
     """Parse only fill-like rows and make execution identity durable."""
     if not account_id or not order_id or not external_reference:
         raise ValueError("execution identity is required")
+    if not authorized_quantity.is_finite() or authorized_quantity <= 0:
+        raise ValueError("authorized execution quantity is invalid")
     for currency in (instrument_currency, account_currency, price_currency, fees_currency):
         if not isinstance(currency, str) or len(currency) != 3 or not currency.isalpha():
             raise ValueError("execution currency metadata is invalid")
@@ -152,6 +157,8 @@ def parse_executions(
         raise ValueError("execution price currency is not instrument currency")
     seen: set[str] = set()
     result: list[BrokerExecution] = []
+    cumulative = Decimal("0")
+    final_seen = False
     for row in rows:
         if row.get("AccountId") != account_id or row.get("OrderId") != order_id:
             raise ValueError("execution account or order mismatch")
@@ -162,17 +169,24 @@ def parse_executions(
             continue
         if status not in {"Fill", "FinalFill"}:
             raise ValueError("unknown execution status")
+        if status == "FinalFill" and final_seen:
+            raise ValueError("multiple final fill records")
         execution_id = row.get("ExecutionId") or row.get("LogId")
         if not isinstance(execution_id, str) or not execution_id or execution_id in seen:
             raise ValueError("missing or duplicate execution identity")
         occurred_at = row.get("ExecutionTime") or row.get("ActivityTime")
         if not isinstance(occurred_at, str) or not occurred_at:
             raise ValueError("execution timestamp missing")
+        quantity = _positive(row.get("FillAmount"), "execution fill quantity")
+        cumulative += quantity
+        if cumulative > authorized_quantity:
+            raise ValueError("execution quantity exceeds authorized order quantity")
+        if status == "FinalFill" and cumulative != authorized_quantity:
+            raise ValueError("final fill does not reconcile to authorized order quantity")
         result.append(BrokerExecution(
             account_id=account_id, order_id=order_id,
             external_reference=external_reference, execution_id=execution_id,
-            status=status, quantity=_positive(
-                row.get("FillAmount"), "execution fill quantity"),
+            status=status, quantity=quantity,
             price=_positive(row.get("ExecutionPrice"), "execution price"),
             fees=_nonnegative(row.get("Fees"), "execution fees"),
             instrument_currency=instrument_currency, account_currency=account_currency,
@@ -180,5 +194,6 @@ def parse_executions(
             occurred_at=occurred_at,
         ))
         seen.add(execution_id)
+        final_seen = final_seen or status == "FinalFill"
     return tuple(result)
 

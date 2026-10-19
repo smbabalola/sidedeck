@@ -31,7 +31,11 @@ Saxo, read credentials, or mutate an existing portfolio database.
   validated FX snapshot only for explicitly EUR-denominated fees, correct
   portfolio/account/reference matching, versioned durable pending-event
   recovery, deterministic replay-safe event identity, external execution
-  deduplication, ledger fill posting and lifecycle update.
+  deduplication, fresh-ledger reconstruction of POSTED and incomplete rows,
+  cumulative authorized-quantity reconciliation, and lifecycle update.
+- `migrations/versions/0006_execution_quantity.py`: persists the authorized
+  execution quantity needed to validate recovery and FinalFill evidence after
+  restart.
 - `infrastructure.saxo_submit_transport`: strict SIM-host POST adapter with
   exact SOFI payload validation, bounded timeout, redacted errors, no redirect
   and no retry. It is disabled unless explicitly constructed for a separately
@@ -73,6 +77,10 @@ and [order-activity guide](https://www.developer.saxo/openapi/learn/audit-ordera
 | Duplicate execution cannot double-post | PASS in pipeline tests |
 | Recovery and authorization Alembic schema | PASS in disposable SQLite migration round trip |
 | Pagination cursor remains account/order scoped | PASS in offline tests |
+| Two-page pagination through the actual allowlisted SIM client | PASS with an offline transport fixture |
+| Fresh-ledger recovery of POSTED events | PASS in offline tests |
+| Concurrent/repeated recovery does not duplicate accounting | PASS in offline tests |
+| Cumulative quantity and FinalFill reconciliation | PASS in offline tests |
 | Real authenticated fill reconciliation | NOT VERIFIED |
 | Current authenticated executable quote and FX provenance | NOT VERIFIED |
 | Current Saxo account/instrument currency evidence | NOT VERIFIED in this batch |

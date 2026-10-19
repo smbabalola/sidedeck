@@ -11,6 +11,12 @@
   submission.
 - [x] Enforce account/order-scoped execution-history pagination and explicit
   instrument, account, price and fee currencies.
+- [x] Reconstruct both POSTED and incomplete execution events into fresh
+  ledgers; make repeated and concurrent recovery idempotent.
+- [x] Support validated `$skip` pagination through the actual SIM allowlisted
+  client while preserving host, account, client and order scope.
+- [x] Reconcile cumulative execution quantity to the authorized order and
+  reject overfills or incomplete FinalFill evidence.
 - [x] Run offline regression, migration and acceptance checks without Saxo
   credentials or broker requests.
 - [ ] Obtain separately approved authenticated SIM quote, FX, precheck and
@@ -24,6 +30,9 @@
 - Local evidence: `199 passed, 1 skipped`; Ruff passed; mypy passed with no
   issues in 51 source files; disposable Alembic upgrade and downgrade passed;
   offline acceptance passed with `P4_DECISION=NO-GO`.
+- Latest correction evidence: `202 passed, 1 skipped`; Ruff passed; mypy
+  passed; Alembic `0001` through `0006` upgrade/downgrade passed; offline
+  acceptance passed with `P4_DECISION=NO-GO`.
 - CI: pending push; no CI result is claimed here.
 - Decision: `P4_DECISION=NO-GO` until authenticated evidence and a separately
   approved one-time operator authorization exist.

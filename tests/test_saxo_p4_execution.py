@@ -1,9 +1,10 @@
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
 
-from sidedeck.application.saxo_execution_history import fetch_history, order_history_path, parse_executions, validate_continuation
+from sidedeck.application.saxo_execution_history import fetch_history, order_history_path, parse_executions, read_order_history, validate_continuation
 from sidedeck.application.saxo_market_data import EvidenceOrigin, ExecutionEvidence, FxSnapshot
 from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence, parse_precheck, precheck_payload
 from sidedeck.application.saxo_sim_submission import (
@@ -89,7 +90,7 @@ def test_execution_history_paginates_and_parses_only_fill_evidence():
          "Status": "Placed"},
     ), account_id="22866064", order_id="o", external_reference="k",
         instrument_currency="USD", account_currency="EUR",
-        price_currency="USD", fees_currency="EUR")
+        price_currency="USD", fees_currency="EUR", authorized_quantity=Decimal("1"))
     assert len(rows) == 2 and parsed[0].execution_id == "fill-1"
     assert parsed[0].fees == Decimal("0.2")
 
@@ -104,7 +105,7 @@ def test_history_rejects_loop_duplicate_and_cross_account():
         parse_executions(({"AccountId": "wrong"},), account_id="22866064",
                          order_id="o", external_reference="k",
                          instrument_currency="USD", account_currency="EUR",
-                         price_currency="USD", fees_currency="EUR")
+                         price_currency="USD", fees_currency="EUR", authorized_quantity=Decimal("1"))
 
 
 def test_history_cursor_cannot_change_scope():
@@ -115,6 +116,37 @@ def test_history_cursor_cannot_change_scope():
         validate_continuation(good.replace("broker-1", "broker-2"), scope, "broker-1")
     with pytest.raises(ValueError, match="boundary"):
         validate_continuation("https://evil.example/cs/v1/audit/orderactivities", scope, "broker-1")
+
+
+def test_actual_allowlisted_sim_client_retrieves_two_pages(monkeypatch):
+    scope = SaxoAccountScope("approved", "acct-key", "client-key")
+    first = order_history_path(scope, "broker-1")
+    second = first + "&%24skip=100"
+    responses = {
+        first: {"Data": [{"OrderId": "broker-1"}], "__next": second},
+        second: {"Data": [{"OrderId": "broker-1"}], "__count": 2},
+    }
+
+    class Response:
+        status = 200
+        def __init__(self, body):
+            self.body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, _limit):
+            return json.dumps(self.body).encode()
+
+    class Opener:
+        def open(self, request, timeout):
+            return Response(responses[request.full_url.removeprefix(
+                "https://gateway.saxobank.com/sim/openapi")])
+
+    monkeypatch.setenv("SAXO_SIM_ACCESS_TOKEN", "fixture-token")
+    monkeypatch.setattr("sidedeck.infrastructure.saxo_sim.build_opener", lambda *_: Opener())
+    from sidedeck.infrastructure.saxo_sim import SaxoSimClient
+    assert len(read_order_history(SaxoSimClient(), scope, "broker-1")) == 2
 
 
 def test_official_history_path_and_sim_payload_boundary():

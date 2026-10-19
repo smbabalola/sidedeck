@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 import json
 import hashlib
+from threading import Lock
 from uuid import NAMESPACE_URL, uuid5
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,23 +36,26 @@ class SaxoExecutionPipeline:
     def __init__(self, db_path: str, ledger: Ledger) -> None:
         self._db_path = db_path
         self._ledger = ledger
+        self._recover_lock = Lock()
         with sqlite3.connect(db_path) as db:
             db.execute("CREATE TABLE IF NOT EXISTS saxo_execution_recovery ("
                        "execution_id TEXT PRIMARY KEY, order_key TEXT NOT NULL, "
                        "portfolio_id TEXT NOT NULL, event_payload TEXT NOT NULL, "
                        "event_sha256 TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('PENDING','RECOVERING','POSTED')), "
-                       "broker_order_id TEXT NOT NULL, fill_status TEXT NOT NULL, claimed_at TEXT)")
+                       "broker_order_id TEXT NOT NULL, fill_status TEXT NOT NULL, claimed_at TEXT, "
+                       "authorized_quantity TEXT NOT NULL DEFAULT '1')")
 
     def _advance_lifecycle(self, order_key: str, order_id: str, status: str) -> None:
         state = lifecycle_state(self._db_path, order_key)
-        if state and state[0] in {"ACKNOWLEDGED", "PARTIAL"}:
+        target = "FILLED" if status == "FinalFill" else "PARTIAL"
+        if state and state[0] in {"ACKNOWLEDGED", "PARTIAL"} and state[0] != target:
             advance_lifecycle(self._db_path, order_key,
-                              "FILLED" if status == "FinalFill" else "PARTIAL",
+                              target,
                               broker_order_id=order_id, broker_evidence=True)
 
     def recover(self) -> int:
         """Replay all durable pending/posted records after a crash."""
-        with sqlite3.connect(self._db_path) as db:
+        with self._recover_lock, sqlite3.connect(self._db_path) as db:
             rows = db.execute("SELECT execution_id, order_key, portfolio_id, event_payload, status, "
                              "broker_order_id, fill_status "
                              "FROM saxo_execution_recovery WHERE status IN ('PENDING','RECOVERING','POSTED') "
@@ -62,16 +66,30 @@ class SaxoExecutionPipeline:
             if status in {"PENDING", "RECOVERING"}:
                 with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
                     claimed = db.execute("UPDATE saxo_execution_recovery SET status='RECOVERING', claimed_at=? "
-                                         "WHERE execution_id=? AND status IN ('PENDING','RECOVERING')",
+                                         "WHERE execution_id=? AND status='PENDING'",
                                          (datetime.now(timezone.utc).isoformat(), execution_id)).rowcount
-                if not claimed:
+                if not claimed and status == "PENDING":
                     continue
-                self._ledger.append(event)
+                appended = self._ledger.append(event)
                 with sqlite3.connect(self._db_path) as db:
                     db.execute("UPDATE saxo_execution_recovery SET status='POSTED' WHERE execution_id=?",
                                (execution_id,))
-                recovered += 1
-            self._advance_lifecycle(order_key, broker_order_id, fill_status)
+                recovered += int(appended)
+            else:
+                recovered += int(self._ledger.append(event))
+            authorized = Decimal("1")
+            with sqlite3.connect(self._db_path) as db:
+                quantity_row = db.execute("SELECT authorized_quantity FROM saxo_execution_recovery "
+                                          "WHERE execution_id=?", (execution_id,)).fetchone()
+                if quantity_row and quantity_row[0] is not None:
+                    authorized = Decimal(str(quantity_row[0]))
+                total_row = db.execute("SELECT event_payload FROM saxo_execution_recovery "
+                                       "WHERE order_key=? AND portfolio_id=? AND status='POSTED'",
+                                       (order_key, portfolio_id)).fetchall()
+            total = sum((Decimal(str(LedgerEvent.model_validate(json.loads(item[0])).quantity or 0))
+                         for item in total_row), Decimal("0"))
+            if fill_status != "FinalFill" or total == authorized:
+                self._advance_lifecycle(order_key, broker_order_id, fill_status)
         return recovered
 
     def apply_buy_fill(
@@ -83,10 +101,13 @@ class SaxoExecutionPipeline:
         fx: FxSnapshot,
         account_id: str,
         now: datetime,
+        authorized_quantity: Decimal = Decimal("1"),
     ) -> AppliedExecution:
         """Atomically deduplicate external fills before mutating the ledger."""
         if execution.account_id != account_id or execution.external_reference != order_key:
             raise ValueError("execution is not matched to the requested account/order")
+        if not authorized_quantity.is_finite() or authorized_quantity <= 0:
+            raise ValueError("authorized execution quantity is invalid")
         if (execution.status not in {"Fill", "FinalFill"}
                 or execution.instrument_currency != "USD"
                 or execution.account_currency != "EUR"
@@ -114,6 +135,11 @@ class SaxoExecutionPipeline:
         event_sha256 = hashlib.sha256(event_payload.encode("utf-8")).hexdigest()
         duplicate = False
         with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
+            prior_rows = db.execute("SELECT event_payload FROM saxo_execution_recovery "
+                                    "WHERE order_key=? AND portfolio_id=? AND status='POSTED'",
+                                    (order_key, portfolio_id)).fetchall()
+            prior_quantity = sum((Decimal(str(LedgerEvent.model_validate(json.loads(row[0])).quantity or 0))
+                                  for row in prior_rows), Decimal("0"))
             row = db.execute("SELECT order_key, portfolio_id, event_sha256, event_payload, status FROM saxo_execution_recovery "
                              "WHERE execution_id=?", (execution.execution_id,)).fetchone()
             if row is not None:
@@ -128,15 +154,24 @@ class SaxoExecutionPipeline:
                                (execution.execution_id,))
                 duplicate = True
             else:
-                db.execute("INSERT INTO saxo_execution_recovery VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, NULL)",
+                cumulative = prior_quantity + execution.quantity
+                if cumulative > authorized_quantity:
+                    raise ValueError("execution quantity exceeds authorized order quantity")
+                if execution.status == "FinalFill" and cumulative != authorized_quantity:
+                    raise ValueError("final fill does not reconcile to authorized order quantity")
+                db.execute("INSERT INTO saxo_execution_recovery "
+                           "(execution_id, order_key, portfolio_id, event_payload, event_sha256, status, "
+                           "broker_order_id, fill_status, claimed_at, authorized_quantity) "
+                           "VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, NULL, ?)",
                            (execution.execution_id, order_key, portfolio_id, event_payload,
-                            event_sha256, execution.order_id, execution.status))
+                            event_sha256, execution.order_id, execution.status, str(authorized_quantity)))
         if not duplicate:
             # The PENDING row is durable before the in-memory ledger changes.
             self._ledger.append(event)
             with sqlite3.connect(self._db_path) as db:
                 db.execute("UPDATE saxo_execution_recovery SET status='POSTED' WHERE execution_id=?",
                            (execution.execution_id,))
-        self._advance_lifecycle(order_key, execution.order_id, execution.status)
+        if execution.status != "FinalFill" or prior_quantity + execution.quantity == authorized_quantity:
+            self._advance_lifecycle(order_key, execution.order_id, execution.status)
         return AppliedExecution(execution.execution_id, portfolio_id,
                                 execution.quantity, price_usd, fee_usd, duplicate)
