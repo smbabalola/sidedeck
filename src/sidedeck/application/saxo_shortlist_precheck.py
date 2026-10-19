@@ -14,14 +14,15 @@ SHORTLIST = {"SOFI": 23241352, "PLTR": 46019839, "INTC": 247}
 CASH_CAP_EUR = Decimal("200")
 
 
-def identity_valid(details: dict[str, Any], ticker: str, uic: int, account_key: str) -> bool:
+def identity_valid(details: dict[str, Any], ticker: str, uic: int, account_id: str) -> bool:
     return (details.get("Uic") == uic
             and details.get("Symbol") == ticker + ":xnas"
             and details.get("AssetType") == "Stock"
             and details.get("CurrencyCode") == "USD"
             and details.get("TradingStatus") == "Tradable"
+            and details.get("IsTradable") is not False
             and isinstance(details.get("TradableOn"), list)
-            and account_key in details["TradableOn"])
+            and account_id in details["TradableOn"])
 
 
 def main() -> int:
@@ -37,7 +38,7 @@ def main() -> int:
         for ticker, uic in SHORTLIST.items():
             try:
                 details = client.get(detail_path(scope, uic))
-                if not identity_valid(details, ticker, uic, scope.account_key):
+                if not identity_valid(details, ticker, uic, scope.account_id):
                     print(f"{ticker}: BLOCKED instrument/account eligibility not established")
                     continue
                 result = run_sim_precheck(scope, uic=uic)
