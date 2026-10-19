@@ -22,7 +22,7 @@ def summarize_audit(data: dict[str, Any], *, account_id: str) -> tuple[int, int]
     if not isinstance(records, list) or len(records) > 100:
         raise ValueError("invalid audit collection")
     count = data.get("__count")
-    if (data.get("__next") or data.get("__nextPoll")
+    if (data.get("__next")
             or (type(count) is int and count > len(records))):
         raise ValueError("audit incomplete: pagination or polling required")
     for record in records:
@@ -49,8 +49,11 @@ def main() -> int:
         print("Audit snapshot only; individual order fills NOT reconciled.")
         print("NO orders submitted; live and automatic execution disabled.")
         return 0
-    except (SaxoSimError, ValueError, PermissionError):
-        print("BLOCKED: account-scoped Saxo audit unavailable or incomplete")
+    except SaxoSimError as exc:
+        print(f"BLOCKED: Saxo SIM audit API: {exc}")
+        return 2
+    except (ValueError, PermissionError) as exc:
+        print(f"BLOCKED: Saxo SIM audit validation: {exc}")
         return 2
 
 
