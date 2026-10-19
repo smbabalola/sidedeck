@@ -32,12 +32,25 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ticker", required=True)
     parser.add_argument("--as-of", required=True)
+    parser.add_argument("--provider", default=None)
+    parser.add_argument("--model", default=None)
     args = parser.parse_args()
     try:
         # Dynamically load the separately installed upstream research package.
         config_module = import_module("tradingagents.default_config")
         graph_module = import_module("tradingagents.graph.trading_graph")
         config = config_module.DEFAULT_CONFIG.copy()
+        if (args.provider is None) != (args.model is None):
+            raise ValueError("provider and model are required together")
+        if args.provider is not None:
+            from sidedeck.application.p5_model_config import ModelChoice
+            choice = ModelChoice(args.provider, args.model)
+            # Explicitly select both upstream model tiers, not a silent fallback.
+            if choice.provider not in ("openai", "anthropic", "google", "openrouter"):
+                raise ValueError("TradingAgents provider adapter not verified")
+            config["llm_provider"] = choice.provider
+            config["deep_think_llm"] = choice.model
+            config["quick_think_llm"] = choice.model
         # The installed TradingAgents upstream owns data/LLM selection.
         # Upstream may print progress; keep stdout exclusively machine-readable JSON.
         with contextlib.redirect_stdout(io.StringIO()):
