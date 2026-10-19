@@ -19,12 +19,12 @@ def main() -> int:
     parser.add_argument("--ticker", default="SOFI")
     parser.add_argument("--models-config", required=True, help="versioned non-secret JSON file")
     parser.add_argument("--tradingagents-python", required=True)
-    parser.add_argument("--hedge-fund-bridge", required=True,
+    parser.add_argument("--hedge-fund-bridge", default="",
                         help="approved absolute path to JSON-output research bridge")
     parser.add_argument("--hedge-fund-python", required=True)
     parser.add_argument("--report", default="", help="optional local-only JSON status report")
     args = parser.parse_args()
-    if not Path(args.hedge_fund_bridge).is_file():
+    hedge_bridge = args.hedge_fund_bridge or str(\n        Path(__file__).resolve().parents[1] / "bridges" / "hedge_fund_bridge.py"\n    )\n    if not Path(hedge_bridge).is_file():
         print("P5_DECISION=NO-GO (hedge fund bridge missing)")
         return 2
     settings = load_model_settings(args.models_config)
@@ -41,7 +41,7 @@ def main() -> int:
         ExternalJsonAgent(
             upstream="virattt/ai-hedge-fund", portfolio_id="ai-trading",
             revision="upstream-unpinned-local",
-            command=(args.hedge_fund_python, args.hedge_fund_bridge),
+            command=(args.hedge_fund_python, hedge_bridge),
             model_provider=settings.portfolios["ai-trading"].default.provider,
             model_id=settings.portfolios["ai-trading"].default.model,
         ),
