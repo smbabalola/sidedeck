@@ -6,13 +6,15 @@ from sidedeck.infrastructure.alpaca_paper import AlpacaPaperBinding
 from sidedeck.infrastructure.alpaca_readonly import AlpacaReadOnly
 
 
-def setup(cash="2000", positions=None):
+def setup(cash="2000", positions=None, orders=None):
     def fixture(path):
         if path == "/v2/account":
             return {"id": "synthetic-sidedeck", "currency": "USD", "cash": cash,
                     "equity": cash, "status": "ACTIVE"}
-        assert path == "/v2/positions"
-        return [] if positions is None else positions
+        if path == "/v2/positions":
+            return [] if positions is None else positions
+        assert path == "/v2/orders?status=open&limit=500"
+        return [] if orders is None else orders
     portfolios = {
         "tradingagents": PortfolioState("tradingagents", Decimal("1000")),
         "ai-trading": PortfolioState("ai-trading", Decimal("1000")),
@@ -24,7 +26,7 @@ def test_read_only_consistent_dedicated_account():
     client, portfolios = setup()
     result = assess_paper_snapshot(
         client, portfolios, expected_account_id="synthetic-sidedeck",
-        dedicated_account=True, no_open_orders_verified=True,
+        dedicated_account=True,
     )
     assert result.safe_to_attribute
     assert result.reason == "read_only_snapshot_consistent"
@@ -63,4 +65,14 @@ def test_open_orders_unverified_blocks_attribution():
         dedicated_account=True,
     )
     assert not result.safe_to_attribute
-    assert result.reason == "open_orders_unverified"
+    assert result.reason == "read_only_snapshot_consistent"
+
+
+def test_actual_outstanding_orders_block_attribution():
+    client, portfolios = setup(orders=[{"id": "synthetic-order"}])
+    result = assess_paper_snapshot(
+        client, portfolios, expected_account_id="synthetic-sidedeck",
+        dedicated_account=True,
+    )
+    assert not result.safe_to_attribute
+    assert result.reason == "outstanding_open_orders"
