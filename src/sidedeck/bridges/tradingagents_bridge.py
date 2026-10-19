@@ -19,7 +19,7 @@ def extract_action(value: object) -> str:
     text = value.strip().upper()
     if text in ("BUY", "SELL", "HOLD"):
         return text
-    match = re.fullmatch(r"(?:FINAL (?:TRADE|TRANSACTION) (?:PROPOSAL|DECISION):\\s*)(BUY|SELL|HOLD)[.!]?", text)
+    match = re.fullmatch(r"(?:FINAL (?:TRADE|TRANSACTION) (?:PROPOSAL|DECISION):\s*)(BUY|SELL|HOLD)[.!]?", text)
     if match:
         return match.group(1)
     raise ValueError("TradingAgents decision is not unambiguous")
