@@ -77,9 +77,9 @@ def extract_annual_facts(payload: dict[str, Any], as_of: str) -> list[dict[str, 
         values[field] = periods
     ends = sorted({end for series in values.values() for end in series}, reverse=True)
     rows: list[dict[str, Any]] = []
-    for end in ends:
-        row = {"report_period": end, "period": "annual",
-               "metrics": {k: values[k][end] for k in _TAGS if end in values[k]}}
+    for period_end in ends:
+        row = {"report_period": period_end, "period": "annual",
+               "metrics": {k: values[k][period_end] for k in _TAGS if period_end in values[k]}}
         if row["metrics"]:
             rows.append(row)
     return rows
