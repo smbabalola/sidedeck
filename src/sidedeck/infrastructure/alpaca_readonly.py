@@ -7,7 +7,7 @@ from typing import Callable, Any
 
 from sidedeck.infrastructure.alpaca_paper import AlpacaPaperBinding
 
-Transport = Callable[[str], dict[str, Any]]
+Transport = Callable[[str], object]
 
 
 @dataclass(frozen=True)
