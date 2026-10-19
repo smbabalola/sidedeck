@@ -20,13 +20,13 @@ def snapshot_probe(path: str, ticker: str, as_of: str) -> dict[str, Any]:
         raise ValueError("insufficient verified financial periods")
     module = import_module("hedge_fund.signals.buffett")
     cls = getattr(module, "BuffettAgent")
-    # build_snapshot uses a data client, not an LLM; avoid instantiation, which
-    # might attempt to configure paid providers.
+    # Construct with a non-callable LLM sentinel. Snapshot must not invoke it.
+    # Normal __init__ sets required internal state such as _blind.
     import inspect
     signature = inspect.signature(cls.build_snapshot)
     snapshot = None
     try:
-        snapshot = cls.build_snapshot(object.__new__(cls), ticker, as_of, LocalFiledDataClient(path))
+        class NoLLM:\n            def __getattr__(self, name: str) -> Any:\n                raise RuntimeError("LLM access forbidden during snapshot probe")\n\n        agent = cls(llm=NoLLM())\n        snapshot = agent.build_snapshot(ticker, as_of, LocalFiledDataClient(path))
     except Exception as exc:
         frames = traceback.extract_tb(exc.__traceback__)
         last = frames[-1] if frames else None
