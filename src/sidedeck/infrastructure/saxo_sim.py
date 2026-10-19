@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -43,7 +44,8 @@ class SaxoSimClient:
             raise ValueError("invalid timeout")
 
     def get(self, path: str) -> dict[str, Any]:
-        if path not in _ALLOWED:
+        scoped = re.fullmatch(r"/port/v1/(balances|positions|orders)\\?ClientKey=[A-Za-z0-9%_\\-]+&AccountKey=[A-Za-z0-9%_\\-]+", path)
+        if path not in _ALLOWED and scoped is None:
             raise PermissionError("Saxo endpoint is not approved for read-only access")
         token = os.environ.get(self.token_env, "")
         if not token:
