@@ -26,7 +26,12 @@ def snapshot_probe(path: str, ticker: str, as_of: str) -> dict[str, Any]:
     signature = inspect.signature(cls.build_snapshot)
     snapshot = None
     try:
-        class NoLLM:\n            def __getattr__(self, name: str) -> Any:\n                raise RuntimeError("LLM access forbidden during snapshot probe")\n\n        agent = cls(llm=NoLLM())\n        snapshot = agent.build_snapshot(ticker, as_of, LocalFiledDataClient(path))
+        class NoLLM:
+            def __getattr__(self, name: str) -> Any:
+                raise RuntimeError("LLM access forbidden during snapshot probe")
+
+        agent = cls(llm=NoLLM())
+        snapshot = agent.build_snapshot(ticker, as_of, LocalFiledDataClient(path))
     except Exception as exc:
         frames = traceback.extract_tb(exc.__traceback__)
         last = frames[-1] if frames else None
