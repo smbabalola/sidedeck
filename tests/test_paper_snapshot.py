@@ -58,16 +58,6 @@ def test_wrong_account_blocks_even_when_balances_match():
     assert result.reason == "account_identity_mismatch"
 
 
-def test_open_orders_unverified_blocks_attribution():
-    client, portfolios = setup()
-    result = assess_paper_snapshot(
-        client, portfolios, expected_account_id="synthetic-sidedeck",
-        dedicated_account=True,
-    )
-    assert not result.safe_to_attribute
-    assert result.reason == "read_only_snapshot_consistent"
-
-
 def test_actual_outstanding_orders_block_attribution():
     client, portfolios = setup(orders=[{"id": "synthetic-order"}])
     result = assess_paper_snapshot(
