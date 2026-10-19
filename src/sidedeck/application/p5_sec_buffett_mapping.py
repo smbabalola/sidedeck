@@ -98,14 +98,24 @@ def map_sec_quarterly_to_buffett(
         representative = valid_sources[0]["accession"]
         accession_path = representative.replace("-", "")
         source_url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession_path}/"
-        output.append({"report_period": report.isoformat(), "filing_date": available.isoformat(),
-                       "period": "ttm", "source_url": source_url,
-                       "return_on_equity": value})
+        record = {"report_period": report.isoformat(), "filing_date": available.isoformat(),
+                  "period": "ttm", "source_url": source_url, "return_on_equity": value}
+        mapped_fields = ["return_on_equity"]
+        eps_source = None
+        annual = eps_by_period.get(report.isoformat())
+        if annual is not None:
+            annual_filed = date.fromisoformat(annual["filing_date"])
+            record["earnings_per_share"] = annual["eps_ttm"]
+            record["filing_date"] = max(available, annual_filed).isoformat()
+            mapped_fields.append("earnings_per_share")
+            eps_source = annual["source"]
+        output.append(record)
         evidence.append({"report_period": report.isoformat(), "available_from": available.isoformat(),
-                         "mapped_fields": mapped_fields,\n                         "annual_eps_source": eps_source,
+                         "mapped_fields": mapped_fields,
+                         "annual_eps_source": eps_source,
                          "source_components": valid_sources,
                          "unmapped": ["debt_to_equity", "gross_margin", "operating_margin",
-                                      "net_margin", "revenue_growth", "earnings_per_share",
+                                      "net_margin", "revenue_growth",
                                       "free_cash_flow_per_share", "market_cap",
                                       "price_to_earnings_ratio"]})
         seen.add(report.isoformat())
@@ -115,14 +125,15 @@ def map_sec_quarterly_to_buffett(
         "ticker": ticker, "cik": cik, "as_of": cutoff.isoformat(),
         "mapped_periods": len(output), "evidence": evidence,
         "assessment": "NO_GO", "buffett_ready": False, "broker_execution": "DISABLED",
-        "note": "Schema-compatible ROE-only observations are not Buffett-complete fundamentals",
+        "note": "Partial ROE and directly filed annual EPS are not Buffett-complete fundamentals",
     })
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Research-only SEC to Buffett ROE mapping")
     parser.add_argument("--quarterly-coverage", required=True)
-    parser.add_argument("--cik", type=int, required=True)\n    parser.add_argument("--multimetric-preview", help="Optional SEC preview with directly filed annual diluted EPS")
+    parser.add_argument("--cik", type=int, required=True)
+    parser.add_argument("--multimetric-preview", help="Optional SEC preview with directly filed annual diluted EPS")
     parser.add_argument("--output", required=True)
     parser.add_argument("--audit-output", required=True)
     args = parser.parse_args()
@@ -136,7 +147,8 @@ def main() -> int:
     output.write_text(json.dumps(mapped, indent=2), encoding="utf-8")
     audit.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     print("BUFFETT_SCHEMA_MAPPING=SAVED")
-    print("ROE_PERIODS=" + str(evidence["mapped_periods"]))\n    print("ANNUAL_EPS_PERIODS=" + str(sum("earnings_per_share" in r for r in mapped["records"])))
+    print("ROE_PERIODS=" + str(evidence["mapped_periods"]))
+    print("ANNUAL_EPS_PERIODS=" + str(sum("earnings_per_share" in r for r in mapped["records"])))
     print("BUFFETT_READY=FALSE; BROKER_EXECUTION=DISABLED")
     return 0
 
