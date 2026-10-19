@@ -24,7 +24,10 @@ def main() -> int:
     parser.add_argument("--hedge-fund-python", required=True)
     parser.add_argument("--report", default="", help="optional local-only JSON status report")
     args = parser.parse_args()
-    hedge_bridge = args.hedge_fund_bridge or str(\n        Path(__file__).resolve().parents[1] / "bridges" / "hedge_fund_bridge.py"\n    )\n    if not Path(hedge_bridge).is_file():
+    hedge_bridge = args.hedge_fund_bridge or str(
+        Path(__file__).resolve().parents[1] / "bridges" / "hedge_fund_bridge.py"
+    )
+    if not Path(hedge_bridge).is_file():
         print("P5_DECISION=NO-GO (hedge fund bridge missing)")
         return 2
     settings = load_model_settings(args.models_config)
