@@ -35,6 +35,7 @@ def main() -> int:
     parser.add_argument("--as-of", required=True)
     parser.add_argument("--provider", required=True)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--fundamentals-json", default="")
     args = parser.parse_args()
     try:
         from sidedeck.application.p5_model_config import ModelChoice
@@ -46,10 +47,17 @@ def main() -> int:
         buffett_module = import_module("hedge_fund.signals.buffett")
         client = llm_factory.make_llm(choice.model)
         with contextlib.redirect_stdout(io.StringIO()):
-            with fd_module.FDClient() as data_client:
+            if args.fundamentals_json:
+                from sidedeck.bridges.filed_fundamentals import LocalFiledDataClient
+                data_client = LocalFiledDataClient(args.fundamentals_json)
                 signal = buffett_module.BuffettAgent(llm=client).predict(
                     args.ticker, args.as_of, data_client,
                 )
+            else:
+                with fd_module.FDClient() as data_client:
+                    signal = buffett_module.BuffettAgent(llm=client).predict(
+                        args.ticker, args.as_of, data_client,
+                    )
         metadata = getattr(signal, "metadata", {})
         if not isinstance(metadata, dict):
             raise ValueError("invalid signal metadata")
