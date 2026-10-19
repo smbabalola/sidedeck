@@ -8,7 +8,7 @@ from sidedeck.application.p5_buffett_snapshot_probe import snapshot_probe
 def test_no_llm_snapshot_probe_uses_only_local_data(monkeypatch, tmp_path):
     path = tmp_path / "verified.json"
     path.write_text(json.dumps({"ticker": "SOFI", "records": [
-        {"report_period": f"2025-0{i}-31", "filing_date": f"2025-0{i}-31",
+        {"report_period": f"2025-0{i}-28", "filing_date": f"2025-0{i}-28",
          "period": "ttm", "source_url": "https://data.sec.gov/api/xbrl/filing"}
         for i in range(1, 5)
     ]}), encoding="utf-8")
