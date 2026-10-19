@@ -7,3 +7,7 @@ It is not yet authenticated against an actual Alpaca account. The expected Alpac
 Account balance reconciliation is not complete. The paper account may contain other holdings or capital: those must be excluded from strategy performance rather than silently absorbed. No order submission method is implemented and live trading remains prohibited. No automatic schedule has been enabled.
 
 Deployment must ensure credentials live only in the intended SideDeck environment, never GitHub source, build logs, documentation or browser code.
+
+## Latest read-only reconciliation safeguard
+
+Account assessment now queries the open-order endpoint itself, rather than accepting a caller-provided boolean. Any open order or malformed/incomplete response blocks attribution (or fails closed). A positive synthetic result is not evidence that a real Alpaca account is connected or dedicated; real authentication and independent account identity verification are still pending. Order submission remains disabled. No credentials have been accessed in CI.
