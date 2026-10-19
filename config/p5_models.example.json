@@ -1,0 +1,13 @@
+{
+  "revision": "p5-models-v1",
+  "portfolios": {
+    "tradingagents": {
+      "default": {"provider": "openai", "model": "gpt-4o-mini"},
+      "roles": {"manager": {"provider": "openai", "model": "gpt-4o"}}
+    },
+    "ai-trading": {
+      "default": {"provider": "anthropic", "model": "claude-sonnet-4-5"},
+      "roles": {}
+    }
+  }
+}
