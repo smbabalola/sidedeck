@@ -38,10 +38,10 @@ def reconcile_positions(
             symbol = instrument_id.removeprefix("US:")
             internal[symbol] = internal.get(symbol, Decimal("0")) + position.quantity
     broker: dict[str, Decimal] = {}
-    for position in broker_positions:
-        if not position.quantity.is_finite() or position.quantity <= 0 or position.symbol in broker:
+    for broker_position in broker_positions:
+        if not broker_position.quantity.is_finite() or broker_position.quantity <= 0 or broker_position.symbol in broker:
             raise ValueError("invalid broker position")
-        broker[position.symbol] = position.quantity
+        broker[broker_position.symbol] = broker_position.quantity
     diffs = tuple(
         PositionDifference(symbol, internal.get(symbol, Decimal("0")), broker.get(symbol, Decimal("0")))
         for symbol in sorted(set(internal) | set(broker))
