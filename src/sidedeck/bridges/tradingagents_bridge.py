@@ -6,6 +6,8 @@ Output ONLY a JSON decision on stdout. Never send order to broker.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import re
 import sys
@@ -35,8 +37,10 @@ def main() -> int:
         from tradingagents.graph.trading_graph import TradingAgentsGraph
         config = DEFAULT_CONFIG.copy()
         # The installed TradingAgents upstream owns data/LLM selection.
-        graph = TradingAgentsGraph(debug=False, config=config)
-        _state, final = graph.propagate(args.ticker, args.as_of)
+        # Upstream may print progress; keep stdout exclusively machine-readable JSON.
+        with contextlib.redirect_stdout(io.StringIO()):
+            graph = TradingAgentsGraph(debug=False, config=config)
+            _state, final = graph.propagate(args.ticker, args.as_of)
         action = extract_action(final)
         print(json.dumps({"ticker": args.ticker, "decision": action,
                           "rationale": f"TradingAgents returned {action}; see isolated upstream logs."}))
