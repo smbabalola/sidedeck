@@ -8,6 +8,7 @@ import argparse
 import importlib
 import importlib.util
 import json
+import inspect
 import sys
 from typing import Any
 
@@ -40,6 +41,19 @@ def probe() -> dict[str, Any]:
             fields = getattr(cls, "model_fields", None)
             if isinstance(fields, dict):
                 found[module_name]["field_names"] = sorted(fields)
+    # Inspect required constructor fields and the Buffett snapshot API without invoking it.
+    model_info = found.get("hedge_fund.data.models", {})
+    if model_info.get("available") and model_info.get("symbols", {}).get("FinancialMetrics"):
+        model_cls = getattr(importlib.import_module("hedge_fund.data.models"), "FinancialMetrics")
+        fields = getattr(model_cls, "model_fields", {})
+        model_info["required_fields"] = sorted(name for name, field in fields.items() if field.is_required())
+    agent_info = found.get("hedge_fund.signals.buffett", {})
+    if agent_info.get("available") and agent_info.get("symbols", {}).get("BuffettAgent"):
+        agent_cls = getattr(importlib.import_module("hedge_fund.signals.buffett"), "BuffettAgent")
+        agent_info["snapshot_method_available"] = hasattr(agent_cls, "build_snapshot")
+        if agent_info["snapshot_method_available"]:
+            agent_info["snapshot_signature"] = str(inspect.signature(agent_cls.build_snapshot))
+        agent_info["predict_signature"] = str(inspect.signature(agent_cls.predict))
     compatible = all(
         item["available"] and all(item["symbols"].values()) for item in found.values()
     )
