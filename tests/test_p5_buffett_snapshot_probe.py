@@ -15,6 +15,9 @@ def test_no_llm_snapshot_probe_uses_only_local_data(monkeypatch, tmp_path):
     calls = []
 
     class FakeAgent:
+        def __init__(self, *, llm):
+            self.llm = llm
+
         def build_snapshot(self, ticker, as_of, client):
             calls.append((ticker, as_of))
             return {"local": True}
@@ -37,6 +40,9 @@ def test_snapshot_probe_reports_failure_without_claiming_approval(monkeypatch, t
     ]}), encoding="utf-8")
 
     class FakeAgent:
+        def __init__(self, *, llm):
+            self.llm = llm
+
         def build_snapshot(self, ticker, as_of, client):
             raise RuntimeError("upstream incompatible")
 
