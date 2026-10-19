@@ -18,11 +18,50 @@ class BuffettMappingUnavailable(ValueError):
     pass
 
 
-def map_sec_quarterly_to_buffett(coverage: dict[str, Any], cik: int) -> tuple[dict[str, Any], dict[str, Any]]:
+def _annual_eps_by_period(preview: dict[str, Any], ticker: str, cutoff: date) -> dict[str, dict[str, Any]]:
+    """Only directly reported full-year diluted EPS, never sum quarterly EPS."""
+    if preview.get("ticker") != ticker:
+        raise BuffettMappingUnavailable("EPS preview ticker mismatch")
+    metrics = preview.get("metrics")
+    if not isinstance(metrics, dict) or not isinstance(metrics.get("annual_diluted_eps_ttm"), list):
+        raise BuffettMappingUnavailable("missing directly filed annual EPS series")
+    found: dict[str, dict[str, Any]] = {}
+    for row in metrics["annual_diluted_eps_ttm"]:
+        try:
+            report = date.fromisoformat(row["report_period"])
+            filed = date.fromisoformat(row["filing_date"])
+            start = date.fromisoformat(row["start"])
+            value = row["eps_ttm"]
+            source = row["source"]
+            source_filed = date.fromisoformat(source["filed"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise BuffettMappingUnavailable("invalid annual EPS provenance") from exc
+        if (not 330 <= (report - start).days <= 380
+                or filed < report or source_filed != filed or filed > cutoff
+                or isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or row.get("method") != "directly_filed_full_year_eps_no_quarterly_aggregation"
+                or source.get("tag") != "EarningsPerShareDiluted"
+                or source.get("unit") != "USD/shares"
+                or source.get("start") != row["start"]
+                or source.get("end") != row["report_period"]
+                or not isinstance(source.get("accession"), str)
+                or not re.fullmatch(r"\d{10}-\d{2}-\d{6}", source["accession"])
+                or row["report_period"] in found):
+            raise BuffettMappingUnavailable("invalid or duplicated annual EPS evidence")
+        found[row["report_period"]] = row
+    return found
+
+
+def map_sec_quarterly_to_buffett(
+    coverage: dict[str, Any], cik: int, annual_eps_preview: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     ticker = coverage.get("ticker")
     if not isinstance(ticker, str) or not ticker or not isinstance(cik, int) or isinstance(cik, bool) or cik <= 0:
         raise BuffettMappingUnavailable("invalid ticker or CIK")
     cutoff = date.fromisoformat(coverage["as_of"])
+    eps_by_period = (_annual_eps_by_period(annual_eps_preview, ticker, cutoff)
+                     if annual_eps_preview is not None else {})
     periods = coverage.get("periods")
     if not isinstance(periods, list) or coverage.get("complete_period_count") != len(periods):
         raise BuffettMappingUnavailable("inconsistent coverage")
@@ -63,7 +102,7 @@ def map_sec_quarterly_to_buffett(coverage: dict[str, Any], cik: int) -> tuple[di
                        "period": "ttm", "source_url": source_url,
                        "return_on_equity": value})
         evidence.append({"report_period": report.isoformat(), "available_from": available.isoformat(),
-                         "mapped_fields": ["return_on_equity"],
+                         "mapped_fields": mapped_fields,\n                         "annual_eps_source": eps_source,
                          "source_components": valid_sources,
                          "unmapped": ["debt_to_equity", "gross_margin", "operating_margin",
                                       "net_margin", "revenue_growth", "earnings_per_share",
@@ -83,7 +122,7 @@ def map_sec_quarterly_to_buffett(coverage: dict[str, Any], cik: int) -> tuple[di
 def main() -> int:
     parser = argparse.ArgumentParser(description="Research-only SEC to Buffett ROE mapping")
     parser.add_argument("--quarterly-coverage", required=True)
-    parser.add_argument("--cik", type=int, required=True)
+    parser.add_argument("--cik", type=int, required=True)\n    parser.add_argument("--multimetric-preview", help="Optional SEC preview with directly filed annual diluted EPS")
     parser.add_argument("--output", required=True)
     parser.add_argument("--audit-output", required=True)
     args = parser.parse_args()
@@ -91,11 +130,13 @@ def main() -> int:
     if output == audit or output.exists() or audit.exists():
         parser.error("output collision or existing file; refusing to overwrite")
     coverage = json.loads(Path(args.quarterly_coverage).read_text(encoding="utf-8"))
-    mapped, evidence = map_sec_quarterly_to_buffett(coverage, args.cik)
+    eps_preview = (json.loads(Path(args.multimetric_preview).read_text(encoding="utf-8"))
+                   if args.multimetric_preview else None)
+    mapped, evidence = map_sec_quarterly_to_buffett(coverage, args.cik, eps_preview)
     output.write_text(json.dumps(mapped, indent=2), encoding="utf-8")
     audit.write_text(json.dumps(evidence, indent=2), encoding="utf-8")
     print("BUFFETT_SCHEMA_MAPPING=SAVED")
-    print("ROE_PERIODS=" + str(evidence["mapped_periods"]))
+    print("ROE_PERIODS=" + str(evidence["mapped_periods"]))\n    print("ANNUAL_EPS_PERIODS=" + str(sum("earnings_per_share" in r for r in mapped["records"])))
     print("BUFFETT_READY=FALSE; BROKER_EXECUTION=DISABLED")
     return 0
 
