@@ -11,7 +11,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
