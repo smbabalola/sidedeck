@@ -48,7 +48,7 @@ def map_sec_quarterly_to_buffett(coverage: dict[str, Any], cik: int) -> tuple[di
             if not isinstance(source, dict):
                 raise BuffettMappingUnavailable("invalid SEC source")
             accession = source.get("accession")
-            if not isinstance(accession, str) or not re.fullmatch(r"\\d{10}-\\d{2}-\\d{6}", accession):
+            if not isinstance(accession, str) or not re.fullmatch(r"\d{10}-\d{2}-\d{6}", accession):
                 raise BuffettMappingUnavailable("invalid SEC accession")
             source_filed = date.fromisoformat(source["filed"])
             if source_filed > available:
