@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SIM_BASE = "https://gateway.saxobank.com/sim/openapi"
-_ALLOWED = frozenset(("/port/v1/users/me", "/port/v1/accounts/me"))
+_ALLOWED = frozenset(("/port/v1/users/me", "/port/v1/accounts/me", "/port/v1/balances/me", "/port/v1/positions/me", "/port/v1/orders/me"))
 
 
 class SaxoSimError(RuntimeError):
@@ -76,3 +76,15 @@ class SaxoSimClient:
 
     def accounts(self) -> dict[str, Any]:
         return self.get("/port/v1/accounts/me")
+
+    def client_balance(self) -> dict[str, Any]:
+        """Client-wide balance: never assume it belongs to a single account."""
+        return self.get("/port/v1/balances/me")
+
+    def client_positions(self) -> dict[str, Any]:
+        """Client-wide positions, potentially paginated; no order execution."""
+        return self.get("/port/v1/positions/me")
+
+    def client_orders(self) -> dict[str, Any]:
+        """Client-wide open orders, potentially paginated."""
+        return self.get("/port/v1/orders/me")
