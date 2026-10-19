@@ -7,17 +7,22 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import os
-from dataclasses import dataclass
+import secrets
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
 
 _PRECHECK_URL = "https://gateway.saxobank.com/sim/openapi/trade/v2/orders/precheck"
+# Process-local key: evidence parsed from a hand-built dict, a fixture, or a
+# previous process can never carry a valid transport seal.
+_TRANSPORT_SEAL_KEY = secrets.token_bytes(32)
 
 
 class SaxoPrecheckError(RuntimeError):
@@ -62,6 +67,25 @@ class PrecheckEvidence:
     quantity: int = 0
     order_type: str = ""
     duration_type: str = ""
+    transport_seal: str = ""
+
+    def _seal_material(self) -> bytes:
+        collected = self.collected_at.isoformat() if self.collected_at else ""
+        return json.dumps([
+            self.result, self.reason, str(self.estimated_cash_required), self.cash_currency,
+            str(self.estimated_total_cost), self.total_cost_currency,
+            str(self.estimated_total_cost_account), self.account_cost_currency,
+            str(self.instrument_to_account_rate), self.request_sha256, self.response_sha256,
+            collected, self.account_id, self.uic, self.side, self.quantity,
+            self.order_type, self.duration_type,
+        ], separators=(",", ":")).encode("utf-8")
+
+    def is_transport_sealed(self) -> bool:
+        """True only for evidence returned by this process's SIM precheck POST."""
+        if not self.transport_seal:
+            return False
+        expected = hmac.new(_TRANSPORT_SEAL_KEY, self._seal_material(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, self.transport_seal)
 
     @property
     def currency(self) -> str:
@@ -173,7 +197,8 @@ def parse_precheck(data: dict[str, Any], *, instrument_currency: str | None = No
 def run_sim_precheck(scope: SaxoAccountScope, *, uic: int = 211,
                      instrument_currency: str = "USD",
                      account_currency: str | None = None,
-                     timeout_seconds: float = 10) -> PrecheckEvidence:
+                     timeout_seconds: float = 10,
+                     clock: Callable[[], datetime] | None = None) -> PrecheckEvidence:
     """One broker precheck POST, strictly SIM-only; /orders is never called."""
     if timeout_seconds <= 0 or timeout_seconds > 30:
         raise ValueError("invalid timeout")
@@ -197,7 +222,11 @@ def run_sim_precheck(scope: SaxoAccountScope, *, uic: int = 211,
         raise SaxoPrecheckError(f"Saxo SIM precheck HTTP {exc.code}") from None
     except (URLError, OSError, ValueError):
         raise SaxoPrecheckError("Saxo SIM precheck connection or response failed") from None
-    return parse_precheck(data, instrument_currency=instrument_currency,
-                          account_currency=account_currency, request_payload=payload,
-                          account_id=scope.account_id,
-                          collected_at=datetime.now(timezone.utc))
+    evidence = parse_precheck(data, instrument_currency=instrument_currency,
+                              account_currency=account_currency, request_payload=payload,
+                              account_id=scope.account_id,
+                              collected_at=(clock or (lambda: datetime.now(timezone.utc)))())
+    if evidence.reason != "broker_precheck_validated":
+        return evidence
+    seal = hmac.new(_TRANSPORT_SEAL_KEY, evidence._seal_material(), hashlib.sha256).hexdigest()
+    return replace(evidence, transport_seal=seal)

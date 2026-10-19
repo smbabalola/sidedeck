@@ -26,6 +26,27 @@
 - [ ] Obtain separately approved authenticated SIM quote, FX, precheck and
   execution-history evidence; no order was submitted in this batch.
 
+## P4 independent review — Claude Code, 2026-10-19 (`feat/p4-claude-review`)
+
+- [x] Replaced self-generated approval with verify-only operator approval
+  (OpenSSH signature, operator-held key; requester cannot approve).
+- [x] Sealed SIM precheck evidence; fixture/hand-built prechecks cannot
+  authorize. Broker EUR rate/cost/cash cross-checked against quote and FX.
+- [x] Quote/FX freshness measured from submission time; request expires
+  5 minutes after preparation; approval lifetime at most 10 minutes.
+- [x] Submitter drives the broker lifecycle; malformed acknowledgement is
+  UNKNOWN; read-only reconciliation of UNKNOWN without any retry.
+- [x] Fills bound to the durable CONSUMED authorization (portfolio, account,
+  broker order, quantity); naive timestamps and wrong Uic/side rejected.
+- [x] Migration `0008_operator_approval_binding`; acceptance report now
+  evaluates gates; added `SIM_SUBMISSION_RELEASED=False` release gate.
+- [ ] **BLOCKED (permission):** Stage 2 authenticated read-only SIM account,
+  instrument, quote, FX and precheck evidence; a trusted market-data verifier.
+- [ ] **BLOCKED (owner):** operator key + `allowed_signers`; owner decision
+  whether SIM fills post to the strategy ledger or a separate SIM ledger.
+- [ ] **BLOCKED (approval):** release gate change and one signed SIM order.
+- Evidence and CI: see `docs/P4_CLAUDE_REVIEW.md` and the record below.
+
 ## Verification record
 
 - Branch: `feat/p3-readonly-batch`

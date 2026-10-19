@@ -18,6 +18,7 @@ from decimal import Decimal
 from sidedeck.application.saxo_execution_history import BrokerExecution
 from sidedeck.application.saxo_market_data import FxSnapshot
 from sidedeck.application.saxo_order_lifecycle import advance_lifecycle, lifecycle_state
+from sidedeck.application.saxo_sim_submission import ensure_authorization_table
 from sidedeck.domain.accounting import Ledger, fill_event
 from sidedeck.domain.contracts import EventType, LedgerEvent
 
@@ -44,6 +45,25 @@ class SaxoExecutionPipeline:
                        "event_sha256 TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('PENDING','RECOVERING','POSTED')), "
                        "broker_order_id TEXT NOT NULL, fill_status TEXT NOT NULL, claimed_at TEXT, "
                        "authorized_quantity TEXT NOT NULL DEFAULT '1', account_id TEXT NOT NULL DEFAULT '')")
+            ensure_authorization_table(db)
+
+    def _authorized_binding(self, order_key: str, *, portfolio_id: str, account_id: str,
+                            broker_order_id: str) -> Decimal:
+        """Fills post only to the portfolio/account/order the operator approved."""
+        with sqlite3.connect(self._db_path) as db:
+            row = db.execute("SELECT portfolio_id, account_id, status, broker_order_id, quantity "
+                             "FROM saxo_execution_authorization WHERE order_key=?",
+                             (order_key,)).fetchone()
+        if row is None or row[2] != "CONSUMED":
+            raise ValueError("execution has no consumed operator authorization")
+        if row[0] != portfolio_id or row[1] != account_id:
+            raise ValueError("execution portfolio or account differs from the authorization")
+        if row[3] != broker_order_id:
+            raise ValueError("execution broker order ID does not match the authorization")
+        quantity = Decimal(str(row[4]))
+        if not quantity.is_finite() or quantity <= 0 or quantity != quantity.to_integral_value():
+            raise ValueError("authorized execution quantity is invalid")
+        return quantity
 
     def _advance_lifecycle(self, order_key: str, order_id: str, status: str) -> None:
         state = lifecycle_state(self._db_path, order_key)
@@ -108,7 +128,6 @@ class SaxoExecutionPipeline:
         fx: FxSnapshot,
         account_id: str,
         now: datetime,
-        authorized_quantity: Decimal = Decimal("1"),
     ) -> AppliedExecution:
         """Atomically deduplicate external fills before mutating the ledger."""
         if execution.account_id != account_id or execution.external_reference != order_key:
@@ -118,8 +137,9 @@ class SaxoExecutionPipeline:
             raise ValueError("execution requires an acknowledged broker order")
         if lifecycle[1] != execution.order_id:
             raise ValueError("execution broker order ID does not match lifecycle")
-        if not authorized_quantity.is_finite() or authorized_quantity <= 0:
-            raise ValueError("authorized execution quantity is invalid")
+        authorized_quantity = self._authorized_binding(
+            order_key, portfolio_id=portfolio_id, account_id=account_id,
+            broker_order_id=execution.order_id)
         if (execution.status not in {"Fill", "FinalFill"}
                 or execution.instrument_currency != "USD"
                 or execution.account_currency != "EUR"
@@ -135,6 +155,8 @@ class SaxoExecutionPipeline:
         else:
             raise ValueError("fee currency has no approved conversion")
         event_time = datetime.fromisoformat(execution.occurred_at.replace("Z", "+00:00"))
+        if event_time.tzinfo is None or event_time.utcoffset() is None:
+            raise ValueError("execution timestamp must carry a timezone")
         event_time = event_time.astimezone(timezone.utc)
         event = fill_event(portfolio_id, "saxo:" + execution.execution_id,
                            EventType.BUY_FILL, "US:SOFI", execution.quantity,

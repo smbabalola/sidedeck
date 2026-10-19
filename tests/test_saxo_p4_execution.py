@@ -6,10 +6,15 @@ import pytest
 
 from sidedeck.application.saxo_execution_history import fetch_history, order_history_path, parse_executions, read_order_history, validate_continuation
 from sidedeck.application.saxo_market_data import EvidenceOrigin, ExecutionEvidence, FxSnapshot
-from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence, parse_precheck, precheck_payload
+import hashlib
+import sqlite3
+
+from sidedeck.application import saxo_sim_submission as submission_module
+from sidedeck.application.saxo_order_lifecycle import lifecycle_state
+from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence, parse_precheck, precheck_payload, run_sim_precheck
 from sidedeck.application.saxo_sim_submission import (
-    ExecutionAuthorization, SaxoSimSubmitter, SubmissionBlocked, authorize_execution,
-    prepare_sofi_request,
+    ExecutionAuthorization, SaxoSimSubmitter, SubmissionBlocked, accept_operator_approval,
+    approval_material, prepare_sofi_request, reconcile_uncertain_submission,
 )
 from sidedeck.domain.contracts import MarketSnapshot, PriceType, Session
 from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
@@ -32,24 +37,54 @@ def evidence() -> ExecutionEvidence:
                              fx_origin=EvidenceOrigin.AUTHENTICATED_PROVIDER)
 
 
-def precheck() -> PrecheckEvidence:
-    scope = SaxoAccountScope("approved", "opaque-account-key", "client")
-    payload = precheck_payload(scope, uic=23241352)
-    return parse_precheck({"PreCheckResult": "Ok", "EstimatedCashRequired": "41.03",
-                           "EstimatedCashRequiredCurrency": "EUR", "EstimatedTotalCost": "37.30",
-                           "EstimatedTotalCostCurrency": "USD", "EstimatedTotalCostInAccountCurrency": "41.03",
-                           "EstimatedTotalCostInAccountCurrencyCurrency": "EUR",
-                           "InstrumentToAccountConversionRate": "1.10"},
-                          instrument_currency="USD", account_currency="EUR",
-                          request_payload=payload, account_id="approved", collected_at=NOW)
+# Economically coherent synthetic broker precheck: $41 at 1.10 USD/EUR.
+PRECHECK_BODY = {"PreCheckResult": "Ok", "EstimatedCashRequired": "37.55",
+                 "EstimatedCashRequiredCurrency": "EUR", "EstimatedTotalCost": "0.30",
+                 "EstimatedTotalCostCurrency": "USD", "EstimatedTotalCostInAccountCurrency": "0.27",
+                 "EstimatedTotalCostInAccountCurrencyCurrency": "EUR",
+                 "InstrumentToAccountConversionRate": "0.9091"}
+SCOPE = SaxoAccountScope("approved", "opaque-account-key", "client")
+
+
+def precheck(body=None) -> PrecheckEvidence:
+    """Unsealed parse of a synthetic body, as a fixture or hand-built object would be."""
+    return parse_precheck(body or PRECHECK_BODY, instrument_currency="USD", account_currency="EUR",
+                          request_payload=precheck_payload(SCOPE, uic=23241352),
+                          account_id="approved", collected_at=NOW)
+
+
+def sealed_precheck(monkeypatch, body=None) -> PrecheckEvidence:
+    """Drive the real SIM precheck transport against a fake opener (no network)."""
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, _limit):
+            return json.dumps(body or PRECHECK_BODY).encode()
+
+    class Opener:
+        def open(self, request, timeout):
+            assert request.full_url.endswith("/sim/openapi/trade/v2/orders/precheck")
+            return Response()
+
+    monkeypatch.setenv("SAXO_SIM_ACCESS_TOKEN", "fixture-token")
+    monkeypatch.setattr("sidedeck.infrastructure.saxo_precheck.build_opener", lambda *_: Opener())
+    return run_sim_precheck(SCOPE, uic=23241352, account_currency="EUR", clock=lambda: NOW)
+
+
+def operator_signature(material: str, principal: str) -> str:
+    """Stands in for the human's out-of-band signature; not reachable from SideDeck code."""
+    return "fixture-sig:" + hashlib.sha256((principal + "|" + material).encode()).hexdigest()
 
 
 class TrustedVerifier:
-    def attest(self, material):
-        return "fixture-attestation:" + material[:16]
+    """Verify-only fixture verifier; it has no way to create an approval."""
 
-    def verify(self, attestation, material):
-        return attestation == "fixture-attestation:" + material[:16]
+    def verify(self, attestation, material, principal):
+        return attestation == operator_signature(material, principal)
 
 
 class TrustedMarketVerifier:
@@ -84,13 +119,15 @@ def test_execution_history_paginates_and_parses_only_fill_evidence():
     parsed = parse_executions((
         {"AccountId": "22866064", "OrderId": "o", "ExternalReference": "k",
          "ExecutionId": "fill-1", "Status": "FinalFill", "FillAmount": 1,
+         "Uic": 23241352, "BuySell": "Buy",
          "ExecutionPrice": "41", "Fees": "0.2",
          "ExecutionTime": "2026-10-19T14:00:00Z"},
         {"AccountId": "22866064", "OrderId": "o", "ExternalReference": "k",
          "Status": "Placed"},
     ), account_id="22866064", order_id="o", external_reference="k",
         instrument_currency="USD", account_currency="EUR",
-        price_currency="USD", fees_currency="EUR", authorized_quantity=Decimal("1"))
+        price_currency="USD", fees_currency="EUR", authorized_quantity=Decimal("1"),
+        expected_uic=23241352)
     assert len(rows) == 2 and parsed[0].execution_id == "fill-1"
     assert parsed[0].fees == Decimal("0.2")
 
@@ -105,7 +142,8 @@ def test_history_rejects_loop_duplicate_and_cross_account():
         parse_executions(({"AccountId": "wrong"},), account_id="22866064",
                          order_id="o", external_reference="k",
                          instrument_currency="USD", account_currency="EUR",
-                         price_currency="USD", fees_currency="EUR", authorized_quantity=Decimal("1"))
+                         price_currency="USD", fees_currency="EUR", authorized_quantity=Decimal("1"),
+        expected_uic=23241352)
 
 
 def test_history_cursor_cannot_change_scope():
@@ -163,66 +201,330 @@ def test_official_history_path_and_sim_payload_boundary():
         SaxoSimSubmitTransport().submit(payload)
 
 
-def test_submission_is_disabled_and_approval_is_exactly_bound(tmp_path):
-    request = prepare_sofi_request(order_key="sofi-1", portfolio_id="tradingagents",
-                                   evidence=evidence(), precheck=precheck(),
-                                   account_scope=SaxoAccountScope("approved", "opaque-account-key", "client"),
-                                   expected_account_id="approved",
-                                   portfolio_cash_usd=Decimal("1000"), now=NOW,
-                                   market_verifier=TrustedMarketVerifier())
-    submitter = SaxoSimSubmitter(str(tmp_path / "orders.sqlite"), approval_verifier=TrustedVerifier())
-    approval = authorize_execution(request, authorization_id="approval-1",
-                                   issued_by="operator", expires_at=NOW + timedelta(minutes=1),
-                                   verifier=TrustedVerifier())
-    with pytest.raises(SubmissionBlocked, match="disabled"):
-        submitter.submit(request, approval, now=NOW)
-    class Acknowledged:
-        def submit(self, payload):
-            return {"OrderId": "broker-1"}
+def prepared(monkeypatch, *, order_key="sofi-1", portfolio_id="tradingagents", now=NOW,
+             **overrides):
+    kwargs = dict(order_key=order_key, portfolio_id=portfolio_id, evidence=evidence(),
+                  precheck=sealed_precheck(monkeypatch), account_scope=SCOPE,
+                  expected_account_id="approved", portfolio_cash_usd=Decimal("1000"), now=now,
+                  market_verifier=TrustedMarketVerifier())
+    kwargs.update(overrides)
+    return prepare_sofi_request(**kwargs)
 
+
+def approve(request, *, authorization_id="approval-1", approver="operator",
+            expires_at=NOW + timedelta(minutes=5), now=NOW, verifier=None, signature=None):
+    material = approval_material(request, authorization_id=authorization_id,
+                                 approver=approver, expires_at=expires_at)
+    return accept_operator_approval(
+        request, authorization_id=authorization_id, approver=approver, expires_at=expires_at,
+        attestation=signature or operator_signature(material, approver),
+        verifier=verifier or TrustedVerifier(), now=now)
+
+
+@pytest.fixture
+def released(monkeypatch):
+    """Simulates a future approved release inside a test only."""
+    monkeypatch.setattr(submission_module, "SIM_SUBMISSION_RELEASED", True)
+
+
+class Acknowledged:
+    def __init__(self, response=None):
+        self.calls = 0
+        self.response = response or {"OrderId": "broker-1"}
+
+    def submit(self, payload):
+        self.calls += 1
+        return self.response
+
+
+class Timeout:
+    def __init__(self):
+        self.calls = 0
+
+    def submit(self, payload):
+        self.calls += 1
+        raise TimeoutError("simulated")
+
+
+def auth_row(db, order_key="sofi-1"):
+    with sqlite3.connect(db) as connection:
+        return connection.execute("SELECT status, broker_order_id FROM saxo_execution_authorization "
+                                  "WHERE order_key=?", (order_key,)).fetchone()
+
+
+def test_submission_is_disabled_by_release_gate_even_when_everything_else_is_on(tmp_path, monkeypatch):
+    request = prepared(monkeypatch)
+    transport = Acknowledged()
+    submitter = SaxoSimSubmitter(str(tmp_path / "orders.sqlite"), network_enabled=True,
+                                 transport=transport, approval_verifier=TrustedVerifier())
+    with pytest.raises(SubmissionBlocked, match="NO-GO"):
+        submitter.submit(request, approve(request), now=NOW)
+    assert transport.calls == 0
+    assert submission_module.SIM_SUBMISSION_RELEASED is False
+
+
+def test_submission_is_disabled_and_approval_is_exactly_bound(tmp_path, monkeypatch, released):
+    request = prepared(monkeypatch)
+    approval = approve(request)
+    with pytest.raises(SubmissionBlocked, match="disabled"):
+        SaxoSimSubmitter(str(tmp_path / "orders.sqlite"),
+                         approval_verifier=TrustedVerifier()).submit(request, approval, now=NOW)
+    forged = ExecutionAuthorization("x", "operator", "sidedeck-automation", "sofi-1", "wrong",
+                                    "tradingagents", "SOFI", 23241352, "Buy", 1, "Market",
+                                    "wrong", "wrong", "wrong", NOW + timedelta(minutes=1))
     with pytest.raises(SubmissionBlocked, match="authorization"):
         SaxoSimSubmitter(str(tmp_path / "enabled.sqlite"), network_enabled=True,
                          transport=Acknowledged(), approval_verifier=TrustedVerifier()).submit(
-                             request, ExecutionAuthorization("x", "operator", "wrong",
-                             "tradingagents", "SOFI", 23241352, "Buy", 1, "Market",
-                             "wrong", "wrong", "wrong", NOW), now=NOW)
+                             request, forged, now=NOW)
 
 
-def test_fixture_labels_cannot_upgrade_market_data_or_create_approval():
-    kwargs = dict(order_key="sofi-no", portfolio_id="tradingagents", evidence=evidence(),
-                  precheck=precheck(), account_scope=SaxoAccountScope(
-                      "approved", "opaque-account-key", "client"),
-                  expected_account_id="approved", portfolio_cash_usd=Decimal("1000"), now=NOW)
+def test_fixture_labels_cannot_upgrade_market_data_or_create_approval(monkeypatch):
     with pytest.raises(SubmissionBlocked, match="attestation"):
-        prepare_sofi_request(**kwargs)
-    request = prepare_sofi_request(**kwargs, market_verifier=TrustedMarketVerifier())
+        prepared(monkeypatch, market_verifier=None)
+    request = prepared(monkeypatch)
     with pytest.raises(SubmissionBlocked, match="verifier"):
-        authorize_execution(request, authorization_id="no-trust", issued_by="operator",
-                            expires_at=NOW + timedelta(minutes=1))
+        accept_operator_approval(request, authorization_id="no-trust", approver="operator",
+                                 expires_at=NOW + timedelta(minutes=1), attestation="x",
+                                 verifier=None, now=NOW)
 
 
-def test_injected_sim_transport_is_single_attempt_and_uncertain(tmp_path):
-    class Timeout:
-        calls = 0
+def test_self_attesting_verifier_cannot_approve_its_own_request(tmp_path, monkeypatch, released):
+    class SelfAttesting(TrustedVerifier):
+        def attest(self, material):
+            return "self"
 
-        def submit(self, payload):
-            self.calls += 1
-            raise TimeoutError("simulated")
+    request = prepared(monkeypatch)
+    with pytest.raises(SubmissionBlocked, match="cannot authorize its own"):
+        approve(request, verifier=SelfAttesting())
+    transport = Acknowledged()
+    with pytest.raises(SubmissionBlocked, match="cannot authorize its own"):
+        SaxoSimSubmitter(str(tmp_path / "o.sqlite"), network_enabled=True, transport=transport,
+                         approval_verifier=SelfAttesting()).submit(request, approve(request), now=NOW)
+    assert transport.calls == 0
 
-    request = prepare_sofi_request(order_key="sofi-2", portfolio_id="ai-trading",
-                                   evidence=evidence(), precheck=precheck(),
-                                   account_scope=SaxoAccountScope("approved", "opaque-account-key", "client"),
-                                   expected_account_id="approved",
-                                   portfolio_cash_usd=Decimal("1000"), now=NOW,
-                                   market_verifier=TrustedMarketVerifier())
+
+def test_requester_cannot_approve_and_signature_is_bound_to_exact_order(monkeypatch):
+    request = prepared(monkeypatch)
+    with pytest.raises(SubmissionBlocked, match="requesting principal"):
+        approve(request, approver="sidedeck-automation")
+    other = prepared(monkeypatch, order_key="sofi-other")
+    expires = NOW + timedelta(minutes=5)
+    signature_for_other = operator_signature(
+        approval_material(other, authorization_id="approval-1", approver="operator",
+                          expires_at=expires), "operator")
+    with pytest.raises(SubmissionBlocked, match="signature is not valid"):
+        approve(request, signature=signature_for_other)
+    operator_sig = operator_signature(
+        approval_material(request, authorization_id="approval-1", approver="operator",
+                          expires_at=expires), "operator")
+    with pytest.raises(SubmissionBlocked, match="signature is not valid"):
+        approve(request, approver="intruder", signature=operator_sig)
+
+
+def test_approval_expiry_window_and_stale_evidence_are_enforced(tmp_path, monkeypatch, released):
+    request = prepared(monkeypatch)
+    with pytest.raises(SubmissionBlocked, match="expiry"):
+        approve(request, expires_at=NOW + timedelta(hours=1))
+    with pytest.raises(SubmissionBlocked, match="expiry"):
+        approve(request, expires_at=NOW)
+    submitter = SaxoSimSubmitter(str(tmp_path / "o.sqlite"), network_enabled=True,
+                                 transport=Acknowledged(), approval_verifier=TrustedVerifier())
+    approval = approve(request, expires_at=NOW + timedelta(minutes=10))
+    with pytest.raises(SubmissionBlocked, match="stale"):
+        submitter.submit(request, approval, now=NOW + timedelta(minutes=6))
+    short = approve(request, authorization_id="a2", expires_at=NOW + timedelta(minutes=1))
+    with pytest.raises(SubmissionBlocked, match="expired"):
+        submitter.submit(request, short, now=NOW + timedelta(minutes=2))
+
+
+def test_stale_quote_cannot_pass_with_a_permissive_bundle_max_age(monkeypatch):
+    old = NOW - timedelta(minutes=10)
+    quote = MarketSnapshot(instrument_id="US:SOFI", ticker="SOFI", provider="licensed-feed",
+                           price_type=PriceType.QUOTE, price=Decimal("41"), market_timestamp=old,
+                           ingestion_timestamp=old, session=Session.REGULAR, quality="firm")
+    fx = FxSnapshot("licensed-fx", "EUR/USD", Decimal("1.10"), NOW, NOW, "firm")
+    permissive = ExecutionEvidence(quote, fx, NOW, timedelta(days=1), Decimal("0.10"),
+                                   Decimal("0.20"), Decimal("0"),
+                                   quote_origin=EvidenceOrigin.AUTHENTICATED_PROVIDER,
+                                   fx_origin=EvidenceOrigin.AUTHENTICATED_PROVIDER)
+    with pytest.raises(SubmissionBlocked, match="stale"):
+        prepared(monkeypatch, evidence=permissive)
+
+
+def test_hand_built_or_fixture_precheck_cannot_authorize(monkeypatch):
+    from dataclasses import replace
+    assert precheck().reason == "broker_precheck_validated"
+    with pytest.raises(SubmissionBlocked, match="SIM precheck transport"):
+        prepared(monkeypatch, precheck=precheck())
+    sealed = sealed_precheck(monkeypatch)
+    assert sealed.is_transport_sealed()
+    assert not replace(sealed, estimated_cash_required=Decimal("1.00")).is_transport_sealed()
+
+
+def test_economically_inconsistent_precheck_is_rejected(monkeypatch):
+    inverted = dict(PRECHECK_BODY, InstrumentToAccountConversionRate="1.10",
+                    EstimatedTotalCostInAccountCurrency="0.33")
+    with pytest.raises(SubmissionBlocked, match="rate disagrees"):
+        prepared(monkeypatch, precheck=sealed_precheck(monkeypatch, inverted))
+    cheap = dict(PRECHECK_BODY, EstimatedCashRequired="5.00")
+    with pytest.raises(SubmissionBlocked, match="cash requirement disagrees"):
+        prepared(monkeypatch, precheck=sealed_precheck(monkeypatch, cheap))
+
+
+def test_acknowledged_order_links_lifecycle_and_fill_posts_end_to_end(tmp_path, monkeypatch, released):
+    from sidedeck.application.foundation import initialise_two_portfolios
+    from sidedeck.application.saxo_execution_pipeline import SaxoExecutionPipeline
+    from sidedeck.domain.contracts import ExperimentManifest
+
+    db = str(tmp_path / "e2e.sqlite")
+    request = prepared(monkeypatch)
+    transport = Acknowledged()
+    submitter = SaxoSimSubmitter(db, network_enabled=True, transport=transport,
+                                 approval_verifier=TrustedVerifier())
+    assert submitter.submit(request, approve(request), now=NOW) == "broker-1"
+    assert lifecycle_state(db, "sofi-1")[:2] == ("ACKNOWLEDGED", "broker-1")
+    assert auth_row(db) == ("CONSUMED", "broker-1")
+    with pytest.raises(SubmissionBlocked, match="already"):
+        submitter.submit(request, approve(request), now=NOW)
+    assert transport.calls == 1
+    rows = ({"AccountId": "approved", "OrderId": "broker-1", "ExternalReference": "sofi-1",
+             "ExecutionId": "fill-1", "Status": "FinalFill", "FillAmount": 1, "Uic": 23241352,
+             "BuySell": "Buy", "ExecutionPrice": "41", "Fees": "0.27",
+             "ExecutionTime": "2026-10-19T14:00:30Z"},)
+    fills = parse_executions(rows, account_id="approved", order_id="broker-1",
+                             external_reference="sofi-1", instrument_currency="USD",
+                             account_currency="EUR", price_currency="USD", fees_currency="EUR",
+                             authorized_quantity=Decimal("1"), expected_uic=23241352)
+    ledger = initialise_two_portfolios(ExperimentManifest(
+        experiment_id="p4", configuration_revision="r1", created_at=NOW,
+        instruments=("US:SOFI",), data_policy="licensed"), NOW)
+    applied = SaxoExecutionPipeline(db, ledger).apply_buy_fill(
+        fills[0], order_key="sofi-1", portfolio_id="tradingagents", fx=evidence().fx,
+        account_id="approved", now=NOW)
+    assert applied.fee_usd == Decimal("0.2970")
+    assert ledger.replay("tradingagents").positions["US:SOFI"].quantity == Decimal("1")
+    assert ledger.replay("ai-trading").cash == Decimal("1000")
+    assert lifecycle_state(db, "sofi-1")[0] == "FILLED"
+
+
+def test_malformed_ack_is_uncertain_and_explicit_error_is_rejected(tmp_path, monkeypatch, released):
+    db = str(tmp_path / "ack.sqlite")
+    request = prepared(monkeypatch)
+    submitter = SaxoSimSubmitter(db, network_enabled=True, transport=Acknowledged({"Status": "ok"}),
+                                 approval_verifier=TrustedVerifier())
+    with pytest.raises(SubmissionBlocked, match="uncertain"):
+        submitter.submit(request, approve(request), now=NOW)
+    assert auth_row(db)[0] == "UNKNOWN" and lifecycle_state(db, "sofi-1")[0] == "UNKNOWN"
+    second = prepared(monkeypatch, order_key="sofi-2")
+    rejecting = SaxoSimSubmitter(db, network_enabled=True,
+                                 transport=Acknowledged({"ErrorInfo": {"ErrorCode": "X"}}),
+                                 approval_verifier=TrustedVerifier())
+    with pytest.raises(SubmissionBlocked, match="rejected"):
+        rejecting.submit(second, approve(second, authorization_id="approval-2"), now=NOW)
+    assert auth_row(db, "sofi-2")[0] == "REJECTED"
+    assert lifecycle_state(db, "sofi-2")[0] == "REJECTED"
+
+
+def test_authorization_cannot_be_reused_for_another_order(tmp_path, monkeypatch, released):
+    db = str(tmp_path / "reuse.sqlite")
+    submitter = SaxoSimSubmitter(db, network_enabled=True, transport=Acknowledged(),
+                                 approval_verifier=TrustedVerifier())
+    first = prepared(monkeypatch)
+    submitter.submit(first, approve(first), now=NOW)
+    second = prepared(monkeypatch, order_key="sofi-2")
+    with pytest.raises(SubmissionBlocked, match="already consumed"):
+        submitter.submit(second, approve(second, authorization_id="approval-1"), now=NOW)
+
+
+def test_injected_sim_transport_is_single_attempt_and_uncertain(tmp_path, monkeypatch, released):
+    db = str(tmp_path / "orders.sqlite")
+    request = prepared(monkeypatch, order_key="sofi-2", portfolio_id="ai-trading")
     transport = Timeout()
-    submitter = SaxoSimSubmitter(str(tmp_path / "orders.sqlite"), transport=transport,
-                                 network_enabled=True, approval_verifier=TrustedVerifier())
-    approval = authorize_execution(request, authorization_id="approval-2",
-                                   issued_by="operator", expires_at=NOW + timedelta(minutes=1),
-                                   verifier=TrustedVerifier())
+    submitter = SaxoSimSubmitter(db, transport=transport, network_enabled=True,
+                                 approval_verifier=TrustedVerifier())
+    approval = approve(request, authorization_id="approval-2")
     with pytest.raises(SubmissionBlocked, match="uncertain"):
         submitter.submit(request, approval, now=NOW)
-    with pytest.raises(SubmissionBlocked, match="already claimed"):
+    with pytest.raises(SubmissionBlocked, match="already"):
         submitter.submit(request, approval, now=NOW)
     assert transport.calls == 1
+    assert lifecycle_state(db, "sofi-2")[0] == "UNKNOWN"
+
+
+def test_uncertain_order_is_reconciled_read_only_and_never_resubmitted(tmp_path, monkeypatch, released):
+    db = str(tmp_path / "reconcile.sqlite")
+    request = prepared(monkeypatch)
+    transport = Timeout()
+    with pytest.raises(SubmissionBlocked, match="uncertain"):
+        SaxoSimSubmitter(db, transport=transport, network_enabled=True,
+                         approval_verifier=TrustedVerifier()).submit(request, approve(request), now=NOW)
+    assert reconcile_uncertain_submission(db, "sofi-1", account_id="approved",
+                                          activity_rows=()) == "NOT_FOUND_REMAINS_UNKNOWN"
+    assert lifecycle_state(db, "sofi-1")[0] == "UNKNOWN"
+    other_account = ({"ExternalReference": "sofi-1", "AccountId": "other", "OrderId": "b",
+                      "Uic": 23241352, "BuySell": "Buy", "Status": "Placed"},)
+    with pytest.raises(ValueError, match="different identity"):
+        reconcile_uncertain_submission(db, "sofi-1", account_id="approved",
+                                       activity_rows=other_account)
+    with pytest.raises(ValueError, match="authorized account"):
+        reconcile_uncertain_submission(db, "sofi-1", account_id="other", activity_rows=())
+    two = tuple({"ExternalReference": "sofi-1", "AccountId": "approved", "OrderId": oid,
+                 "Uic": 23241352, "BuySell": "Buy", "Status": "Placed"} for oid in ("b1", "b2"))
+    with pytest.raises(ValueError, match="multiple broker orders"):
+        reconcile_uncertain_submission(db, "sofi-1", account_id="approved", activity_rows=two)
+    found = ({"ExternalReference": "sofi-1", "AccountId": "approved", "OrderId": "broker-9",
+              "Uic": 23241352, "BuySell": "Buy", "Status": "Placed"},
+             {"ExternalReference": "unrelated", "AccountId": "approved", "OrderId": "x"})
+    assert reconcile_uncertain_submission(db, "sofi-1", account_id="approved",
+                                          activity_rows=found) == "ACKNOWLEDGED"
+    assert lifecycle_state(db, "sofi-1")[:2] == ("ACKNOWLEDGED", "broker-9")
+    assert auth_row(db) == ("CONSUMED", "broker-9")
+    assert transport.calls == 1
+
+
+def test_history_rejects_naive_time_wrong_instrument_and_sell_side():
+    base = {"AccountId": "a", "OrderId": "o", "ExternalReference": "k", "ExecutionId": "f",
+            "Status": "FinalFill", "FillAmount": 1, "Uic": 23241352, "BuySell": "Buy",
+            "ExecutionPrice": "41", "Fees": "0", "ExecutionTime": "2026-10-19T14:00:00Z"}
+    kwargs = dict(account_id="a", order_id="o", external_reference="k",
+                  instrument_currency="USD", account_currency="EUR", price_currency="USD",
+                  fees_currency="EUR", authorized_quantity=Decimal("1"), expected_uic=23241352)
+    assert parse_executions((base,), **kwargs)[0].occurred_at == "2026-10-19T14:00:00+00:00"
+    for change, message in (({"ExecutionTime": "2026-10-19T14:00:00"}, "timezone"),
+                            ({"Uic": 211}, "instrument or side"),
+                            ({"BuySell": "Sell"}, "instrument or side")):
+        with pytest.raises(ValueError, match=message):
+            parse_executions((dict(base, **change),), **kwargs)
+
+
+def test_account_activity_cursor_cannot_widen_scope():
+    from sidedeck.application.saxo_execution_history import account_activity_path
+    path = account_activity_path(SCOPE)
+    assert validate_continuation(path + "&%24skip=100", SCOPE, None)
+    with pytest.raises(ValueError, match="scope"):
+        validate_continuation(path.replace("opaque-account-key", "other"), SCOPE, None)
+
+
+def test_offline_acceptance_reports_no_go_with_code_gates_passing(tmp_path, capsys):
+    from sidedeck.application import saxo_p4_acceptance
+    report = tmp_path / "p4.json"
+    assert saxo_p4_acceptance.main(["--offline", "--json", str(report)]) == 0
+    out = capsys.readouterr().out
+    assert "P4_OFFLINE_CHECK=PASS" in out and "P4_DECISION=NO-GO" in out
+    assert "SELF_APPROVAL_REJECTED=PASS" in out and "HAND_BUILT_PRECHECK_REJECTED=PASS" in out
+    assert "BROKER_REQUESTS_MADE=0" in out
+    data = json.loads(report.read_text(encoding="utf-8"))
+    assert data["decision"] == "NO-GO" and data["broker_requests_made"] == 0
+
+
+def test_acceptance_stays_no_go_while_release_is_disabled_even_with_full_evidence(tmp_path, monkeypatch):
+    from sidedeck.application import saxo_p4_acceptance
+    request = prepared(monkeypatch)
+    signers = tmp_path / "allowed_signers"
+    signers.write_text("operator ssh-ed25519 AAAA\n", encoding="utf-8")
+    gates, decision = saxo_p4_acceptance.evaluate(request=request, authorization=approve(request),
+                                                  allowed_signers=signers, now=NOW)
+    status = {gate.name: gate.status for gate in gates}
+    assert status["INDEPENDENT_OPERATOR_APPROVAL"] == "PASS"
+    assert status["SIM_SUBMISSION_RELEASE"] == "DISABLED"
+    assert decision == "NO-GO"
