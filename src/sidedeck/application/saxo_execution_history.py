@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
 from sidedeck.infrastructure.saxo_sim import SaxoSimClient
@@ -39,7 +39,24 @@ class _SaxoHistoryTransport:
 def read_order_history(client: SaxoSimClient, scope: SaxoAccountScope,
                        order_id: str) -> tuple[dict[str, Any], ...]:
     """One account-scoped GET chain; no retry or fallback provider."""
-    return fetch_history(_SaxoHistoryTransport(client), order_history_path(scope, order_id))
+    return fetch_history(_SaxoHistoryTransport(client), order_history_path(scope, order_id),
+                         continuation_validator=lambda path: validate_continuation(path, scope, order_id))
+
+
+def validate_continuation(path: str, scope: SaxoAccountScope, order_id: str) -> str:
+    """Ensure broker cursors cannot escape the original account/order query."""
+    parsed = urlsplit(path)
+    if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path != "/cs/v1/audit/orderactivities":
+        raise ValueError("invalid execution history cursor boundary")
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    expected = {
+        "AccountKey": [scope.account_key], "ClientKey": [scope.client_key],
+        "EntryType": ["All"], "IncludeSubAccounts": ["false"],
+        "$top": ["100"], "OrderId": [order_id],
+    }
+    if query != expected:
+        raise ValueError("execution history cursor changed account or order scope")
+    return path
 
 
 @dataclass(frozen=True)
@@ -84,6 +101,7 @@ def fetch_history(
     first_path: str,
     *,
     max_pages: int = 10,
+    continuation_validator: Any | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """Fetch a bounded complete collection; reject loops and malformed cursors."""
     if not first_path or max_pages < 1 or max_pages > 100:
@@ -108,6 +126,8 @@ def fetch_history(
             return tuple(rows)
         if not isinstance(next_path, str) or not next_path.startswith("/"):
             raise ValueError("invalid execution history cursor")
+        if continuation_validator is not None:
+            continuation_validator(next_path)
         path = next_path
     raise ValueError("execution history pagination exceeded bound")
 

@@ -49,6 +49,12 @@ class MarketDataProvider(Protocol):
     def fx(self, pair: str, *, as_of: datetime) -> FxSnapshot: ...
 
 
+class MarketEvidenceVerifier(Protocol):
+    """Trusted provider attestation; labels alone cannot upgrade fixtures."""
+
+    def verify(self, evidence: "ExecutionEvidence") -> bool: ...
+
+
 @dataclass(frozen=True)
 class ExecutionEvidence:
     quote: MarketSnapshot
@@ -82,6 +88,10 @@ class ExecutionEvidence:
             raise ValueError("market or FX evidence is stale")
         if not isinstance(self.quote_origin, EvidenceOrigin) or not isinstance(self.fx_origin, EvidenceOrigin):
             raise ValueError("market provenance origin is invalid")
+        if self.quote.ticker != "SOFI" or self.quote.instrument_id != "US:SOFI":
+            raise ValueError("execution evidence is not for SOFI")
+        if self.fx.pair != "EUR/USD":
+            raise ValueError("execution evidence requires EUR/USD")
         object.__setattr__(self, "observed_at", now)
 
     @property
@@ -95,6 +105,7 @@ def collect_execution_evidence(
     ticker: str,
     pair: str = "EUR/USD",
     as_of: datetime,
+    verifier: MarketEvidenceVerifier | None = None,
     max_age: timedelta = timedelta(minutes=2),
     spread_usd: Decimal = Decimal("0"),
     fees_usd: Decimal = Decimal("0"),
@@ -108,8 +119,11 @@ def collect_execution_evidence(
     fx = provider.fx(pair, as_of=cutoff)
     if quote.ticker != ticker or quote.instrument_id != f"US:{ticker}":
         raise ValueError("provider returned the wrong instrument")
-    return ExecutionEvidence(
+    evidence = ExecutionEvidence(
         quote=quote, fx=fx, observed_at=cutoff, max_age=max_age,
         spread_usd=spread_usd, fees_usd=fees_usd, fx_fee_usd=fx_fee_usd,
         quote_origin=quote_origin, fx_origin=fx_origin,
     )
+    if verifier is None or not verifier.verify(evidence):
+        raise ValueError("trusted market-data attestation is required")
+    return evidence

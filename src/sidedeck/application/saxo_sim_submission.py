@@ -14,8 +14,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Protocol
 
-from sidedeck.application.saxo_market_data import EvidenceOrigin, ExecutionEvidence
-from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence
+from sidedeck.application.saxo_market_data import EvidenceOrigin, ExecutionEvidence, MarketEvidenceVerifier
+from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence, precheck_payload
 from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
 SIM_HOST = "https://gateway.saxobank.com/sim/openapi"
 SOFI_UIC = 23241352
@@ -23,6 +23,14 @@ SOFI_UIC = 23241352
 
 class SimSubmitTransport(Protocol):
     def submit(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class ApprovalVerifier(Protocol):
+    """Trusted boundary for human approval; plain dataclasses are insufficient."""
+
+    def attest(self, material: str) -> str: ...
+
+    def verify(self, attestation: str, material: str) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -42,6 +50,7 @@ class ExecutionAuthorization:
     broker_payload_sha256: str
     risk_evidence_sha256: str
     expires_at: datetime
+    attestation: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,6 +114,7 @@ def prepare_sofi_request(
     expected_account_id: str,
     portfolio_cash_usd: Decimal,
     now: datetime,
+    market_verifier: MarketEvidenceVerifier | None = None,
     quote_max_age: timedelta = timedelta(minutes=2),
 ) -> SimOrderRequest:
     """Build the only currently supported request after all local checks."""
@@ -114,8 +124,15 @@ def prepare_sofi_request(
         raise ValueError("invalid portfolio identity")
     if account_scope.account_id != expected_account_id:
         raise SubmissionBlocked("verified Saxo account identity does not match expectation")
+    request_payload = precheck_payload(account_scope, uic=SOFI_UIC, amount=1)
+    request_sha256 = hashlib.sha256(
+        json.dumps(request_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     try:
-        precheck.validate_for_order(instrument_currency="USD", account_currency="EUR")
+        precheck.validate_for_order(
+            instrument_currency="USD", account_currency="EUR", account_id=account_scope.account_id,
+            uic=SOFI_UIC, request_sha256=request_sha256, now=now,
+        )
     except ValueError as exc:
         raise SubmissionBlocked(str(exc)) from exc
     if precheck.estimated_cash_required is None:
@@ -123,6 +140,8 @@ def prepare_sofi_request(
     if (evidence.quote_origin is not EvidenceOrigin.AUTHENTICATED_PROVIDER
             or evidence.fx_origin is not EvidenceOrigin.AUTHENTICATED_PROVIDER):
         raise SubmissionBlocked("authenticated quote and FX evidence are required")
+    if market_verifier is None or not market_verifier.verify(evidence):
+        raise SubmissionBlocked("trusted market-data attestation is required")
     cutoff = now.astimezone(timezone.utc) if now.tzinfo else None
     if cutoff is None:
         raise ValueError("submission time must be timezone-aware")
@@ -149,19 +168,30 @@ def prepare_sofi_request(
         expected_price_usd=evidence.quote.price,
         expected_cost_usd=total, fx_eur_to_usd=evidence.fx.usd_per_eur,
         precheck_cash_eur=precheck.estimated_cash_required,
-        precheck_sha256=hashlib.sha256(
-            json.dumps(precheck.__dict__, sort_keys=True, default=str).encode()).hexdigest(),
+        precheck_sha256=precheck.response_sha256,
         risk_evidence_sha256=hashlib.sha256(risk_material.encode()).hexdigest(),
     )
 
 
 def authorize_execution(request: SimOrderRequest, *, authorization_id: str,
-                        issued_by: str, expires_at: datetime) -> ExecutionAuthorization:
-    """Create a typed authorization; no boolean can stand in for this record."""
-    if not authorization_id or not issued_by:
+                        issued_by: str, expires_at: datetime,
+                        verifier: ApprovalVerifier | None = None) -> ExecutionAuthorization:
+    """Create an authorization only through a trusted verifier boundary."""
+    if not authorization_id or not issued_by or verifier is None:
+        raise SubmissionBlocked("trusted approval verifier unavailable")
         raise ValueError("operator authorization identity is required")
     if expires_at.tzinfo is None or expires_at.utcoffset() is None:
         raise ValueError("authorization expiry must be timezone-aware")
+    material = json.dumps({"authorization_id": authorization_id, "issued_by": issued_by,
+                           "request_sha256": request.digest(),
+                           "broker_payload_sha256": request.broker_payload_digest(),
+                           "risk_evidence_sha256": request.risk_evidence_sha256,
+                           "account_id": request.account_id, "portfolio_id": request.portfolio_id,
+                           "order_key": request.order_key, "expires_at": expires_at.isoformat()},
+                          sort_keys=True, separators=(",", ":"))
+    attestation = verifier.attest(material)
+    if not isinstance(attestation, str) or not attestation:
+        raise SubmissionBlocked("trusted approval verifier rejected authorization")
     return ExecutionAuthorization(
         authorization_id=authorization_id, issued_by=issued_by,
         account_id=request.account_id, portfolio_id=request.portfolio_id,
@@ -169,6 +199,7 @@ def authorize_execution(request: SimOrderRequest, *, authorization_id: str,
         order_type="Market", request_sha256=request.digest(),
         broker_payload_sha256=request.broker_payload_digest(),
         risk_evidence_sha256=request.risk_evidence_sha256, expires_at=expires_at,
+        attestation=attestation,
     )
 
 
@@ -176,19 +207,22 @@ class SaxoSimSubmitter:
     """Single-attempt durable submitter; production construction is disabled."""
 
     def __init__(self, db_path: str, *, transport: SimSubmitTransport | None = None,
-                 network_enabled: bool = False) -> None:
+                 network_enabled: bool = False, approval_verifier: ApprovalVerifier | None = None) -> None:
         self._db_path = db_path
         self._transport = transport
         self._network_enabled = network_enabled
+        self._approval_verifier = approval_verifier
         if network_enabled and transport is None:
             raise ValueError("an explicit transport is required for an enabled attempt")
 
     def _prepare_db(self) -> None:
         with sqlite3.connect(self._db_path) as db:
-            db.execute("CREATE TABLE IF NOT EXISTS saxo_submit_claim_v2 ("
-                       "order_key TEXT PRIMARY KEY, authorization_id TEXT UNIQUE NOT NULL, "
+            db.execute("CREATE TABLE IF NOT EXISTS saxo_execution_authorization ("
+                       "authorization_id TEXT PRIMARY KEY, order_key TEXT UNIQUE NOT NULL, "
                        "account_id TEXT NOT NULL, portfolio_id TEXT NOT NULL, "
-                       "payload_sha256 TEXT NOT NULL, status TEXT NOT NULL, "
+                       "request_sha256 TEXT NOT NULL, broker_payload_sha256 TEXT NOT NULL, "
+                       "risk_evidence_sha256 TEXT NOT NULL, attestation TEXT NOT NULL, "
+                       "issued_by TEXT NOT NULL, expires_at TEXT NOT NULL, status TEXT NOT NULL, "
                        "broker_order_id TEXT)")
 
     def submit(self, request: SimOrderRequest, authorization: ExecutionAuthorization,
@@ -197,6 +231,8 @@ class SaxoSimSubmitter:
         self._prepare_db()
         if not self._network_enabled or self._transport is None:
             raise SubmissionBlocked("Saxo SIM submission is disabled")
+        if self._approval_verifier is None:
+            raise SubmissionBlocked("trusted approval verifier unavailable")
         if (authorization.request_sha256 != request.digest()
                 or authorization.broker_payload_sha256 != request.broker_payload_digest()
                 or authorization.risk_evidence_sha256 != request.risk_evidence_sha256
@@ -208,37 +244,53 @@ class SaxoSimSubmitter:
                 or authorization.side != "Buy"
                 or authorization.order_type != "Market"):
             raise SubmissionBlocked("authorization is not bound to this exact order")
+        material = json.dumps({"authorization_id": authorization.authorization_id,
+                               "issued_by": authorization.issued_by,
+                               "request_sha256": request.digest(),
+                               "broker_payload_sha256": request.broker_payload_digest(),
+                               "risk_evidence_sha256": request.risk_evidence_sha256,
+                               "account_id": request.account_id, "portfolio_id": request.portfolio_id,
+                               "order_key": request.order_key, "expires_at": authorization.expires_at.isoformat()},
+                              sort_keys=True, separators=(",", ":"))
+        if not self._approval_verifier.verify(authorization.attestation, material):
+            raise SubmissionBlocked("authorization attestation is not trusted")
         current = now.astimezone(timezone.utc) if now.tzinfo else None
         if current is None or current > authorization.expires_at.astimezone(timezone.utc):
             raise SubmissionBlocked("approval expired")
         with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
-            row = db.execute("SELECT payload_sha256, status FROM saxo_submit_claim_v2 "
+            row = db.execute("SELECT request_sha256, status FROM saxo_execution_authorization "
                              "WHERE order_key=?", (request.order_key,)).fetchone()
             if row is not None:
                 if row[0] != request.digest():
                     raise SubmissionBlocked("order key was reused with different payload")
                 raise SubmissionBlocked("submission attempt already claimed")
-            db.execute("INSERT INTO saxo_submit_claim_v2 VALUES (?, ?, ?, ?, ?, 'SUBMITTING', NULL)",
-                       (request.order_key, authorization.authorization_id,
-                        request.account_id, request.portfolio_id, request.digest()))
+            db.execute("INSERT INTO saxo_execution_authorization "
+                       "(authorization_id, order_key, account_id, portfolio_id, request_sha256, "
+                       "broker_payload_sha256, risk_evidence_sha256, attestation, issued_by, "
+                       "expires_at, status, broker_order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', NULL)",
+                       (authorization.authorization_id, request.order_key,
+                        request.account_id, request.portfolio_id, request.digest(),
+                        request.broker_payload_digest(), request.risk_evidence_sha256,
+                        authorization.attestation, authorization.issued_by,
+                        authorization.expires_at.isoformat()))
         try:
             response = self._transport.submit(request.payload())
         except Exception as exc:
             with sqlite3.connect(self._db_path) as db:
-                db.execute("UPDATE saxo_submit_claim_v2 SET status='UNKNOWN' WHERE order_key=?",
+                db.execute("UPDATE saxo_execution_authorization SET status='UNKNOWN' WHERE order_key=?",
                            (request.order_key,))
             raise SubmissionBlocked("submission outcome is uncertain; reconcile before retry") from exc
         if (not isinstance(response, dict) or response.get("ErrorInfo")
                 or not isinstance(response.get("OrderId"), str)
                 or not response["OrderId"]):
             with sqlite3.connect(self._db_path) as db:
-                db.execute("UPDATE saxo_submit_claim_v2 SET status='REJECTED' WHERE order_key=?",
+                db.execute("UPDATE saxo_execution_authorization SET status='REJECTED' WHERE order_key=?",
                            (request.order_key,))
             raise SubmissionBlocked("broker acknowledgement was rejected or malformed")
         broker_order_id = response.get("OrderId")
         if not isinstance(broker_order_id, str) or not broker_order_id:
             raise SubmissionBlocked("broker acknowledgement has no order identity")
         with sqlite3.connect(self._db_path) as db:
-            db.execute("UPDATE saxo_submit_claim_v2 SET status='ACKNOWLEDGED', broker_order_id=? "
+            db.execute("UPDATE saxo_execution_authorization SET status='CONSUMED', broker_order_id=? "
                        "WHERE order_key=?", (broker_order_id, request.order_key))
         return broker_order_id

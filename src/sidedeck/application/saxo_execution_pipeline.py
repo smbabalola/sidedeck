@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import hashlib
+from uuid import NAMESPACE_URL, uuid5
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -34,11 +36,11 @@ class SaxoExecutionPipeline:
         self._db_path = db_path
         self._ledger = ledger
         with sqlite3.connect(db_path) as db:
-            db.execute("CREATE TABLE IF NOT EXISTS saxo_execution_ids ("
+            db.execute("CREATE TABLE IF NOT EXISTS saxo_execution_recovery ("
                        "execution_id TEXT PRIMARY KEY, order_key TEXT NOT NULL, "
                        "portfolio_id TEXT NOT NULL, event_payload TEXT NOT NULL, "
-                       "status TEXT NOT NULL CHECK(status IN ('PENDING','POSTED')), "
-                       "broker_order_id TEXT NOT NULL, fill_status TEXT NOT NULL)")
+                       "event_sha256 TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('PENDING','RECOVERING','POSTED')), "
+                       "broker_order_id TEXT NOT NULL, fill_status TEXT NOT NULL, claimed_at TEXT)")
 
     def _advance_lifecycle(self, order_key: str, order_id: str, status: str) -> None:
         state = lifecycle_state(self._db_path, order_key)
@@ -52,14 +54,21 @@ class SaxoExecutionPipeline:
         with sqlite3.connect(self._db_path) as db:
             rows = db.execute("SELECT execution_id, order_key, portfolio_id, event_payload, status, "
                              "broker_order_id, fill_status "
-                             "FROM saxo_execution_ids ORDER BY execution_id").fetchall()
+                             "FROM saxo_execution_recovery WHERE status IN ('PENDING','RECOVERING','POSTED') "
+                             "ORDER BY execution_id").fetchall()
         recovered = 0
         for execution_id, order_key, portfolio_id, payload, status, broker_order_id, fill_status in rows:
             event = LedgerEvent.model_validate(json.loads(payload))
-            if status == "PENDING":
+            if status in {"PENDING", "RECOVERING"}:
+                with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
+                    claimed = db.execute("UPDATE saxo_execution_recovery SET status='RECOVERING', claimed_at=? "
+                                         "WHERE execution_id=? AND status IN ('PENDING','RECOVERING')",
+                                         (datetime.now(timezone.utc).isoformat(), execution_id)).rowcount
+                if not claimed:
+                    continue
                 self._ledger.append(event)
                 with sqlite3.connect(self._db_path) as db:
-                    db.execute("UPDATE saxo_execution_ids SET status='POSTED' WHERE execution_id=?",
+                    db.execute("UPDATE saxo_execution_recovery SET status='POSTED' WHERE execution_id=?",
                                (execution_id,))
                 recovered += 1
             self._advance_lifecycle(order_key, broker_order_id, fill_status)
@@ -97,30 +106,36 @@ class SaxoExecutionPipeline:
         event = fill_event(portfolio_id, "saxo:" + execution.execution_id,
                            EventType.BUY_FILL, "US:SOFI", execution.quantity,
                            price_usd, event_time, fee_usd)
+        event = event.model_copy(update={
+            "operation_id": uuid5(NAMESPACE_URL, "sidedeck:saxo-operation:" + execution.execution_id),
+            "event_id": uuid5(NAMESPACE_URL, "sidedeck:saxo-execution:" + execution.execution_id)
+        })
         event_payload = event.model_dump_json()
+        event_sha256 = hashlib.sha256(event_payload.encode("utf-8")).hexdigest()
         duplicate = False
         with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
-            row = db.execute("SELECT order_key, portfolio_id FROM saxo_execution_ids "
+            row = db.execute("SELECT order_key, portfolio_id, event_sha256, event_payload, status FROM saxo_execution_recovery "
                              "WHERE execution_id=?", (execution.execution_id,)).fetchone()
             if row is not None:
-                if row != (order_key, portfolio_id):
+                if row[0] != order_key or row[1] != portfolio_id:
                     raise ValueError("execution ID was reused across orders or portfolios")
-                status = db.execute("SELECT status FROM saxo_execution_ids WHERE execution_id=?",
-                                   (execution.execution_id,)).fetchone()[0]
+                if row[2] != event_sha256 or row[3] != event_payload:
+                    raise ValueError("execution ID was reused with different economic payload")
+                status = row[4]
                 if status == "PENDING":
                     self._ledger.append(event)
-                    db.execute("UPDATE saxo_execution_ids SET status='POSTED' WHERE execution_id=?",
+                    db.execute("UPDATE saxo_execution_recovery SET status='POSTED' WHERE execution_id=?",
                                (execution.execution_id,))
                 duplicate = True
             else:
-                db.execute("INSERT INTO saxo_execution_ids VALUES (?, ?, ?, ?, 'PENDING', ?, ?)",
+                db.execute("INSERT INTO saxo_execution_recovery VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, NULL)",
                            (execution.execution_id, order_key, portfolio_id, event_payload,
-                            execution.order_id, execution.status))
+                            event_sha256, execution.order_id, execution.status))
         if not duplicate:
             # The PENDING row is durable before the in-memory ledger changes.
             self._ledger.append(event)
             with sqlite3.connect(self._db_path) as db:
-                db.execute("UPDATE saxo_execution_ids SET status='POSTED' WHERE execution_id=?",
+                db.execute("UPDATE saxo_execution_recovery SET status='POSTED' WHERE execution_id=?",
                            (execution.execution_id,))
         self._advance_lifecycle(order_key, execution.order_id, execution.status)
         return AppliedExecution(execution.execution_id, portfolio_id,

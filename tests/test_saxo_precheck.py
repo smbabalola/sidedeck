@@ -1,3 +1,6 @@
+import hashlib
+import json
+from datetime import datetime, timezone
 import pytest
 
 from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
@@ -29,10 +32,19 @@ def test_precheck_success_still_cannot_place_order():
                 "EstimatedCashRequiredCurrency": "EUR",
                 "EstimatedTotalCost": 120, "EstimatedTotalCostInAccountCurrency": 140,
                 "InstrumentToAccountConversionRate": 1.16}
-    result = parse_precheck(response, instrument_currency="USD", account_currency="EUR")
+    request = precheck_payload(scope(), uic=23241352)
+    result = parse_precheck(response | {"EstimatedTotalCostCurrency": "USD",
+                                        "EstimatedTotalCostInAccountCurrencyCurrency": "EUR"},
+                            instrument_currency="USD", account_currency="EUR",
+                            request_payload=request, account_id=scope().account_id,
+                            collected_at=datetime.now(timezone.utc))
     assert result.result == "Ok"
     assert result.estimated_cash_required is not None
-    result.validate_for_order(instrument_currency="USD", account_currency="EUR")
+    result.validate_for_order(instrument_currency="USD", account_currency="EUR",
+                              account_id=scope().account_id, uic=23241352,
+                              request_sha256=hashlib.sha256(json.dumps(
+                                  request, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+                              now=datetime.now(timezone.utc))
     assert result.reason == "broker_precheck_validated"
 
 

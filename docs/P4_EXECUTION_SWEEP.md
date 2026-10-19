@@ -24,12 +24,14 @@ Saxo, read credentials, or mutate an existing portfolio database.
   separate precheck/account evidence.
 - `application.saxo_sim_submission`: fixed SIM-only SOFI one-share request
   shape, fresh successful precheck, EUR and USD risk limits, exact-payload
-  operator approval, durable single-attempt claim, uncertain-outcome handling,
-  and an explicit disabled-by-default transport boundary.
+  operator approval through a trusted attestation verifier, durable
+  single-consumption authorization, uncertain-outcome handling, and an
+  explicit disabled-by-default transport boundary.
 - `application.saxo_execution_pipeline`: EUR-to-USD conversion using the
   validated FX snapshot only for explicitly EUR-denominated fees, correct
-  portfolio/account/reference matching, durable pending-event recovery,
-  external execution deduplication, ledger fill posting and lifecycle update.
+  portfolio/account/reference matching, versioned durable pending-event
+  recovery, deterministic replay-safe event identity, external execution
+  deduplication, ledger fill posting and lifecycle update.
 - `infrastructure.saxo_submit_transport`: strict SIM-host POST adapter with
   exact SOFI payload validation, bounded timeout, redacted errors, no redirect
   and no retry. It is disabled unless explicitly constructed for a separately
@@ -63,11 +65,14 @@ and [order-activity guide](https://www.developer.saxo/openapi/learn/audit-ordera
 | Costs and $200 position cap | PASS in offline gate |
 | Typed broker precheck evidence, separate from authorization | PASS in offline tests |
 | Durable exact-payload one-time approval | PASS in offline tests |
+| Trusted approval attestation; manual approval objects rejected | PASS in offline tests |
 | Crash/timeout uncertainty does not retry | PASS in offline tests |
 | Account/order/reference-matched fill history | PASS in parser and pipeline tests |
 | Explicit instrument/account/price/fee currencies | PASS in offline tests; no live confirmation |
 | Crash recovery across pending ledger persistence | PASS in offline tests |
 | Duplicate execution cannot double-post | PASS in pipeline tests |
+| Recovery and authorization Alembic schema | PASS in disposable SQLite migration round trip |
+| Pagination cursor remains account/order scoped | PASS in offline tests |
 | Real authenticated fill reconciliation | NOT VERIFIED |
 | Current authenticated executable quote and FX provenance | NOT VERIFIED |
 | Current Saxo account/instrument currency evidence | NOT VERIFIED in this batch |
