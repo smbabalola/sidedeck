@@ -17,7 +17,6 @@ from typing import Any, Protocol
 from sidedeck.application.saxo_market_data import ExecutionEvidence
 from sidedeck.infrastructure.saxo_precheck import PrecheckDecision
 from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
-
 SIM_HOST = "https://gateway.saxobank.com/sim/openapi"
 SOFI_UIC = 23241352
 
