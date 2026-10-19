@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+from importlib import import_module
 import json
 import re
 import sys
@@ -33,13 +34,14 @@ def main() -> int:
     parser.add_argument("--as-of", required=True)
     args = parser.parse_args()
     try:
-        from tradingagents.default_config import DEFAULT_CONFIG
-        from tradingagents.graph.trading_graph import TradingAgentsGraph
-        config = DEFAULT_CONFIG.copy()
+        # Dynamically load the separately installed upstream research package.
+        config_module = import_module("tradingagents.default_config")
+        graph_module = import_module("tradingagents.graph.trading_graph")
+        config = config_module.DEFAULT_CONFIG.copy()
         # The installed TradingAgents upstream owns data/LLM selection.
         # Upstream may print progress; keep stdout exclusively machine-readable JSON.
         with contextlib.redirect_stdout(io.StringIO()):
-            graph = TradingAgentsGraph(debug=False, config=config)
+            graph = graph_module.TradingAgentsGraph(debug=False, config=config)
             _state, final = graph.propagate(args.ticker, args.as_of)
         action = extract_action(final)
         print(json.dumps({"ticker": args.ticker, "decision": action,
