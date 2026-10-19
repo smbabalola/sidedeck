@@ -20,3 +20,7 @@ The acceptance result means only that the suggested intent passes structural and
 ## Tests
 
 `tests/test_proposals.py` covers accepted-but-not-executed intents, rejected portfolios, instrument scope, mismatched snapshot, stale snapshot and as-of mismatch. CI must pass before merging this branch.
+
+## P2 additional components (2026-10-19)
+
+Portfolio risk screening is implemented in `application/risk.py`; buy limits are initially 20% single-position, 80% gross exposure and 10% cash reserve, subject to review. `infrastructure/proposal_audit.py` adds an append-only SQLite-testable audit record with replay, SHA-256 integrity checks and scoped idempotency; it still requires an Alembic migration and concurrency hardening before production. `infrastructure/alpaca_paper.py` contains only a disabled configuration boundary for `SideDeckdemo` and `ALPACA_API_KEY2` (with independent secret environment variable `ALPACA_API_SECRET_KEY2`). No keys are read; no network or order endpoints are called. Real execution remains forbidden.
