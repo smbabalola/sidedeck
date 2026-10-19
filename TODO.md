@@ -30,7 +30,7 @@
 
 - Branch: `feat/p3-readonly-batch`
 - Baseline: `2b4823b50d1af96d581c39993a48b1b8434f7056`
-- Current remediation commit: pending final correction commit.
+- Current remediation commit: `a3dfacf03d32f2d4b937ff8ff0db56f7958d9d51`.
 - Local evidence: `199 passed, 1 skipped`; Ruff passed; mypy passed with no
   issues in 51 source files; disposable Alembic upgrade and downgrade passed;
   offline acceptance passed with `P4_DECISION=NO-GO`.
