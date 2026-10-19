@@ -46,7 +46,9 @@ class SaxoSimClient:
     def get(self, path: str) -> dict[str, Any]:
         scoped = re.fullmatch(r"/port/v1/(balances|positions|orders)[?]ClientKey=[A-Za-z0-9%_-]+&AccountKey=[A-Za-z0-9%_-]+", path)
         lookup = re.fullmatch(r"/ref/v1/instruments[?]AccountKey=[A-Za-z0-9%_-]+&AssetTypes=Stock&Keywords=[A-Z]{1,6}&%24top=20", path)
-        if path not in _ALLOWED and scoped is None and lookup is None:
+        detail = re.fullmatch(r"/ref/v1/instruments/details/[1-9][0-9]*/Stock[?]AccountKey=[A-Za-z0-9%_-]+&ClientKey=[A-Za-z0-9%_-]+", path)
+        price = re.fullmatch(r"/trade/v1/infoprices[?]AccountKey=[A-Za-z0-9%_-]+&AssetType=Stock&Uic=[1-9][0-9]*", path)
+        if path not in _ALLOWED and all(item is None for item in (scoped, lookup, detail, price)):
             raise PermissionError("Saxo endpoint is not approved for read-only access")
         token = os.environ.get(self.token_env, "")
         if not token:
