@@ -120,6 +120,8 @@ class ExternalJsonAgent:
     revision: str
     command: tuple[str, ...]
     cwd: str | None = None
+    model_provider: str | None = None
+    model_id: str | None = None
 
     def run(self, ticker: str, cutoff: datetime) -> AgentResult:
         if self.portfolio_id not in ("tradingagents", "ai-trading"):
@@ -128,8 +130,15 @@ class ExternalJsonAgent:
             raise ValueError("invalid ticker")
         if cutoff.tzinfo is None or cutoff.utcoffset() is None:
             raise ValueError("cutoff must include timezone")
+        model_args: list[str] = []
+        if (self.model_provider is None) != (self.model_id is None):
+            raise ValueError("provider/model must be supplied together")
+        if self.model_provider is not None and self.model_id is not None:
+            from sidedeck.application.p5_model_config import ModelChoice
+            choice = ModelChoice(self.model_provider, self.model_id)
+            model_args = ["--provider", choice.provider, "--model", choice.model]
         data = _run([*self.command, "--ticker", ticker, "--as-of",
-                     cutoff.date().isoformat()], cwd=self.cwd)
+                     cutoff.date().isoformat(), *model_args], cwd=self.cwd)
         if data.get("ticker") != ticker:
             raise AgentUnavailable("upstream ticker mismatch")
         decision = data.get("decision")
