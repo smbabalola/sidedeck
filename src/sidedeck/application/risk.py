@@ -82,7 +82,7 @@ def screen_proposal(
             return RiskDecision(False, "notional_too_small_for_whole_share")
     if not instrument.fractional_allowed and quantity != quantity.to_integral_value():
         return RiskDecision(False, "unsupported_fractional_quantity")
-    if quantity.as_tuple().exponent < -instrument.quantity_scale:
+    if quantity != quantity.quantize(Decimal(1).scaleb(-instrument.quantity_scale)):
         return RiskDecision(False, "quantity_precision_exceeded")
     notional = quantity * snapshot.price
     held = portfolio.positions.get(intent.instrument_id)
