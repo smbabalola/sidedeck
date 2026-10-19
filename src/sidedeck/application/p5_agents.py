@@ -22,6 +22,7 @@ def main() -> int:
     parser.add_argument("--hedge-fund-bridge", default="",
                         help="approved absolute path to JSON-output research bridge")
     parser.add_argument("--hedge-fund-python", required=True)
+    parser.add_argument("--fundamentals-json", default="", help="independent SEC-filed TTM records")
     parser.add_argument("--report", default="", help="optional local-only JSON status report")
     args = parser.parse_args()
     hedge_bridge = args.hedge_fund_bridge or str(
@@ -44,7 +45,10 @@ def main() -> int:
         ExternalJsonAgent(
             upstream="virattt/ai-hedge-fund", portfolio_id="ai-trading",
             revision="upstream-unpinned-local",
-            command=(args.hedge_fund_python, hedge_bridge),
+            command=(args.hedge_fund_python, hedge_bridge) + (
+                ("--fundamentals-json", args.fundamentals_json)
+                if args.fundamentals_json else ()
+            ),
             model_provider=settings.portfolios["ai-trading"].default.provider,
             model_id=settings.portfolios["ai-trading"].default.model,
         ),
