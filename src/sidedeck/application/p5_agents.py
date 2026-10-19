@@ -12,12 +12,14 @@ from pathlib import Path
 
 from sidedeck.application.ai_agents import AgentUnavailable, ExternalJsonAgent
 from sidedeck.application.p5_model_config import load_model_settings
+from sidedeck.application.p5_research_credentials import import_research_env
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="P5 research-only external agent comparison")
     parser.add_argument("--ticker", default="SOFI")
     parser.add_argument("--models-config", required=True, help="versioned non-secret JSON file")
+    parser.add_argument("--env-file", default="", help="explicit local research API keys file")
     parser.add_argument("--tradingagents-python", required=True)
     parser.add_argument("--hedge-fund-bridge", default="",
                         help="approved absolute path to JSON-output research bridge")
@@ -32,6 +34,8 @@ def main() -> int:
         print("P5_DECISION=NO-GO (hedge fund bridge missing)")
         return 2
     settings = load_model_settings(args.models_config)
+    if args.env_file:
+        import_research_env(args.env_file)
     now = datetime.now(timezone.utc)
     agents = (
         ExternalJsonAgent(
