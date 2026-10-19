@@ -26,6 +26,7 @@ def assess_paper_snapshot(
     *,
     expected_account_id: str,
     dedicated_account: bool = False,
+    no_open_orders_verified: bool = False,
 ) -> PaperSnapshotAssessment:
     """No paper broker state is assigned to an internal experiment by inference.
 
@@ -48,9 +49,12 @@ def assess_paper_snapshot(
         reason = "cash_mismatch_or_unattributed_funds"
     elif not dedicated_account:
         reason = "account_dedication_unverified"
+    elif not no_open_orders_verified:
+        reason = "open_orders_unverified"
     else:
         reason = "read_only_snapshot_consistent"
-    safe = identity.verified and report.matched and balance_consistent and dedicated_account
+    safe = (identity.verified and report.matched and balance_consistent
+            and dedicated_account and no_open_orders_verified)
     return PaperSnapshotAssessment(
         account, report, identity.verified, balance_consistent, safe, reason
     )
