@@ -35,3 +35,9 @@ We intentionally do not install dependencies, read real keys, trigger paid model
 ## Design boundaries
 
 Use one market cut-off and same instrument universe for both agents. Keep existing `tradingagents` and `ai-trading` ledger identities at USD 1,000 apiece. Do not infer trade size from an upstream BUY string; risk screen after source/quote validation. Maintain P4 SIM-only order submission disabled.
+
+## P5 upstream runtime bridge update (2026-10-19)
+
+Pinned public review: AI Hedge Fund `78b779c1389e2d1452dc29606d2c4126d859b964`. Its v2 `hedge_fund.signals.buffett.BuffettAgent.predict(ticker,date,FDClient)` is a genuine research-only interface and returns conviction / abstention / thesis. `sidedeck.bridges.hedge_fund_bridge` now calls that interface without creating a fund, paper book or broker order. **Only the Buffett persona is integrated**, not the full five-agent portfolio or orchestration. The launcher defaults to this local bridge file, but requires the upstream package, LLM provider and Financial Datasets access in an isolated interpreter; actual authenticated runtime invocation has **not** been performed.
+
+TradingAgents mainline `TradingAgentsGraph.propagate()` currently returns five-tier ratings (Buy, Overweight, Hold, Underweight, Sell) or REVIEW. SideDeck accepts only unambiguous BUY/SELL/HOLD and refuses to convert Overweight/Underweight/Review into executable proposal instructions. Full model/role compatibility and market-data parity still need real integration checks. The research launcher remains proposal output only; broker submission disabled.
