@@ -8,9 +8,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import Protocol
 
 from sidedeck.domain.contracts import MarketSnapshot, PriceType, Session, require_utc
+
+
+class EvidenceOrigin(StrEnum):
+    SYNTHETIC_FIXTURE = "SYNTHETIC_FIXTURE"
+    AUTHENTICATED_PROVIDER = "AUTHENTICATED_PROVIDER"
 
 
 @dataclass(frozen=True)
@@ -52,6 +58,8 @@ class ExecutionEvidence:
     spread_usd: Decimal
     fees_usd: Decimal
     fx_fee_usd: Decimal
+    quote_origin: EvidenceOrigin = EvidenceOrigin.SYNTHETIC_FIXTURE
+    fx_origin: EvidenceOrigin = EvidenceOrigin.SYNTHETIC_FIXTURE
 
     def __post_init__(self) -> None:
         now = require_utc(self.observed_at)
@@ -72,6 +80,8 @@ class ExecutionEvidence:
             raise ValueError("market or FX evidence is future-dated")
         if any(now - timestamp > self.max_age for timestamp in (quote_time, quote_ingest, fx_time, fx_ingest)):
             raise ValueError("market or FX evidence is stale")
+        if not isinstance(self.quote_origin, EvidenceOrigin) or not isinstance(self.fx_origin, EvidenceOrigin):
+            raise ValueError("market provenance origin is invalid")
         object.__setattr__(self, "observed_at", now)
 
     @property
@@ -89,6 +99,8 @@ def collect_execution_evidence(
     spread_usd: Decimal = Decimal("0"),
     fees_usd: Decimal = Decimal("0"),
     fx_fee_usd: Decimal = Decimal("0"),
+    quote_origin: EvidenceOrigin = EvidenceOrigin.SYNTHETIC_FIXTURE,
+    fx_origin: EvidenceOrigin = EvidenceOrigin.SYNTHETIC_FIXTURE,
 ) -> ExecutionEvidence:
     """Collect both legs at one cutoff; provider failures propagate closed."""
     cutoff = require_utc(as_of)
@@ -99,4 +111,5 @@ def collect_execution_evidence(
     return ExecutionEvidence(
         quote=quote, fx=fx, observed_at=cutoff, max_age=max_age,
         spread_usd=spread_usd, fees_usd=fees_usd, fx_fee_usd=fx_fee_usd,
+        quote_origin=quote_origin, fx_origin=fx_origin,
     )

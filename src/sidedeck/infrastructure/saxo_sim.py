@@ -48,7 +48,10 @@ class SaxoSimClient:
         lookup = re.fullmatch(r"/ref/v1/instruments[?]AccountKey=[A-Za-z0-9%_-]+&AssetTypes=Stock&Keywords=[A-Z]{1,6}&%24top=20", path)
         detail = re.fullmatch(r"/ref/v1/instruments/details/[1-9][0-9]*/Stock[?]AccountKey=[A-Za-z0-9%_-]+&ClientKey=[A-Za-z0-9%_-]+", path)
         price = re.fullmatch(r"/trade/v1/infoprices[?]AccountKey=[A-Za-z0-9%_-]+&AssetType=Stock&Uic=[1-9][0-9]*", path)
-        audit = re.fullmatch(r"/cs/v1/audit/orderactivities[?]AccountKey=[A-Za-z0-9%_-]+&ClientKey=[A-Za-z0-9%_-]+&EntryType=Last&IncludeSubAccounts=false&%24top=100", path)
+        audit = re.fullmatch(
+            r"/cs/v1/audit/orderactivities[?]AccountKey=[A-Za-z0-9%_-]+&ClientKey="
+            r"[A-Za-z0-9%_-]+&EntryType=(Last|All)&IncludeSubAccounts=false&%24top=100"
+            r"(&OrderId=[A-Za-z0-9%_-]+)?", path)
         if path not in _ALLOWED and all(item is None for item in (scoped, lookup, detail, price, audit)):
             raise PermissionError("Saxo endpoint is not approved for read-only access")
         token = os.environ.get(self.token_env, "")

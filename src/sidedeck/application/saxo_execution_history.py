@@ -9,9 +9,37 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
+from urllib.parse import quote
+
+from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
+from sidedeck.infrastructure.saxo_sim import SaxoSimClient
+
 
 class HistoryTransport(Protocol):
     def get(self, path: str) -> dict[str, Any]: ...
+
+
+def order_history_path(scope: SaxoAccountScope, order_id: str) -> str:
+    if not order_id or len(order_id) > 128 or any(ch.isspace() for ch in order_id):
+        raise ValueError("invalid Saxo order ID")
+    return ("/cs/v1/audit/orderactivities?AccountKey=" + quote(scope.account_key, safe="")
+            + "&ClientKey=" + quote(scope.client_key, safe="")
+            + "&EntryType=All&IncludeSubAccounts=false&%24top=100&OrderId="
+            + quote(order_id, safe=""))
+
+
+class _SaxoHistoryTransport:
+    def __init__(self, client: SaxoSimClient) -> None:
+        self.client = client
+
+    def get(self, path: str) -> dict[str, Any]:
+        return self.client.get(path)
+
+
+def read_order_history(client: SaxoSimClient, scope: SaxoAccountScope,
+                       order_id: str) -> tuple[dict[str, Any], ...]:
+    """One account-scoped GET chain; no retry or fallback provider."""
+    return fetch_history(_SaxoHistoryTransport(client), order_history_path(scope, order_id))
 
 
 @dataclass(frozen=True)
@@ -24,7 +52,10 @@ class BrokerExecution:
     quantity: Decimal
     price: Decimal
     fees: Decimal
-    currency: str
+    instrument_currency: str
+    account_currency: str
+    price_currency: str
+    fees_currency: str
     occurred_at: str
 
 
@@ -86,10 +117,19 @@ def parse_executions(
     account_id: str,
     order_id: str,
     external_reference: str,
+    instrument_currency: str,
+    account_currency: str,
+    price_currency: str,
+    fees_currency: str,
 ) -> tuple[BrokerExecution, ...]:
     """Parse only fill-like rows and make execution identity durable."""
     if not account_id or not order_id or not external_reference:
         raise ValueError("execution identity is required")
+    for currency in (instrument_currency, account_currency, price_currency, fees_currency):
+        if not isinstance(currency, str) or len(currency) != 3 or not currency.isalpha():
+            raise ValueError("execution currency metadata is invalid")
+    if price_currency != instrument_currency:
+        raise ValueError("execution price currency is not instrument currency")
     seen: set[str] = set()
     result: list[BrokerExecution] = []
     for row in rows:
@@ -105,18 +145,19 @@ def parse_executions(
         execution_id = row.get("ExecutionId") or row.get("LogId")
         if not isinstance(execution_id, str) or not execution_id or execution_id in seen:
             raise ValueError("missing or duplicate execution identity")
-        if row.get("Currency") != "EUR":
-            raise ValueError("unexpected execution currency")
         occurred_at = row.get("ExecutionTime") or row.get("ActivityTime")
         if not isinstance(occurred_at, str) or not occurred_at:
             raise ValueError("execution timestamp missing")
         result.append(BrokerExecution(
             account_id=account_id, order_id=order_id,
             external_reference=external_reference, execution_id=execution_id,
-            status=status, quantity=_positive(row.get("Amount"), "execution quantity"),
+            status=status, quantity=_positive(
+                row.get("FillAmount"), "execution fill quantity"),
             price=_positive(row.get("ExecutionPrice"), "execution price"),
-            fees=_nonnegative(row.get("Fees", "0"), "execution fees"),
-            currency="EUR", occurred_at=occurred_at,
+            fees=_nonnegative(row.get("Fees"), "execution fees"),
+            instrument_currency=instrument_currency, account_currency=account_currency,
+            price_currency=price_currency, fees_currency=fees_currency,
+            occurred_at=occurred_at,
         ))
         seen.add(execution_id)
     return tuple(result)

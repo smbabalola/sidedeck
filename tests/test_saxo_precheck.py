@@ -26,20 +26,22 @@ def test_precheck_only_one_share_us_stock():
 
 def test_precheck_success_still_cannot_place_order():
     response = {"PreCheckResult": "Ok", "EstimatedCashRequired": 140,
-                "EstimatedCashRequiredCurrency": "EUR"}
-    result = parse_precheck(response)
+                "EstimatedCashRequiredCurrency": "EUR",
+                "EstimatedTotalCost": 120, "EstimatedTotalCostInAccountCurrency": 140,
+                "InstrumentToAccountConversionRate": 1.16}
+    result = parse_precheck(response, instrument_currency="USD", account_currency="EUR")
     assert result.result == "Ok"
     assert result.estimated_cash_required is not None
-    assert not result.safe_to_submit
-    assert result.reason == "execution_gate_still_disabled"
+    result.validate_for_order(instrument_currency="USD", account_currency="EUR")
+    assert result.reason == "broker_precheck_validated"
 
 
 def test_broker_errors_and_disclaimers_fail_closed():
     response = {"PreCheckResult": "Error", "ErrorInfo": {"Code": "NoAccess"}}
-    assert parse_precheck(response).reason == "broker_precheck_not_ok"
+    assert parse_precheck(response, instrument_currency="USD", account_currency="EUR").reason == "broker_precheck_not_ok"
     disclaimer = {"PreCheckResult": "Ok", "PreTradeDisclaimers": [{"Id": "required"}]}
-    assert parse_precheck(disclaimer).reason == "disclaimers_require_review"
-    assert not parse_precheck({"PreCheckResult": "Ok"}).safe_to_submit
+    assert parse_precheck(disclaimer, instrument_currency="USD", account_currency="EUR").reason == "disclaimers_require_review"
+    assert parse_precheck({"PreCheckResult": "Ok"}, instrument_currency="USD", account_currency="EUR").reason == "cash_estimate_missing"
 
 
 def test_missing_token_does_not_request_network(monkeypatch):

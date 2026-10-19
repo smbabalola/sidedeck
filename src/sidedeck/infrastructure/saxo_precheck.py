@@ -41,38 +41,99 @@ def precheck_payload(scope: SaxoAccountScope, *, uic: int = 211,
 
 
 @dataclass(frozen=True)
-class PrecheckDecision:
+class PrecheckEvidence:
     result: str
-    safe_to_submit: bool
     reason: str
     estimated_cash_required: Decimal | None
-    currency: str
+    cash_currency: str
+    estimated_total_cost: Decimal | None
+    total_cost_currency: str
+    estimated_total_cost_account: Decimal | None
+    account_cost_currency: str
+    instrument_to_account_rate: Decimal | None
+
+    @property
+    def currency(self) -> str:
+        """Compatibility display field; never an authorization decision."""
+        return self.cash_currency
+
+    def validate_for_order(self, *, instrument_currency: str,
+                           account_currency: str) -> None:
+        """Validate broker facts; this is not execution authorization."""
+        if self.result != "Ok" or self.reason != "broker_precheck_validated":
+            raise ValueError("broker precheck is not valid")
+        if not self.estimated_cash_required or not self.cash_currency:
+            raise ValueError("broker cash requirement is missing")
+        if self.cash_currency != account_currency:
+            raise ValueError("cash requirement currency differs from account currency")
+        if self.total_cost_currency != instrument_currency:
+            raise ValueError("precheck total cost currency differs from instrument currency")
+        if self.account_cost_currency != account_currency:
+            raise ValueError("precheck account cost currency is not the account currency")
+        if (self.estimated_total_cost is None or self.estimated_total_cost_account is None
+                or self.instrument_to_account_rate is None):
+            raise ValueError("precheck conversion evidence is incomplete")
+        if (not self.estimated_total_cost.is_finite()
+                or not self.estimated_total_cost_account.is_finite()
+                or not self.instrument_to_account_rate.is_finite()
+                or self.estimated_total_cost <= 0
+                or self.estimated_total_cost_account <= 0
+                or self.instrument_to_account_rate <= 0):
+            raise ValueError("precheck conversion evidence is invalid")
 
 
-def parse_precheck(data: dict[str, Any]) -> PrecheckDecision:
+def parse_precheck(data: dict[str, Any], *, instrument_currency: str | None = None,
+                   account_currency: str | None = None) -> PrecheckEvidence:
     if not isinstance(data, dict):
         raise ValueError("malformed broker precheck response")
     result = data.get("PreCheckResult")
     if data.get("ErrorInfo") or result != "Ok":
-        return PrecheckDecision(str(result), False, "broker_precheck_not_ok", None, "")
+        return PrecheckEvidence(str(result), "broker_precheck_not_ok", None, "",
+                                None, "", None, "", None)
     disclaimers = data.get("PreTradeDisclaimers")
     if disclaimers:
-        return PrecheckDecision("Ok", False, "disclaimers_require_review", None, "")
+        return PrecheckEvidence("Ok", "disclaimers_require_review", None, "",
+                                None, "", None, "", None)
     currency = data.get("EstimatedCashRequiredCurrency")
     raw = data.get("EstimatedCashRequired")
-    if currency not in ("EUR", "USD") or isinstance(raw, bool):
-        return PrecheckDecision("Ok", False, "cash_estimate_missing", None, "")
+    total_currency = data.get("EstimatedTotalCostCurrency") or instrument_currency
+    response_account_currency = data.get("EstimatedTotalCostInAccountCurrencyCurrency")
+    if (currency not in ("EUR", "USD") or not isinstance(total_currency, str)
+            or not total_currency or not isinstance(account_currency, str)
+            or not account_currency or (response_account_currency is not None
+                                        and response_account_currency != account_currency)
+            or isinstance(raw, bool)):
+        return PrecheckEvidence("Ok", "cash_estimate_missing", None, "",
+                                None, "", None, "", None)
     try:
         amount = Decimal(str(raw))
     except (InvalidOperation, TypeError, ValueError):
-        return PrecheckDecision("Ok", False, "cash_estimate_invalid", None, "")
+        return PrecheckEvidence("Ok", "cash_estimate_invalid", None, "",
+                                None, "", None, "", None)
     if not amount.is_finite() or amount <= 0:
-        return PrecheckDecision("Ok", False, "cash_estimate_invalid", None, "")
-    # No independent market quote or approved EUR/USD accounting currently exists.
-    return PrecheckDecision("Ok", False, "execution_gate_still_disabled", amount, currency)
+        return PrecheckEvidence("Ok", "cash_estimate_invalid", None, "",
+                                None, "", None, "", None)
+    def money(name: str) -> Decimal | None:
+        value = data.get(name)
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            parsed = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return parsed if parsed.is_finite() and parsed > 0 else None
+    return PrecheckEvidence(
+        "Ok", "broker_precheck_validated", amount, currency,
+        money("EstimatedTotalCost"), total_currency,
+        money("EstimatedTotalCostInAccountCurrency"), account_currency,
+        money("InstrumentToAccountConversionRate"),
+    )
 
 
-def run_sim_precheck(scope: SaxoAccountScope, *, uic: int = 211, timeout_seconds: float = 10) -> PrecheckDecision:
+def run_sim_precheck(scope: SaxoAccountScope, *, uic: int = 211,
+                     instrument_currency: str = "USD",
+                     account_currency: str | None = None,
+                     timeout_seconds: float = 10) -> PrecheckEvidence:
     """One broker precheck POST, strictly SIM-only; /orders is never called."""
     if timeout_seconds <= 0 or timeout_seconds > 30:
         raise ValueError("invalid timeout")
@@ -95,4 +156,5 @@ def run_sim_precheck(scope: SaxoAccountScope, *, uic: int = 211, timeout_seconds
         raise SaxoPrecheckError(f"Saxo SIM precheck HTTP {exc.code}") from None
     except (URLError, OSError, ValueError):
         raise SaxoPrecheckError("Saxo SIM precheck connection or response failed") from None
-    return parse_precheck(data)
+    return parse_precheck(data, instrument_currency=instrument_currency,
+                          account_currency=account_currency)

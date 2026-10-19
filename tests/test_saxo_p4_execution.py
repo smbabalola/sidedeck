@@ -3,14 +3,16 @@ from decimal import Decimal
 
 import pytest
 
-from sidedeck.application.saxo_execution_history import fetch_history, parse_executions
-from sidedeck.application.saxo_market_data import ExecutionEvidence, FxSnapshot
-from sidedeck.infrastructure.saxo_precheck import PrecheckDecision
+from sidedeck.application.saxo_execution_history import fetch_history, order_history_path, parse_executions
+from sidedeck.application.saxo_market_data import EvidenceOrigin, ExecutionEvidence, FxSnapshot
+from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence
 from sidedeck.application.saxo_sim_submission import (
-    OperatorApproval, SaxoSimSubmitter, SubmissionBlocked, prepare_sofi_request,
+    ExecutionAuthorization, SaxoSimSubmitter, SubmissionBlocked, authorize_execution,
+    prepare_sofi_request,
 )
 from sidedeck.domain.contracts import MarketSnapshot, PriceType, Session
 from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
+from sidedeck.infrastructure.saxo_submit_transport import SaxoSimSubmitTransport
 
 NOW = datetime(2026, 10, 19, 14, 0, tzinfo=timezone.utc)
 
@@ -24,12 +26,15 @@ def evidence() -> ExecutionEvidence:
     )
     fx = FxSnapshot("licensed-fx", "EUR/USD", Decimal("1.10"), NOW, NOW, "firm")
     return ExecutionEvidence(quote, fx, NOW, timedelta(minutes=2),
-                             Decimal("0.10"), Decimal("0.20"), Decimal("0"))
+                             Decimal("0.10"), Decimal("0.20"), Decimal("0"),
+                             quote_origin=EvidenceOrigin.AUTHENTICATED_PROVIDER,
+                             fx_origin=EvidenceOrigin.AUTHENTICATED_PROVIDER)
 
 
-def precheck() -> PrecheckDecision:
-    return PrecheckDecision("Ok", True, "approved-for-controlled-sim-test",
-                            Decimal("41.03"), "EUR")
+def precheck() -> PrecheckEvidence:
+    return PrecheckEvidence("Ok", "broker_precheck_validated", Decimal("41.03"),
+                            "EUR", Decimal("37.30"), "USD", Decimal("41.03"),
+                            "EUR", Decimal("1.10"))
 
 
 def test_market_and_fx_evidence_rejects_stale_or_wrong_direction():
@@ -58,12 +63,14 @@ def test_execution_history_paginates_and_parses_only_fill_evidence():
     assert pages.paths == ["/first", "/second"]
     parsed = parse_executions((
         {"AccountId": "22866064", "OrderId": "o", "ExternalReference": "k",
-         "ExecutionId": "fill-1", "Status": "FinalFill", "Amount": 1,
-         "ExecutionPrice": "41", "Fees": "0.2", "Currency": "EUR",
+         "ExecutionId": "fill-1", "Status": "FinalFill", "FillAmount": 1,
+         "ExecutionPrice": "41", "Fees": "0.2",
          "ExecutionTime": "2026-10-19T14:00:00Z"},
         {"AccountId": "22866064", "OrderId": "o", "ExternalReference": "k",
          "Status": "Placed"},
-    ), account_id="22866064", order_id="o", external_reference="k")
+    ), account_id="22866064", order_id="o", external_reference="k",
+        instrument_currency="USD", account_currency="EUR",
+        price_currency="USD", fees_currency="EUR")
     assert len(rows) == 2 and parsed[0].execution_id == "fill-1"
     assert parsed[0].fees == Decimal("0.2")
 
@@ -76,7 +83,23 @@ def test_history_rejects_loop_duplicate_and_cross_account():
         fetch_history(Loop(), "/same")
     with pytest.raises(ValueError, match="mismatch"):
         parse_executions(({"AccountId": "wrong"},), account_id="22866064",
-                         order_id="o", external_reference="k")
+                         order_id="o", external_reference="k",
+                         instrument_currency="USD", account_currency="EUR",
+                         price_currency="USD", fees_currency="EUR")
+
+
+def test_official_history_path_and_sim_payload_boundary():
+    scope = SaxoAccountScope("approved", "opaque-account-key", "client-key")
+    path = order_history_path(scope, "broker-1")
+    assert "EntryType=All" in path and "OrderId=broker-1" in path
+    payload = {
+        "AccountKey": "opaque-account-key", "Uic": 23241352, "AssetType": "Stock",
+        "BuySell": "Buy", "Amount": 1, "OrderType": "Market",
+        "OrderDuration": {"DurationType": "DayOrder"}, "ExternalReference": "sofi-1",
+    }
+    SaxoSimSubmitTransport.validate_payload(payload)
+    with pytest.raises(RuntimeError, match="disabled"):
+        SaxoSimSubmitTransport().submit(payload)
 
 
 def test_submission_is_disabled_and_approval_is_exactly_bound(tmp_path):
@@ -86,17 +109,20 @@ def test_submission_is_disabled_and_approval_is_exactly_bound(tmp_path):
                                    expected_account_id="approved",
                                    portfolio_cash_usd=Decimal("1000"), now=NOW)
     submitter = SaxoSimSubmitter(str(tmp_path / "orders.sqlite"))
-    approval = OperatorApproval("approval-1", request.digest(), NOW + timedelta(minutes=1))
+    approval = authorize_execution(request, authorization_id="approval-1",
+                                   issued_by="operator", expires_at=NOW + timedelta(minutes=1))
     with pytest.raises(SubmissionBlocked, match="disabled"):
         submitter.submit(request, approval, now=NOW)
     class Acknowledged:
         def submit(self, payload):
-            return {"Status": "Acknowledged"}
+            return {"OrderId": "broker-1"}
 
-    with pytest.raises(SubmissionBlocked, match="approval"):
+    with pytest.raises(SubmissionBlocked, match="authorization"):
         SaxoSimSubmitter(str(tmp_path / "enabled.sqlite"), network_enabled=True,
                          transport=Acknowledged()).submit(
-                             request, OperatorApproval("x", "wrong", NOW), now=NOW)
+                             request, ExecutionAuthorization("x", "operator", "wrong",
+                             "tradingagents", "SOFI", 23241352, "Buy", 1, "Market",
+                             "wrong", "wrong", "wrong", NOW), now=NOW)
 
 
 def test_injected_sim_transport_is_single_attempt_and_uncertain(tmp_path):
@@ -115,7 +141,8 @@ def test_injected_sim_transport_is_single_attempt_and_uncertain(tmp_path):
     transport = Timeout()
     submitter = SaxoSimSubmitter(str(tmp_path / "orders.sqlite"), transport=transport,
                                  network_enabled=True)
-    approval = OperatorApproval("approval-2", request.digest(), NOW + timedelta(minutes=1))
+    approval = authorize_execution(request, authorization_id="approval-2",
+                                   issued_by="operator", expires_at=NOW + timedelta(minutes=1))
     with pytest.raises(SubmissionBlocked, match="uncertain"):
         submitter.submit(request, approval, now=NOW)
     with pytest.raises(SubmissionBlocked, match="already claimed"):
