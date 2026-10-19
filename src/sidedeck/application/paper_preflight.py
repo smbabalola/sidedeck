@@ -34,6 +34,9 @@ def main() -> int:
         print("READ-ONLY IDENTITY VERIFIED; trading is still disabled")
         print(f"Position symbols: {len(positions)}; open orders: {open_orders}")
         print("Broker balances are NOT reconciled with internal experiment portfolios.")
+        if open_orders:
+            print("BLOCKED: outstanding paper orders require reconciliation")
+            return 2
         return 0
     except (ValueError, PaperReadError, PermissionError):
         print("BLOCKED: paper-account preflight could not be verified")
