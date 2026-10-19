@@ -33,6 +33,7 @@
 - Latest correction evidence: `202 passed, 1 skipped`; Ruff passed; mypy
   passed; Alembic `0001` through `0006` upgrade/downgrade passed; offline
   acceptance passed with `P4_DECISION=NO-GO`.
-- CI: pending push; no CI result is claimed here.
+- CI for this correction: [run 39250451185](https://github.com/smbabalola/sidedeck/actions/runs/39250451185),
+  in progress when recorded; completion is not claimed.
 - Decision: `P4_DECISION=NO-GO` until authenticated evidence and a separately
   approved one-time operator authorization exist.
