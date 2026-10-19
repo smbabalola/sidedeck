@@ -45,4 +45,6 @@ def test_snapshot_probe_reports_failure_without_claiming_approval(monkeypatch, t
     result = snapshot_probe(str(path), "SOFI", "2025-05-01")
     assert result["snapshot_status"] == "UNAVAILABLE"
     assert result["error_type"] == "RuntimeError"
+    assert result["error_detail"] == "upstream incompatible"
+    assert "build_snapshot:" in result["error_location"]
     assert result["buffett_ready"] is False
