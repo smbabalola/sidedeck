@@ -1,9 +1,6 @@
-import json
-from datetime import date
-
 import pytest
 
-from sidedeck.application.p5_sec_edgar import SECDataError, extract_annual_facts
+from sidedeck.application.p5_sec_edgar import extract_annual_facts
 
 
 def entry(filed="2025-02-01", val=100, form="10-K", start="2024-01-01"):
