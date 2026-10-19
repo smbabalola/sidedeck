@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from decimal import Decimal
+from typing import Any
 
 from sidedeck.application.saxo_instrument_readiness import detail_path
 from sidedeck.application.saxo_shortlist_precheck import identity_valid
@@ -37,7 +38,7 @@ def acceptance_reasons(*, detail_ok: bool, precheck_ok: bool,
     return tuple(reasons)
 
 
-def _count(data: dict, label: str) -> int:
+def _count(data: dict[str, Any], label: str) -> int:
     records = data.get("Data")
     if not isinstance(records, list) or data.get("__next") or (
         type(data.get("__count")) is int and data["__count"] > len(records)
