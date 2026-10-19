@@ -70,7 +70,7 @@ class SaxoSimClient:
         except HTTPError as exc:
             if exc.code in (401, 403):
                 raise SaxoSimError("Saxo SIM authentication or access rejected") from None
-            raise SaxoSimError("Saxo SIM HTTP request failed") from None
+            raise SaxoSimError(f"Saxo SIM HTTP {exc.code}") from None
         except (URLError, OSError, ValueError):
             raise SaxoSimError("Saxo SIM response or connection failed") from None
         if not isinstance(result, dict):
