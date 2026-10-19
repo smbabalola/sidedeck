@@ -16,8 +16,15 @@ def test_shortlist_uics_from_user_broker_output():
 def test_requires_exact_symbol_currency_and_account():
     detail = {"Uic": 247, "Symbol": "INTC:xnas", "AssetType": "Stock",
               "CurrencyCode": "USD", "TradingStatus": "Tradable",
-              "TradableOn": ["accountkey"]}
-    assert identity_valid(detail, "INTC", 247, "accountkey")
-    assert not identity_valid(detail, "INTC", 247, "other")
-    assert not identity_valid({**detail, "Symbol": "INTC:xmil"}, "INTC", 247, "accountkey")
-    assert not identity_valid({**detail, "CurrencyCode": "EUR"}, "INTC", 247, "accountkey")
+              "TradableOn": ["22866064"]}
+    assert identity_valid(detail, "INTC", 247, "22866064")
+    assert not identity_valid(detail, "INTC", 247, "opaque-key")
+    assert not identity_valid({**detail, "Symbol": "INTC:xmil"}, "INTC", 247, "22866064")
+    assert not identity_valid({**detail, "CurrencyCode": "EUR"}, "INTC", 247, "22866064")
+
+
+def test_explicit_not_tradable_blocks():
+    detail = {"Uic": 247, "Symbol": "INTC:xnas", "AssetType": "Stock",
+              "CurrencyCode": "USD", "TradingStatus": "Tradable",
+              "IsTradable": False, "TradableOn": ["22866064"]}
+    assert not identity_valid(detail, "INTC", 247, "22866064")
