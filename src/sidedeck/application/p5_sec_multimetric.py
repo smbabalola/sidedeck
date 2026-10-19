@@ -13,6 +13,7 @@ from typing import Any
 
 from sidedeck.application.p5_sec_edgar import download_company_facts
 from sidedeck.application.p5_sec_ttm import derive_ttm_net_income
+from sidedeck.application.p5_sec_derived import cash_flow_ttm, roe_from_filed_equity
 
 
 _USD_FLOW_TAGS = {
@@ -71,6 +72,10 @@ def preview_multimetric(payload: dict[str, Any], as_of: str) -> dict[str, Any]:
         result[key + "_reported"] = _first_public_observations(payload, tag, cutoff, instant=False)
     for key, tag in _USD_INSTANT_TAGS.items():
         result[key + "_instant"] = _first_public_observations(payload, tag, cutoff, instant=True)
+    result["operating_cash_flow_ttm"] = cash_flow_ttm(payload, as_of)
+    result["return_on_equity_derived"] = roe_from_filed_equity(
+        net_income, result["stockholders_equity_instant"], as_of,
+    )
     return result
 
 
