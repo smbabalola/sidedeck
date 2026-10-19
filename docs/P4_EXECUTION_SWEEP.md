@@ -32,10 +32,14 @@ Saxo, read credentials, or mutate an existing portfolio database.
   portfolio/account/reference matching, versioned durable pending-event
   recovery, deterministic replay-safe event identity, external execution
   deduplication, fresh-ledger reconstruction of POSTED and incomplete rows,
-  cumulative authorized-quantity reconciliation, and lifecycle update.
+  chronological/hash-verified replay, lifecycle-bound broker order identity,
+  durable account binding, cumulative authorized-quantity reconciliation, and
+  lifecycle update.
 - `migrations/versions/0006_execution_quantity.py`: persists the authorized
   execution quantity needed to validate recovery and FinalFill evidence after
   restart.
+- `migrations/versions/0007_execution_account_binding.py`: persists the
+  verified account identity with each recovery row.
 - `infrastructure.saxo_submit_transport`: strict SIM-host POST adapter with
   exact SOFI payload validation, bounded timeout, redacted errors, no redirect
   and no retry. It is disabled unless explicitly constructed for a separately
@@ -81,6 +85,8 @@ and [order-activity guide](https://www.developer.saxo/openapi/learn/audit-ordera
 | Fresh-ledger recovery of POSTED events | PASS in offline tests |
 | Concurrent/repeated recovery does not duplicate accounting | PASS in offline tests |
 | Cumulative quantity and FinalFill reconciliation | PASS in offline tests |
+| Chronological/hash-verified recovery | PASS in offline tests |
+| Broker order identity checked against acknowledged lifecycle | PASS in offline tests |
 | Real authenticated fill reconciliation | NOT VERIFIED |
 | Current authenticated executable quote and FX provenance | NOT VERIFIED |
 | Current Saxo account/instrument currency evidence | NOT VERIFIED in this batch |

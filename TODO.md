@@ -17,6 +17,10 @@
   client while preserving host, account, client and order scope.
 - [x] Reconcile cumulative execution quantity to the authorized order and
   reject overfills or incomplete FinalFill evidence.
+- [x] Replay recovery chronologically with deterministic tie-breaking and
+  reject persisted event hash corruption.
+- [x] Require acknowledged lifecycle broker-order identity before journaling
+  any fill; bind account and authorized quantity durably.
 - [x] Run offline regression, migration and acceptance checks without Saxo
   credentials or broker requests.
 - [ ] Obtain separately approved authenticated SIM quote, FX, precheck and
@@ -26,13 +30,17 @@
 
 - Branch: `feat/p3-readonly-batch`
 - Baseline: `2b4823b50d1af96d581c39993a48b1b8434f7056`
-- Current remediation commit: `25a95919daceea9afaadd2561ae8ca3251841fd8`.
+- Current remediation commit: pending final correction commit.
 - Local evidence: `199 passed, 1 skipped`; Ruff passed; mypy passed with no
   issues in 51 source files; disposable Alembic upgrade and downgrade passed;
   offline acceptance passed with `P4_DECISION=NO-GO`.
 - Latest correction evidence: `202 passed, 1 skipped`; Ruff passed; mypy
   passed; Alembic `0001` through `0006` upgrade/downgrade passed; offline
   acceptance passed with `P4_DECISION=NO-GO`.
+- Final correction evidence: `203 passed, 1 skipped, 3 warnings`; Ruff and
+  mypy passed; Alembic
+  `0001` through `0007` upgrade/downgrade passed; offline acceptance passed
+  with `P4_DECISION=NO-GO`.
 - CI for this correction: [run 39250451185](https://github.com/smbabalola/sidedeck/actions/runs/39250451185),
   in progress when recorded; completion is not claimed.
 - Decision: `P4_DECISION=NO-GO` until authenticated evidence and a separately

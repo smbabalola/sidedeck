@@ -11,11 +11,12 @@ from sidedeck.application.foundation import initialise_two_portfolios
 from sidedeck.domain.contracts import ExperimentManifest
 
 
-def execution(status="FinalFill", quantity="1", execution_id="fill-1"):
-    return BrokerExecution("22866064", "broker-1", "sofi-1", execution_id, status,
+def execution(status="FinalFill", quantity="1", execution_id="fill-1",
+              occurred_at="2026-10-19T14:00:00Z", order_id="broker-1"):
+    return BrokerExecution("22866064", order_id, "sofi-1", execution_id, status,
                            Decimal(quantity), Decimal("40"), Decimal("0.10"), "USD", "EUR",
                            "USD", "EUR",
-                           "2026-10-19T14:00:00Z")
+                           occurred_at)
 
 
 def test_fill_is_converted_posted_and_deduplicated(tmp_path):
@@ -145,3 +146,57 @@ def test_recovery_is_concurrent_and_final_fill_cannot_overfill(tmp_path):
     assert counts == [1, 1]
     assert all(item.replay("tradingagents").positions["US:SOFI"].quantity == Decimal("1")
                for item in ledgers)
+
+
+def test_recovery_is_chronological_and_rejects_broker_identity_mismatch(tmp_path):
+    at = datetime(2026, 10, 19, 14, tzinfo=timezone.utc)
+    manifest = ExperimentManifest(experiment_id="p4", configuration_revision="r1",
+                                  created_at=at, instruments=("US:SOFI",), data_policy="licensed")
+    ledger = initialise_two_portfolios(manifest, at)
+    db = tmp_path / "chronological.sqlite"
+    create_lifecycle(db, "sofi-1")
+    advance_lifecycle(db, "sofi-1", "SUBMITTING")
+    advance_lifecycle(db, "sofi-1", "ACKNOWLEDGED", broker_order_id="broker-1", broker_evidence=True)
+    fx = FxSnapshot("fx", "EUR/USD", Decimal("1.10"), at, at, "verified")
+    pipeline = SaxoExecutionPipeline(str(db), ledger)
+    pipeline.apply_buy_fill(execution(status="Fill", execution_id="zz-old",
+                                      occurred_at="2026-10-19T14:01:00Z"),
+                            order_key="sofi-1", portfolio_id="tradingagents", fx=fx,
+                            account_id="22866064", now=at, authorized_quantity=Decimal("2"))
+    pipeline.apply_buy_fill(execution(status="FinalFill", execution_id="aa-new",
+                                      occurred_at="2026-10-19T14:02:00Z"),
+                            order_key="sofi-1", portfolio_id="tradingagents", fx=fx,
+                            account_id="22866064", now=at, authorized_quantity=Decimal("2"))
+    with pytest.raises(ValueError, match="broker order ID"):
+        pipeline.apply_buy_fill(execution(execution_id="bad-order", order_id="broker-wrong"),
+                                order_key="sofi-1", portfolio_id="tradingagents", fx=fx,
+                                account_id="22866064", now=at)
+    restarted_ledger = initialise_two_portfolios(manifest, at)
+    restarted = SaxoExecutionPipeline(str(db), restarted_ledger)
+    assert restarted.recover() == 2
+    assert [event.idempotency_key for event in restarted_ledger.events[-2:]] == [
+        "saxo:zz-old", "saxo:aa-new"]
+    state = restarted_ledger.replay("tradingagents")
+    assert state.positions["US:SOFI"].quantity == Decimal("2")
+    assert state.cash == Decimal("919.78")
+    assert lifecycle_state(db, "sofi-1")[0] == "FILLED"
+
+
+def test_corrupt_persisted_event_is_rejected_before_replay(tmp_path):
+    at = datetime(2026, 10, 19, 14, tzinfo=timezone.utc)
+    manifest = ExperimentManifest(experiment_id="p4", configuration_revision="r1",
+                                  created_at=at, instruments=("US:SOFI",), data_policy="licensed")
+    ledger = initialise_two_portfolios(manifest, at)
+    db = tmp_path / "corrupt.sqlite"
+    create_lifecycle(db, "sofi-1")
+    advance_lifecycle(db, "sofi-1", "SUBMITTING")
+    advance_lifecycle(db, "sofi-1", "ACKNOWLEDGED", broker_order_id="broker-1", broker_evidence=True)
+    fx = FxSnapshot("fx", "EUR/USD", Decimal("1.10"), at, at, "verified")
+    SaxoExecutionPipeline(str(db), ledger).apply_buy_fill(
+        execution(), order_key="sofi-1", portfolio_id="tradingagents", fx=fx,
+        account_id="22866064", now=at)
+    import sqlite3
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE saxo_execution_recovery SET event_payload='corrupt'")
+    with pytest.raises(ValueError, match="hash"):
+        SaxoExecutionPipeline(str(db), initialise_two_portfolios(manifest, at)).recover()
