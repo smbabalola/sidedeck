@@ -73,10 +73,14 @@ def assess_preview(payload: dict[str, Any]) -> dict[str, Any]:
     net_income = metrics.get("net_income_ttm", [])
     if not isinstance(net_income, list) or len(net_income) < 4:
         blockers.append("net_income_ttm:insufficient_history")
+    roe = metrics.get("return_on_equity_preview", [])
+    cash = metrics.get("operating_cash_flow_ttm", [])
+    if not isinstance(roe, list) or len(roe) < 4:
+        blockers.append("return_on_equity:insufficient_filed_history")
+    if not isinstance(cash, list) or len(cash) < 4:
+        blockers.append("cash_flow_ttm:insufficient_filed_history")
     blockers.extend((
-        "return_on_equity:average_equity_unverified",
         "price_to_earnings:price_and_share_count_missing",
-        "cash_flow_ttm:quarter_reconciliation_missing",
         "buffett:validated_quarterly_metric_history_missing",
     ))
     return {
@@ -84,6 +88,8 @@ def assess_preview(payload: dict[str, Any]) -> dict[str, Any]:
         "buffett_ready": False,
         "broker_execution": "DISABLED",
         "derived_nontrading_ratios": derived,
+        "cash_flow_ttm_records": len(cash) if isinstance(cash, list) else 0,
+        "roe_preview_records": len(roe) if isinstance(roe, list) else 0,
         "blockers": sorted(set(blockers)),
     }
 
