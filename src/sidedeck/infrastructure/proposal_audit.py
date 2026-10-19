@@ -7,6 +7,7 @@ import json
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, Engine, String, Text, UniqueConstraint, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from sidedeck.domain.contracts import TradeIntent
@@ -55,9 +56,30 @@ def record_proposal(
         sort_keys=True, separators=(",", ":"),
     )
     digest = sha256(payload.encode("utf-8")).hexdigest()
+    try:
+        return _record_once(engine, intent.portfolio_id, key, payload, digest, created_at)
+    except IntegrityError:
+        # A concurrent writer may have won the unique-key race. Re-read and
+        # compare the committed semantic payload; never turn conflict into success.
+        with Session(engine) as session:
+            existing = session.scalar(select(ProposalAuditRecord).where(
+                ProposalAuditRecord.portfolio_id == intent.portfolio_id,
+                ProposalAuditRecord.idempotency_key == key,
+            ))
+            if existing is None:
+                raise
+            if existing.digest != digest or existing.payload != payload:
+                raise AuditConflict("proposal audit idempotency conflict")
+            return UUID(existing.audit_id)
+
+
+def _record_once(
+    engine: Engine, portfolio_id: str, key: str, payload: str,
+    digest: str, created_at: datetime,
+) -> UUID:
     with Session(engine) as session, session.begin():
         existing = session.scalar(select(ProposalAuditRecord).where(
-            ProposalAuditRecord.portfolio_id == intent.portfolio_id,
+            ProposalAuditRecord.portfolio_id == portfolio_id,
             ProposalAuditRecord.idempotency_key == key,
         ))
         if existing is not None:
@@ -66,7 +88,7 @@ def record_proposal(
             return UUID(existing.audit_id)
         audit_id = uuid4()
         session.add(ProposalAuditRecord(
-            audit_id=str(audit_id), portfolio_id=intent.portfolio_id,
+            audit_id=str(audit_id), portfolio_id=portfolio_id,
             idempotency_key=key, created_at=created_at.astimezone(timezone.utc),
             payload=payload, digest=digest,
         ))
