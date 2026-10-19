@@ -4,7 +4,7 @@ import pytest
 
 from sidedeck.application.ai_agents import (
     AgentResult, AgentUnavailable, ExternalJsonAgent, normalize_intent,
-    parse_decision, research_environment,
+    research_environment,
 )
 from sidedeck.bridges.tradingagents_bridge import extract_action
 
