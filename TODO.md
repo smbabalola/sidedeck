@@ -45,7 +45,14 @@
 - [ ] **BLOCKED (owner):** operator key + `allowed_signers`; owner decision
   whether SIM fills post to the strategy ledger or a separate SIM ledger.
 - [ ] **BLOCKED (approval):** release gate change and one signed SIM order.
-- Evidence and CI: see `docs/P4_CLAUDE_REVIEW.md` and the record below.
+- Code commit: `a608a79`. Local evidence: `228 passed, 1 skipped, 3 warnings`
+  (skip = PostgreSQL, CI-only); Ruff passed; mypy passed (52 source files);
+  disposable SQLite Alembic `0001`→`0008`→`base`→`0008` passed; offline
+  acceptance `P4_OFFLINE_CHECK=PASS`, `P4_DECISION=NO-GO`, 0 broker requests.
+- CI: **NOT RUN.** The workflow triggers only on push to `main`/`feat/p1-foundation`
+  or on pull requests, and the agent token cannot create PRs. Owner action:
+  open a draft PR `feat/p4-claude-review` → `feat/p3-readonly-batch` to run
+  CI (including the PostgreSQL `0008` round trip).
 
 ## Verification record
 
