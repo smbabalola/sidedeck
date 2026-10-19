@@ -6,7 +6,7 @@ from sidedeck.infrastructure.alpaca_transport import PaperReadError, make_paper_
 
 def test_disallowed_endpoints_never_require_credentials():
     get = make_paper_get(AlpacaPaperBinding())
-    for path in ("/v2/orders", "/v2/account/activities", "https://api.alpaca.markets/v2/account"):
+    for path in ("/v2/orders", "/v2/orders?status=all", "/v2/account/activities", "https://api.alpaca.markets/v2/account"):
         with pytest.raises(PermissionError):
             get(path)
 
