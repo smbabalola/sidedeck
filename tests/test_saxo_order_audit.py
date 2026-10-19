@@ -26,7 +26,6 @@ def test_counts_are_evidence_only():
 @pytest.mark.parametrize("data", [
     {}, {"Data": {}, "__count": 0},
     {"Data": [], "__next": "/another-page"},
-    {"Data": [], "__nextPoll": "/poll"},
     {"Data": [], "__count": 1},
     {"Data": [{"AccountId": "different"}]},
     {"Data": [None]},
@@ -34,3 +33,8 @@ def test_counts_are_evidence_only():
 def test_refuse_incomplete_or_cross_account_audit(data):
     with pytest.raises(ValueError):
         summarize_audit(data, account_id="22866064")
+
+
+def test_next_poll_is_not_missing_page():
+    assert summarize_audit({"Data": [], "__count": 0, "__nextPoll": "/poll"},
+                           account_id="22866064") == (0, 0)
