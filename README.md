@@ -175,3 +175,19 @@ The new `SideDeckPaperReceiptReview` reads a validated durable order and compare
 `sidedeck.domain.paper_post_contract` now validates a SideDeck-created risk-approved draft and constructs the exact POST `https://paper-api.alpaca.markets/v2/orders` request shape. It rejects unknown instruments, fractional quantities, leveraged-sized notional, invalid order IDs/slots, non-limit orders and unsupported price precision. **This builder does not load credentials, open network connections, submit paper orders or support any live broker host.** Controlled actual paper submission awaits an explicit owner-approved activation and paper-account identity audit.
 
 Alpaca PAPER POST transport contract has been added with a default-off network gate. Nothing invokes it; no broker POST occurs. See `src/sidedeck/domain/alpaca_paper_http_post.py` and `docs/PAPER_SUBMISSION_PROTOCOL.md`.
+
+## Guarded Alpaca paper dispatcher (code complete, disabled)
+
+`sidedeck.domain.paper_dispatcher.GuardedPaperDispatcher` ties the first
+Alpaca paper credential pair exclusively to TradingAgents and the second to
+AI Trading, and binds their respective GET/POST transports. The durable
+journal is claimed **before** a potential POST and refuses resubmission after
+any uncertain outcome; GET-only recovery remains possible after a timeout.
+The global broker-write switch stays **false**, the dispatcher is not invoked
+by the application, and all 269 acceptance tests use synthetic/mock sources.
+No authenticated account access or paper orders have occurred.
+
+To verify only the two account IDs locally after explicit read-only consent,
+follow `docs/ALPACA_PAPER_ACCEPTANCE.md` with the existing
+`sidedeck.paper_pair` utility. See `docs/PAPER_DISPATCHER.md` for
+the production release blockers. Never insert keys into GitHub or chat.

@@ -409,3 +409,5 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [x] Read-only uncertain-order recovery works after the original decision is stale, and never retries POST on 404, denial, timeout or rejection. Strategy key slots remain exclusive and account read status cannot authorize more than a single attempt.
 - [ ] Actual paper activation remains blocked by local provider identity acceptance, non-fixture daily data, durable account attestation and owner-approved first paper order. No eToro, live Alpaca or other broker writes.
 - [ ] Record CI results, tested SHA and runbook `docs/PAPER_DISPATCHER.md` once green.
+
+- [x] **SD-12I offline acceptance:** Code commit `7441e7a1fe13446ec71c5e7505eab336a596384e` passed both [CI 39203827920](https://github.com/smbabalola/sidedeck/actions/runs/39203827920) and [CI 39203825069](https://github.com/smbabalola/sidedeck/actions/runs/39203825069): **269 tests passed**, 3 known SQLite warnings, Ruff passed, mypy passed for 40 source files, disposable PostgreSQL CI. Mocked GET/POST only. Accounts and secrets have NOT been verified in a user-local authenticated run; no Alpaca paper or live orders executed.

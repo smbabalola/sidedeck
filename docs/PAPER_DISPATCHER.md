@@ -35,3 +35,13 @@ data checks, human-reviewed per-order action, release procedure and actual
 local read-only acceptance. **Do not submit paper orders until the owner
 explicitly approves the first bounded live-paper order and both account
 IDs have been checked locally.** Real trading remains prohibited.
+
+## Verified code result
+
+`7441e7a1fe13446ec71c5e7505eab336a596384e`: 269 offline tests passed, Ruff/mypy (40 source files) clean, PostgreSQL CI green. See https://github.com/smbabalola/sidedeck/actions/runs/39203827920 .
+
+### User-local next acceptance, no brokerage mutation
+
+In the existing SideDeck checkout, preserve ignored `.env`, `.venv`, user database files, `SideDeck-Blueprint/`, and any untracked work. Local Codex should first run offline tests and confirm **presence only** of both `ALPACA_API_KEY` and `ALPACA_API_KEY2` plus their matching paper secrets. It must not output values, hashes, lengths or account IDs.
+
+Once owner authorizes the read-only account check, use `sidedeck.paper_pair` with its explicit permission flags to GET **one account identity per key pair**. Report distinctness, status, restrictions and any safe HTTP error category, not financial or private identifiers. It does not place orders. **Do not** run `GuardedPaperDispatcher.dispatch` or flip the write gate; paper execution remains disabled until provider acceptance, market-data proof and separate bounded owner permission. Do not publish secrets or trade history.
