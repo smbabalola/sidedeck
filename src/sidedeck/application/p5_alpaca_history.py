@@ -55,7 +55,7 @@ def parse_bars(payload: dict[str, Any], *, cutoff: date) -> list[dict[str, Any]]
             raise MarketDataUnavailable("invalid market-data bar")
         stamp = row.get("t")
         close = row.get("c")
-        if not isinstance(stamp, str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}T.*", stamp):
+        if not isinstance(stamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T.*", stamp):
             raise MarketDataUnavailable("bar timestamp missing")
         try:
             day = date.fromisoformat(stamp[:10])
