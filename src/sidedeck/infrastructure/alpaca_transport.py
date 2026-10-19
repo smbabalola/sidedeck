@@ -9,7 +9,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from sidedeck.infrastructure.alpaca_paper import AlpacaPaperBinding
 
-_ALLOWED = frozenset(("/v2/account", "/v2/positions"))
+_ALLOWED = frozenset(("/v2/account", "/v2/positions", "/v2/orders?status=open&limit=500"))
 
 
 class PaperReadError(RuntimeError):
