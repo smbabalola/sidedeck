@@ -79,8 +79,14 @@ def assess_preview(payload: dict[str, Any]) -> dict[str, Any]:
         blockers.append("return_on_equity:insufficient_filed_history")
     if not isinstance(cash, list) or len(cash) < 4:
         blockers.append("cash_flow_ttm:insufficient_filed_history")
+    diluted_eps = metrics.get("diluted_eps_reported", [])
+    diluted_shares = metrics.get("weighted_average_diluted_shares_reported", [])
+    if not isinstance(diluted_eps, list) or not diluted_eps:
+        blockers.append("diluted_eps:filing_history_missing")
+    if not isinstance(diluted_shares, list) or not diluted_shares:
+        blockers.append("diluted_shares:filing_history_missing")
     blockers.extend((
-        "price_to_earnings:price_and_share_count_missing",
+        "price_to_earnings:validated_ttm_eps_and_historical_prices_missing",
         "buffett:validated_quarterly_metric_history_missing",
     ))
     return {
@@ -90,6 +96,8 @@ def assess_preview(payload: dict[str, Any]) -> dict[str, Any]:
         "derived_nontrading_ratios": derived,
         "cash_flow_ttm_records": len(cash) if isinstance(cash, list) else 0,
         "roe_preview_records": len(roe) if isinstance(roe, list) else 0,
+        "diluted_eps_observations": len(diluted_eps) if isinstance(diluted_eps, list) else 0,
+        "diluted_shares_observations": len(diluted_shares) if isinstance(diluted_shares, list) else 0,
         "blockers": sorted(set(blockers)),
     }
 
