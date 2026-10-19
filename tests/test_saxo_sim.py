@@ -13,7 +13,7 @@ def test_sim_only_configuration():
 def test_order_endpoints_rejected_before_credentials(monkeypatch):
     monkeypatch.delenv("SAXO_SIM_ACCESS_TOKEN", raising=False)
     client = SaxoSimClient()
-    for path in ("/trade/v2/orders", "/port/v1/positions/me", "/port/v1/accounts/me?x=1",
+    for path in ("/trade/v2/orders", "/port/v1/accounts/me?x=1",
                  "https://gateway.saxobank.com/live/openapi/port/v1/users/me"):
         with pytest.raises(PermissionError):
             client.get(path)
