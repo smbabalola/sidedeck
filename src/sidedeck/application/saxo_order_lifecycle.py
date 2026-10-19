@@ -93,7 +93,7 @@ def advance_lifecycle(path: str | Path, order_key: str, new_status: str,
             except sqlite3.IntegrityError as exc:
                 raise LifecycleConflict("broker order ID already associated") from exc
             db.commit()
-            return revision + 1
+            return int(revision) + 1
         except BaseException:
             db.rollback()
             raise
