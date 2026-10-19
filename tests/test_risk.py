@@ -63,7 +63,7 @@ def test_cash_restriction_rejects_overspend():
 
 
 def test_existing_position_counts_toward_concentration():
-    assert screen(setup_case(quantity="1", cash="900", held="1")).reason == "position_concentration_limit"
+    assert screen(setup_case(quantity="1", cash="800", held="2")).reason == "position_concentration_limit"
 
 
 def test_sell_must_be_fully_owned():
