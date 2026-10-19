@@ -1,0 +1,61 @@
+"""No-LLM probe of installed upstream Buffett snapshot against validated local JSON.
+
+No provider factory, predict(), brokerage client, or network call is used.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+from importlib import import_module
+from pathlib import Path
+from typing import Any
+
+from sidedeck.bridges.filed_fundamentals import LocalFiledDataClient, verified_fundamentals
+
+
+def snapshot_probe(path: str, ticker: str, as_of: str) -> dict[str, Any]:
+    records = verified_fundamentals(path, ticker, as_of)
+    if len(records) < 4:
+        raise ValueError("insufficient verified financial periods")
+    module = import_module("hedge_fund.signals.buffett")
+    cls = getattr(module, "BuffettAgent")
+    # build_snapshot uses a data client, not an LLM; avoid instantiation, which
+    # might attempt to configure paid providers.
+    import inspect
+    signature = inspect.signature(cls.build_snapshot)
+    snapshot = None
+    try:
+        snapshot = cls.build_snapshot(object.__new__(cls), ticker, as_of, LocalFiledDataClient(path))
+    except Exception as exc:
+        return {
+            "ticker": ticker, "as_of": as_of,
+            "snapshot_contract": str(signature),
+            "snapshot_status": "UNAVAILABLE",
+            "error_type": type(exc).__name__,
+            "approved": False, "buffett_ready": False,
+            "broker_execution": "DISABLED",
+        }
+    dumped: Any = snapshot.model_dump(mode="json") if hasattr(snapshot, "model_dump") else repr(snapshot)
+    return {
+        "ticker": ticker, "as_of": as_of,
+        "snapshot_contract": str(signature),
+        "snapshot_status": "CONSTRUCTED_UNVERIFIED",
+        "snapshot": dumped,
+        "approved": False, "buffett_ready": False,
+        "broker_execution": "DISABLED",
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Buffett no-LLM snapshot compatibility test")
+    parser.add_argument("--fundamentals-json", required=True)
+    parser.add_argument("--ticker", required=True)
+    parser.add_argument("--as-of", required=True)
+    args = parser.parse_args()
+    result = snapshot_probe(args.fundamentals_json, args.ticker, args.as_of)
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
