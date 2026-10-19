@@ -70,6 +70,23 @@ class AlpacaReadOnly:
             result.append(PaperPosition(symbol, qty, _amount(item.get("market_value"))))
         return tuple(result)
 
+    def open_order_count(self) -> int:
+        """Fail closed for open-order pages; capped at 500 and cannot claim completeness."""
+        records = self._get("/v2/orders?status=open&limit=500")
+        if not isinstance(records, list):
+            raise ValueError("invalid open orders response")
+        if len(records) >= 500:
+            raise ValueError("open order pagination not verified")
+        seen: set[str] = set()
+        for item in records:
+            if not isinstance(item, dict):
+                raise ValueError("invalid open order record")
+            order_id = item.get("id")
+            if not isinstance(order_id, str) or not order_id or order_id in seen:
+                raise ValueError("invalid or duplicate open order ID")
+            seen.add(order_id)
+        return len(records)
+
 
 def _amount(value: Any) -> Decimal:
     if not isinstance(value, str):
