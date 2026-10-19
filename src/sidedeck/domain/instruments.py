@@ -9,6 +9,7 @@ ALLOWED_INSTRUMENTS: dict[str, Instrument] = {
     "MSFT": Instrument(instrument_id="US:MSFT", ticker="MSFT", asset_type="EQUITY", venue="NASDAQ"),
     "SPY": Instrument(instrument_id="US:SPY", ticker="SPY", asset_type="ETF", venue="NYSE_ARCA"),
     "QQQ": Instrument(instrument_id="US:QQQ", ticker="QQQ", asset_type="ETF", venue="NASDAQ"),
+    "SOFI": Instrument(instrument_id="US:SOFI", ticker="SOFI", asset_type="EQUITY", venue="NASDAQ"),
 }
 
 
