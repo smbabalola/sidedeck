@@ -117,7 +117,7 @@ def map_sec_quarterly_to_buffett(
                          "unmapped": ["debt_to_equity", "gross_margin", "operating_margin",
                                       "net_margin", "revenue_growth",
                                       "free_cash_flow_per_share", "market_cap",
-                                      "price_to_earnings_ratio"]})
+                                      "price_to_earnings_ratio"] + ([] if annual is not None else ["earnings_per_share"])})
         seen.add(report.isoformat())
     if len(output) < 4:
         raise BuffettMappingUnavailable("insufficient filed ROE observations")
