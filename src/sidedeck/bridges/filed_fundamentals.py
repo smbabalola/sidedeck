@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
+from importlib import import_module
 from typing import Any
 
 
@@ -91,7 +92,7 @@ class LocalFiledDataClient:
     ) -> list[Any]:
         if period != "ttm" or limit < 4:
             raise FundamentalsDataError("only TTM fundamentals supported")
-        from hedge_fund.data.models import FinancialMetrics
+        FinancialMetrics = import_module('hedge_fund.data.models').FinancialMetrics
         return [
             FinancialMetrics(**record)
             for record in verified_fundamentals(self.path, ticker, end_date)[:limit]
