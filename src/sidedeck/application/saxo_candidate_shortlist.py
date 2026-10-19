@@ -5,6 +5,7 @@ Discovery does not imply broker trade eligibility, affordability or an approved 
 from __future__ import annotations
 
 import argparse
+from typing import Any
 
 from sidedeck.application.saxo_instruments import (
     parse_stock_candidates,
@@ -18,7 +19,7 @@ from sidedeck.infrastructure.saxo_sim import SaxoSimClient, SaxoSimError
 TICKERS = ("F", "SOFI", "PLTR", "PFE", "T", "INTC")
 
 
-def evaluate_candidate(candidate: object, detail: dict) -> tuple[bool, str]:
+def evaluate_candidate(candidate: object, detail: dict[str, Any]) -> tuple[bool, str]:
     uic = getattr(candidate, "uic", None)
     symbol = getattr(candidate, "symbol", None)
     if not isinstance(symbol, str) or not symbol.endswith(":xnas"):
