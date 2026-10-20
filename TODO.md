@@ -43,7 +43,9 @@
   attempted.
 - Version/data-compatibility batch (2026-10-20): `430 passed, 1 skipped,
   3 warnings`; Ruff passed; mypy passed across 94 source files; Alembic at
-  `0005_etoro_demo_books` (no schema change).
+  `0005_etoro_demo_books` (no schema change). Commit `1380794`; CI run
+  `39438231148` passed
+  (https://github.com/smbabalola/sidedeck/actions/runs/39438231148).
 - Broker execution: disabled; eToro/Saxo/Alpaca untouched.
 - P4: `P4_DECISION=NO-GO`.
 - Local verification: `409 passed, 1 skipped, 3 warnings`; Ruff passed;
