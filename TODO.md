@@ -77,6 +77,11 @@
   dashboard readiness endpoint implemented; see
   `docs/M2_INTEGRATED_BATCH.md`. Live providers, model calls and broker
   execution remain blocked.
+- Integrated batch commits: `fc4b8d5549041b880c64f179a12dc1c551d14788`
+  plus drawdown correction `9d6ae298c140cf3129c72aaebef04511bcb9d630`.
+- Integrated-batch verification: `485 passed, 1 skipped, 3 warnings`; Ruff
+  passed; mypy passed across 103 source files; frontend build passed. GitHub
+  runs `39454257672` and `39454308317` were in progress at handoff.
 - Local verification: `409 passed, 1 skipped, 3 warnings`; Ruff passed;
   mypy passed across 92 source files; frontend build passed; disposable
   SQLite Alembic upgrade/downgrade passed.
