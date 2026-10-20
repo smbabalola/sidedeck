@@ -4,9 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 
-def review_bvps(joined: dict, raw: dict) -> dict:
+def review_bvps(joined: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
     if joined.get("buffett_ready") is not False or joined.get("broker_execution") != "DISABLED":
         raise ValueError("review input must remain unapproved")
     if joined.get("ticker") != "SOFI" or raw.get("cik") != 1818874:
