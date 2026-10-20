@@ -5,6 +5,7 @@ import json
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 BALANCE_TAGS = frozenset({"PreferredStockValue", "PreferredStockSharesOutstanding",
                           "PreferredStockSharesIssued", "PreferredStockCarryingValue",
@@ -16,7 +17,7 @@ FLOW_TAGS = frozenset({"PaymentsForRepurchaseOfRedeemablePreferredStock",
                        "PreferredStockRedemptionPremium"})
 
 
-def preferred_filing_audit(inventory: dict, joined: dict) -> dict:
+def preferred_filing_audit(inventory: dict[str, Any], joined: dict[str, Any]) -> dict[str, Any]:
     if (inventory.get("cik") != 1818874 or joined.get("ticker") != "SOFI"
             or inventory.get("as_of") != joined.get("as_of")
             or joined.get("buffett_ready") is not False
