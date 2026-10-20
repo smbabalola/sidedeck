@@ -24,6 +24,69 @@ REQUIRED_COLLECTIONS = ("positions", "mirrors") + ORDER_COLLECTIONS
 MAX_SNAPSHOT_AGE = timedelta(minutes=5)
 MAX_CLOCK_SKEW = timedelta(seconds=5)
 ZERO = Decimal("0")
+# eToro accountCurrencyId for USD, per two independently published eToro API
+# schema references (owner decision 2026-10-20). The live response must match.
+USD_ACCOUNT_CURRENCY_ID = 1
+
+# Strict JSON types required before a baseline may be captured. "number" means a
+# JSON int/float (never bool or a numeric string).
+_PORTFOLIO_TYPES = {"credit": "number", "bonusCredit": "number", "accountCurrencyId": "int"}
+_POSITION_TYPES = {"positionID": "int", "instrumentID": "int", "orderID": "int", "isBuy": "bool",
+                   "units": "number", "amount": "number", "leverage": "int",
+                   "openDateTime": "timestamp"}
+
+
+def _type_ok(value: Any, expected: str) -> bool:
+    if expected == "bool":
+        return type(value) is bool
+    if expected == "int":
+        return type(value) is int
+    if expected == "number":
+        return type(value) in (int, float)
+    if expected == "timestamp":
+        try:
+            _utc(value, "timestamp")
+        except EtoroDemoDataError:
+            return False
+        return True
+    return False
+
+
+def _json_type(value: Any) -> str:
+    if value is None:
+        return "missing/null"
+    return {bool: "bool", int: "int", float: "number", str: "string", list: "list",
+            dict: "object"}.get(type(value), type(value).__name__)
+
+
+def field_type_issues(payload: Any) -> tuple[str, ...]:
+    """Strict field-type check of a live response. Reports paths and types, never values."""
+    portfolio = payload.get("clientPortfolio") if isinstance(payload, dict) else None
+    if not isinstance(portfolio, dict):
+        return ("clientPortfolio: expected object",)
+    issues = []
+    for name in REQUIRED_COLLECTIONS:
+        if not isinstance(portfolio.get(name), list):
+            issues.append(f"clientPortfolio.{name}: expected list, got "
+                          f"{_json_type(portfolio.get(name))}")
+    for key, expected in _PORTFOLIO_TYPES.items():
+        if not _type_ok(portfolio.get(key), expected):
+            issues.append(f"clientPortfolio.{key}: expected {expected}, got "
+                          f"{_json_type(portfolio.get(key))}")
+    raw_rows = portfolio.get("positions")
+    rows: list[Any] = raw_rows if isinstance(raw_rows, list) else []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            issues.append(f"positions[{index}]: expected object, got {_json_type(row)}")
+            continue
+        for key, expected in _POSITION_TYPES.items():
+            if not _type_ok(row.get(key), expected):
+                issues.append(f"positions[{index}].{key}: expected {expected}, got "
+                              f"{_json_type(row.get(key))}")
+        pnl = row.get("unrealizedPnL")
+        if not isinstance(pnl, dict) or not _type_ok(pnl.get("pnL"), "number"):
+            issues.append(f"positions[{index}].unrealizedPnL.pnL: expected number")
+    return tuple(issues)
 
 
 class EtoroDemoDataError(ValueError):
@@ -116,10 +179,14 @@ class DemoPortfolioSnapshot:
         if age > max_age:
             raise EtoroDemoDataError("Demo snapshot is stale")
 
-    def available_cash_usd(self, *, usd_currency_id: int | None) -> Figure:
-        """Documented eToro formula; UNAVAILABLE unless every input is reported and valid."""
-        if usd_currency_id is None or self.account_currency_id != usd_currency_id:
-            return Figure(None, "UNAVAILABLE", "account currency not confirmed as USD")
+    def available_cash_usd(self) -> Figure:
+        """Documented eToro formula; UNAVAILABLE unless every input is reported and valid.
+
+        Only an account the response itself reports as ``accountCurrencyId == 1``
+        (USD) gets a USD figure. Any other or missing ID: UNAVAILABLE, never converted.
+        """
+        if self.account_currency_id != USD_ACCOUNT_CURRENCY_ID:
+            return Figure(None, "UNAVAILABLE", "account currency is not reported as USD (id 1)")
         if self.credit is None:
             return Figure(None, "UNAVAILABLE", "credit not reported")
         reserved = ZERO

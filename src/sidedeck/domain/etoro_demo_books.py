@@ -106,8 +106,7 @@ class DemoReconciliation:
 
 
 def reconcile_demo(snapshot: DemoPortfolioSnapshot, *, baseline: Iterable[BaselinePosition],
-                   attributions: Iterable[OrderAttribution], now: datetime,
-                   usd_currency_id: int | None = None) -> DemoReconciliation:
+                   attributions: Iterable[OrderAttribution], now: datetime) -> DemoReconciliation:
     """Read-only comparison of a fresh snapshot with the baseline and SideDeck attributions."""
     snapshot.require_fresh(now)
     baseline = tuple(baseline)
@@ -159,4 +158,4 @@ def reconcile_demo(snapshot: DemoPortfolioSnapshot, *, baseline: Iterable[Baseli
                                snapshot.unrealized_pnl(ordered))
     return DemoReconciliation("DISCREPANCY" if discrepancies else "MATCHED", snapshot.observed_at,
                               books, tuple(discrepancies),
-                              snapshot.available_cash_usd(usd_currency_id=usd_currency_id))
+                              snapshot.available_cash_usd())

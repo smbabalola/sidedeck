@@ -44,10 +44,16 @@ Builds on [`ETORO_DEMO_READ_2026-10-20.md`](ETORO_DEMO_READ_2026-10-20.md): one 
    - Positions in the same instrument are never attributed by ticker.
    - Any unexplained position or pending order is a discrepancy shown in the unattributed book; nothing is concealed.
 4. **No capital:** every book reports `NOT_ALLOCATED: requires an audited owner decision and verified Demo funds`. Saxo's EUR 1,000 rule is not imported.
-5. **Cash fails closed:** cash stays UNAVAILABLE until you confirm which `accountCurrencyId` means USD (passed as `--usd-currency-id`). It is also UNAVAILABLE when `credit` is missing or a pending order lacks its amount or `mirrorID`.
-6. **Staleness:** a snapshot older than 5 minutes, or dated more than 5 seconds in the future, is refused.
+5. **USD only when the response says so:** `accountCurrencyId = 1` is adopted as USD (owner decision 2026-10-20, based on two independently published eToro API references). Cash is computed only when the live response itself reports `1`. Any other value, or a missing one, makes cash UNAVAILABLE: no conversion and no assumption. Cash is also UNAVAILABLE when `credit` is missing or a pending order lacks its amount or `mirrorID`.
+6. **Hardened baseline capture.** `capture_baseline` takes the raw response and checks everything before writing:
+   - the live field types, strictly, using `field_type_issues`. Numbers must be JSON numbers and IDs must be integers. The check reports only field paths and types, never values;
+   - a full parse of the response;
+   - the position count must equal the owner-confirmed `--expected-positions`, currently 4.
 
-## Tests (`tests/test_etoro_demo.py`, 41, synthetic only)
+   It then writes in a single transaction, so a failure leaves nothing behind. An existing baseline is never overwritten, and an identical repeat changes nothing.
+7. **Staleness:** a snapshot older than 5 minutes, or dated more than 5 seconds in the future, is refused.
+
+## Tests (`tests/test_etoro_demo.py`, 52, synthetic only)
 
 - Decimal parsing.
 - The cash formula: pending-order deductions, the mirror exclusion, zero cash, unconfirmed currency, missing inputs.
@@ -63,19 +69,40 @@ Builds on [`ETORO_DEMO_READ_2026-10-20.md`](ETORO_DEMO_READ_2026-10-20.md): one 
 - The client's path allowlist, GET only, no retries, sanitised 401/403/1010/429/500 results, and no write methods.
 - The CLI sending nothing without its flag or keys, and printing only counts.
 - The `0005` round trip and refused rollback.
+- Hardened capture:
+  - field-type issues report paths, never values;
+  - a count mismatch, string numbers, a string currency ID, a duplicate ID or an invalid expected count is refused with nothing written;
+  - a failure partway through the write leaves no partial baseline;
+  - the CLI requires `--expected-positions`, and refuses a mismatch or a type failure without writing.
+- USD only when the response reports ID 1.
 
-## Verification (local)
+## Verification
 
-- `377 passed, 1 skipped` (the skip is PostgreSQL, CI only).
-- A throwaway SQLite Alembic head→base→head round trip passed.
-- Ruff and mypy are clean for every new file. The branch already had 2 Ruff and 20 mypy errors in 9 unrelated P5 files that this work doesn't touch.
-- CI run 39401263762 on `9014e95`: pytest **378 passed, 0 skipped**, so the disposable PostgreSQL test ran through `0005`. The job then **failed at `ruff check .`** on the two unused imports that already existed, the same failure as run #470 on `f279df1`. The mypy step would still fail on the 20 existing errors after that.
+- Local: `388 passed, 1 skipped` (the skip is PostgreSQL, CI only). Ruff and mypy are clean across all 89 source files. A throwaway SQLite Alembic head→base→head round trip passed.
+- CI history: run 39401263762 on `9014e95` passed pytest (378, 0 skipped) but failed at Ruff on two unused imports that already existed. Those, and the 20 existing mypy errors in 9 P5 files, are now fixed narrowly in the CI-remediation commit:
+  - type parameters on `dict`/`list`;
+  - `cast` on the results of `json.loads`;
+  - two renamed variables that were shadowing others;
+  - an explicit string check on `as_of` in `consolidate_bvps`.
+
+  There are no `type: ignore` comments and no configuration changes. The final CI run is recorded below.
 
 ## Remaining gaps and gates
 
-- [ ] **Owner:** confirm the USD `accountCurrencyId` before cash is reported.
-- [ ] **Owner-run:** capture the baseline locally with `--capture-baseline`. The database is local and git-ignored, because it holds position and order IDs.
-- [ ] Value-level validation against a real snapshot, kept locally and never in GitHub. Field names come from a field-only report, so the real types (for example numbers vs strings, timestamp format) still need confirming.
+- [x] USD mapping set to `accountCurrencyId = 1` and checked against each live response.
+- [ ] **Owner-run, one authenticated Demo GET:** capture the baseline. Load `ETORO_API_KEY` and `ETORO_USER_KEY` into the PowerShell session yourself first, without printing them. Then, from the `sidedeck\` checkout:
+
+  ```powershell
+  .venv\Scripts\python.exe -m sidedeck.application.etoro_demo_portfolio --confirm-owner-demo-read --db data\etoro_demo.sqlite3 --capture-baseline --expected-positions 4
+  ```
+
+  `data\` is git-ignored, and the database holds the position and order IDs. Safe output: `request_id`, `status`, `baseline_written`, `baseline_positions`, `discrepancy_count`, `available_cash_usd_status`, and per-book position counts and statuses. Exit codes:
+  - `0`: matched;
+  - `2`: discrepancy;
+  - `3`: `FIELD_TYPE_VALIDATION_FAILED`, which lists field paths and types only. Nothing is written;
+  - `4`: `BASELINE_REFUSED`, for example a count mismatch. Nothing is written;
+  - `1`: an access error, reported as a classification, the CF-Ray ID and the request ID.
+- [ ] Value-level validation against the real snapshot, kept locally. The strict field-type check runs on the first real response; if eToro sends numbers as strings, capture is refused with the paths listed, and the adapter is adjusted only after review.
 - [ ] Mirror/copy positions are rejected, not modelled.
 - [ ] An owner decision on virtual capital per strategy book (none allocated).
 - [ ] A dashboard view built on `DemoReconciliation`, showing each book separately.

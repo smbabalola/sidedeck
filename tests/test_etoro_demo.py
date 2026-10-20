@@ -8,6 +8,7 @@ import io
 import json
 import sqlite3
 import threading
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -19,7 +20,9 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect as sa_inspect
 
 from sidedeck.application import etoro_demo_portfolio as cli
-from sidedeck.domain.etoro_demo import EtoroDemoDataError, parse_demo_portfolio
+from sidedeck.domain.etoro_demo import (
+    EtoroDemoDataError, field_type_issues, parse_demo_portfolio,
+)
 from sidedeck.domain.etoro_demo_books import (
     AI_TRADING_BOOK, DEMO_BOOKS, TRADINGAGENTS_BOOK, UNATTRIBUTED_BOOK, EtoroDemoBookError,
     OrderAttribution, baseline_from, reconcile_demo, require_sidedeck_owned,
@@ -31,11 +34,11 @@ from sidedeck.infrastructure.etoro_demo_client import (
 from sidedeck.infrastructure.etoro_demo_store import EtoroDemoStore
 
 NOW = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
-USD = 1   # synthetic: the real USD accountCurrencyId still needs owner confirmation
+USD = 1   # documented eToro accountCurrencyId for USD
 
 
-def position(position_id, instrument_id=1001, *, order_id=None, units="2", amount="300",
-             is_buy=True, pnl="12.5", **changes):
+def position(position_id, instrument_id=1001, *, order_id=None, units=2, amount=300,
+             is_buy=True, pnl=12.5, **changes):
     row = {"positionID": position_id, "instrumentID": instrument_id,
            "orderID": order_id if order_id is not None else 9000 + position_id,
            "isBuy": is_buy, "units": units, "amount": amount, "leverage": 1,
@@ -44,13 +47,13 @@ def position(position_id, instrument_id=1001, *, order_id=None, units="2", amoun
     return row
 
 
-BASELINE_ROWS = [position(11), position(12, 1001, units="1"), position(13, 1002),
+BASELINE_ROWS = [position(11), position(12, 1001, units=1), position(13, 1002),
                  position(14, 1003, is_buy=False)]
 
 
 def payload(positions=None, **changes):
-    portfolio = {"credit": "5000.25", "bonusCredit": "100", "accountCurrencyId": USD,
-                 "unrealizedPnL": "40", "positions": list(BASELINE_ROWS if positions is None
+    portfolio = {"credit": 5000.25, "bonusCredit": 100, "accountCurrencyId": USD,
+                 "unrealizedPnL": 40, "positions": list(BASELINE_ROWS if positions is None
                                                           else positions),
                  "mirrors": [], "orders": [], "ordersForOpen": [], "ordersForClose": [],
                  "ordersForCloseMultiple": [], "entryOrders": [], "exitOrders": [],
@@ -61,6 +64,11 @@ def payload(positions=None, **changes):
 
 def snap(data=None, at=NOW):
     return parse_demo_portfolio(payload() if data is None else data, observed_at=at)
+
+
+def capture(store, data=None, *, expected=4):
+    return store.capture_baseline(payload() if data is None else data, observed_at=NOW,
+                                  expected_positions=expected)
 
 
 # --- parsing and figures -----------------------------------------------------
@@ -77,20 +85,21 @@ def test_available_cash_follows_documented_formula_and_ignores_bonus():
     data = payload(ordersForOpen=[{"orderID": 1, "amount": "200", "mirrorID": 0},
                                   {"orderID": 2, "amount": "999", "mirrorID": 7}],
                    orders=[{"orderID": 3, "amount": "50.25"}])
-    cash = snap(data).available_cash_usd(usd_currency_id=USD)
+    cash = snap(data).available_cash_usd()
     assert (cash.status, cash.value) == ("AVAILABLE", Decimal("4750.00"))
-    assert snap(payload(credit="0")).available_cash_usd(usd_currency_id=USD).value == 0
+    assert snap(payload(credit=0)).available_cash_usd().value == 0
 
 
-@pytest.mark.parametrize("data, currency, reason", [
-    (payload(credit=None), USD, "credit not reported"),
-    (payload(), None, "not confirmed as USD"),
-    (payload(accountCurrencyId=2), USD, "not confirmed as USD"),
-    (payload(ordersForOpen=[{"orderID": 1, "amount": "5"}]), USD, "mirrorID"),
-    (payload(orders=[{"orderID": 1}]), USD, "lacks amount"),
+@pytest.mark.parametrize("data, reason", [
+    (payload(credit=None), "credit not reported"),
+    (payload(accountCurrencyId=None), "not reported as USD"),
+    (payload(accountCurrencyId=2), "not reported as USD"),
+    (payload(accountCurrencyId=3), "not reported as USD"),
+    (payload(ordersForOpen=[{"orderID": 1, "amount": "5"}]), "mirrorID"),
+    (payload(orders=[{"orderID": 1}]), "lacks amount"),
 ])
-def test_cash_is_unavailable_never_guessed(data, currency, reason):
-    cash = snap(data).available_cash_usd(usd_currency_id=currency)
+def test_cash_is_unavailable_never_guessed(data, reason):
+    cash = snap(data).available_cash_usd()
     assert cash.value is None and cash.status == "UNAVAILABLE" and reason in cash.reason
 
 
@@ -131,9 +140,9 @@ def test_stale_or_future_snapshots_are_refused():
 def test_existing_positions_are_an_unattributed_read_only_baseline():
     snapshot = snap()
     baseline = baseline_from(snapshot)
-    report = reconcile_demo(snapshot, baseline=baseline, attributions=(), now=NOW,
-                            usd_currency_id=USD)
+    report = reconcile_demo(snapshot, baseline=baseline, attributions=(), now=NOW)
     assert report.status == "MATCHED" and report.execution_enabled is False
+    assert report.available_cash_usd.value == Decimal("5000.25")
     assert report.books[UNATTRIBUTED_BOOK].position_ids == (11, 12, 13, 14)
     assert report.books[TRADINGAGENTS_BOOK].position_ids == ()
     assert report.books[AI_TRADING_BOOK].position_ids == ()
@@ -207,10 +216,10 @@ def test_store_captures_baseline_once_and_protects_it(tmp_path):
     store = EtoroDemoStore(str(tmp_path / "demo.sqlite"))
     with pytest.raises(EtoroDemoBookError, match="capture the Demo baseline"):
         store.record_order_attribution(order_id=501, strategy="tradingagents", at=NOW)
-    assert store.capture_baseline(snap())
-    assert not store.capture_baseline(snap())                         # idempotent
+    assert capture(store)
+    assert not capture(store)                                         # idempotent
     with pytest.raises(EtoroDemoBookError, match="different Demo baseline"):
-        store.capture_baseline(snap(payload(BASELINE_ROWS[:2])))
+        capture(store, payload(BASELINE_ROWS[:2]), expected=2)
     assert [b.position_id for b in store.baseline()] == [11, 12, 13, 14]
     with pytest.raises(EtoroDemoBookError, match="baseline position"):
         store.record_order_attribution(order_id=9011, strategy="tradingagents", at=NOW)
@@ -225,7 +234,7 @@ def test_store_captures_baseline_once_and_protects_it(tmp_path):
 
 def test_empty_account_is_still_a_captured_baseline(tmp_path):
     store = EtoroDemoStore(str(tmp_path / "empty.sqlite"))
-    assert store.capture_baseline(snap(payload([])))
+    assert capture(store, payload([]), expected=0)
     assert store.baseline_captured() and store.baseline() == ()
 
 
@@ -235,11 +244,11 @@ def test_concurrent_baseline_capture_records_exactly_one(tmp_path):
     results: list[bool] = []
     barrier = threading.Barrier(6)
 
-    def capture():
+    def worker():
         barrier.wait()
-        results.append(EtoroDemoStore(path).capture_baseline(snap()))
+        results.append(capture(EtoroDemoStore(path)))
 
-    threads = [threading.Thread(target=capture) for _ in range(6)]
+    threads = [threading.Thread(target=worker) for _ in range(6)]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -351,11 +360,12 @@ def test_cli_end_to_end_with_synthetic_response_prints_only_counts(monkeypatch, 
     monkeypatch.setenv("ETORO_USER_KEY", "synthetic-user-key")
     client_with(monkeypatch, FakeResponse(payload()))
     code = cli.main(["--confirm-owner-demo-read", "--db", str(tmp_path / "demo.sqlite"),
-                     "--capture-baseline"])
+                     "--capture-baseline", "--expected-positions", "4"])
     output = capsys.readouterr().out
     summary = json.loads(output)
     assert code == 0 and summary["status"] == "MATCHED" and summary["baseline_positions"] == 4
-    assert summary["available_cash_usd_status"] == "UNAVAILABLE"      # USD id not confirmed
+    assert summary["available_cash_usd_status"] == "AVAILABLE"        # response says id 1
+    assert summary["baseline_written"] is True
     assert summary["orders_submitted"] == 0 and summary["execution_enabled"] is False
     for leaked in ("5000.25", "synthetic-api-key", "9011", "1001"):
         assert leaked not in output
@@ -376,6 +386,74 @@ def test_0005_round_trip_and_downgrade_protection(tmp_path: Path):
         engine.dispose()
     command.downgrade(config, "0004_proposal_audit")
     command.upgrade(config, "head")
-    EtoroDemoStore(str(path)).capture_baseline(snap())
+    capture(EtoroDemoStore(str(path)))
     with pytest.raises(Exception, match="refusing to drop history"):
         command.downgrade(config, "0004_proposal_audit")
+
+
+# --- hardened baseline capture -------------------------------------------------------
+
+def test_field_type_issues_report_paths_and_types_never_values():
+    assert field_type_issues(payload()) == ()
+    bad = payload([position(11, units="2"), position(12, isBuy=1)], credit="5000.25")
+    issues = field_type_issues(bad)
+    assert "clientPortfolio.credit: expected number, got string" in issues
+    assert "positions[0].units: expected number, got string" in issues
+    assert "positions[1].isBuy: expected bool, got int" in issues
+    assert not any("5000.25" in issue or "9011" in issue for issue in issues)
+
+
+@pytest.mark.parametrize("data, expected, error, message", [
+    (payload(), 3, EtoroDemoBookError, "has 4 open positions, owner expected 3"),
+    (payload(), 5, EtoroDemoBookError, "owner expected 5"),
+    (payload([position(11, units="2")] + BASELINE_ROWS[1:]), 4, EtoroDemoDataError,
+     "field-type validation"),
+    (payload(accountCurrencyId="1"), 4, EtoroDemoDataError, "field-type validation"),
+    (payload([position(11), position(11)] + BASELINE_ROWS[2:]), 4, EtoroDemoDataError,
+     "duplicate positionID"),
+    (payload(), -1, EtoroDemoBookError, "expected existing-position count"),
+])
+def test_capture_refuses_and_writes_nothing(tmp_path, data, expected, error, message):
+    store = EtoroDemoStore(str(tmp_path / "refuse.sqlite"))
+    with pytest.raises(error, match=message):
+        capture(store, data, expected=expected)
+    assert not store.baseline_captured() and store.baseline() == ()
+
+
+def test_failure_during_the_write_leaves_no_partial_baseline(tmp_path):
+    store = EtoroDemoStore(str(tmp_path / "partial.sqlite"))
+    good = snap()
+    broken = replace(good, positions=good.positions + (good.positions[0],))   # PK clash mid-write
+    with pytest.raises(sqlite3.IntegrityError):
+        store._capture(broken)
+    assert not store.baseline_captured() and store.baseline() == ()
+    assert capture(store)                                              # a clean retry works
+
+
+def test_cli_capture_requires_expected_count_and_refuses_a_mismatch(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ETORO_API_KEY", "synthetic-api-key")
+    monkeypatch.setenv("ETORO_USER_KEY", "synthetic-user-key")
+    _, opener = client_with(monkeypatch, FakeResponse(payload()))
+    db = str(tmp_path / "cli.sqlite")
+    with pytest.raises(SystemExit):
+        cli.main(["--confirm-owner-demo-read", "--db", db, "--capture-baseline"])
+    assert opener.requests == []                                       # nothing sent
+    code = cli.main(["--confirm-owner-demo-read", "--db", db, "--capture-baseline",
+                     "--expected-positions", "3"])
+    output = json.loads(capsys.readouterr().out)
+    assert code == 4 and output["status"] == "BASELINE_REFUSED"
+    assert output["baseline_written"] is False and not EtoroDemoStore(db).baseline_captured()
+
+
+def test_cli_stops_on_field_type_failure_without_writing(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("ETORO_API_KEY", "synthetic-api-key")
+    monkeypatch.setenv("ETORO_USER_KEY", "synthetic-user-key")
+    client_with(monkeypatch, FakeResponse(payload(credit="5000.25")))
+    db = str(tmp_path / "types.sqlite")
+    code = cli.main(["--confirm-owner-demo-read", "--db", db, "--capture-baseline",
+                     "--expected-positions", "4"])
+    text = capsys.readouterr().out
+    output = json.loads(text)
+    assert code == 3 and output["status"] == "FIELD_TYPE_VALIDATION_FAILED"
+    assert output["field_type_issues"] == ["clientPortfolio.credit: expected number, got string"]
+    assert "5000.25" not in text and not EtoroDemoStore(db).baseline_captured()

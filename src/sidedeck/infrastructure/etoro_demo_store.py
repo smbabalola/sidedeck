@@ -11,8 +11,11 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
-from sidedeck.domain.etoro_demo import DemoPortfolioSnapshot
+from sidedeck.domain.etoro_demo import (
+    DemoPortfolioSnapshot, EtoroDemoDataError, field_type_issues, parse_demo_portfolio,
+)
 from sidedeck.domain.etoro_demo_books import (
     BaselinePosition, EtoroDemoBookError, OrderAttribution, baseline_from, book_for_strategy,
 )
@@ -43,8 +46,28 @@ class EtoroDemoStore:
         self.db_path = db_path
         _connect(db_path).close()
 
-    def capture_baseline(self, snapshot: DemoPortfolioSnapshot) -> bool:
-        """Record every currently open Demo position as unattributed baseline, once."""
+    def capture_baseline(self, payload: Any, *, observed_at: datetime,
+                         expected_positions: int) -> bool:
+        """Record every open Demo position as the unattributed baseline, once.
+
+        All checks run before any write: strict live field types, full parsing,
+        and the owner-confirmed position count. The write is one IMMEDIATE
+        transaction, so a failure leaves nothing behind. An existing baseline is
+        never overwritten; an identical repeat is a no-op.
+        """
+        if type(expected_positions) is not int or expected_positions < 0:
+            raise EtoroDemoBookError("owner must confirm the expected existing-position count")
+        issues = field_type_issues(payload)
+        if issues:
+            raise EtoroDemoDataError(f"live response failed field-type validation "
+                                     f"({len(issues)} issue(s)); nothing recorded")
+        snapshot = parse_demo_portfolio(payload, observed_at=observed_at)
+        if len(snapshot.positions) != expected_positions:
+            raise EtoroDemoBookError(f"Demo account has {len(snapshot.positions)} open positions, "
+                                     f"owner expected {expected_positions}; nothing recorded")
+        return self._capture(snapshot)
+
+    def _capture(self, snapshot: DemoPortfolioSnapshot) -> bool:
         candidate = baseline_from(snapshot)
         db = _connect(self.db_path)
         try:
