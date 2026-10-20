@@ -15,7 +15,9 @@ from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 
 from sidedeck.application.saxo_execution_history import BrokerExecution
-from sidedeck.application.saxo_order_lifecycle import advance_lifecycle, lifecycle_state
+from sidedeck.application.saxo_order_lifecycle import (
+    LifecycleConflict, advance_lifecycle, lifecycle_state,
+)
 from sidedeck.application.saxo_sim_submission import SOFI_UIC, ensure_authorization_table
 from sidedeck.domain.sim_accounting import (
     SettlementSource, SimAccountingError, SimEvent, SimEventType, SimLedger, book_for_strategy,
@@ -104,8 +106,16 @@ class SaxoExecutionPipeline:
         state = lifecycle_state(self._db_path, order_key)
         target = "FILLED" if final else "PARTIAL"
         if state and state[0] in {"ACKNOWLEDGED", "PARTIAL"} and state[0] != target:
-            advance_lifecycle(self._db_path, order_key, target,
-                              broker_order_id=broker_order_id, broker_evidence=True)
+            try:
+                advance_lifecycle(self._db_path, order_key, target,
+                                  broker_order_id=broker_order_id, broker_evidence=True)
+            except LifecycleConflict:
+                # A concurrent worker may have advanced the same order between our
+                # read and write. Accept only if it reached this target or later.
+                latest = lifecycle_state(self._db_path, order_key)
+                reached = {"PARTIAL": {"PARTIAL", "FILLED"}, "FILLED": {"FILLED"}}[target]
+                if latest is None or latest[0] not in reached or latest[1] != broker_order_id:
+                    raise
 
     def recover(self) -> int:
         """Rebuild the SIM ledger from the journal and finish lifecycle updates.

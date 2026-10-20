@@ -250,6 +250,32 @@ def test_concurrent_duplicate_delivery_posts_exactly_once(tmp_path):
     assert SaxoExecutionPipeline(db).ledger.replay(TA).positions["US:SOFI"].quantity == Decimal("1")
 
 
+def test_lifecycle_race_is_tolerated_only_when_the_other_worker_reached_the_target(
+        tmp_path, monkeypatch):
+    """Deterministic version of the CI #456 race: state read is stale at write time."""
+    db = sim_db(tmp_path)
+    authorize(db)
+    pipeline = SaxoExecutionPipeline(db)
+    stale = ("ACKNOWLEDGED", "broker-1", 1)
+    real_state = pipeline_module.lifecycle_state
+    calls = {"n": 0}
+
+    def first_read_is_stale(path, key):
+        calls["n"] += 1
+        return stale if calls["n"] == 1 else real_state(path, key)
+
+    advance_lifecycle(db, "sofi-1", "FILLED", broker_order_id="broker-1", broker_evidence=True)
+    monkeypatch.setattr(pipeline_module, "lifecycle_state", first_read_is_stale)
+    pipeline._advance_lifecycle("sofi-1", "broker-1", final=True)        # tolerated: already FILLED
+    assert real_state(db, "sofi-1")[0] == "FILLED"
+    db2 = sim_db(tmp_path, "cancelled.sqlite")
+    authorize(db2)
+    advance_lifecycle(db2, "sofi-1", "CANCELLED")
+    calls["n"] = 0
+    with pytest.raises(Exception, match="unapproved lifecycle transition"):
+        SaxoExecutionPipeline(db2)._advance_lifecycle("sofi-1", "broker-1", final=True)
+
+
 def test_replay_is_chronological_and_corruption_is_rejected(tmp_path):
     db = sim_db(tmp_path)
     authorize(db, quantity="2")
