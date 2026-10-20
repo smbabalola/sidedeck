@@ -63,10 +63,10 @@ def quarterly_coverage(preview: dict[str, Any]) -> dict[str, Any]:
     periods = sorted(set.intersection(*(set(rows) for rows in by_name.values())),
                      reverse=True)
     output = []
-    for period in periods:
-        matched = {name: by_name[name][period] for name in names}
+    for report_period in periods:
+        matched = {name: by_name[name][report_period] for name in names}
         available = max(row["filing_date"] for row in matched.values())
-        output.append({"report_period": period, "available_from": available,
+        output.append({"report_period": report_period, "available_from": available,
                        "metrics": matched})
     return {
         "ticker": preview.get("ticker"), "as_of": cutoff.isoformat(),
