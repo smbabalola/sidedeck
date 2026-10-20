@@ -46,6 +46,22 @@ PRECHECK_BODY = {"PreCheckResult": "Ok", "EstimatedCashRequired": "37.55",
 SCOPE = SaxoAccountScope("approved", "opaque-account-key", "client")
 
 
+class FakeReadOnlySimClient:
+    """Synthetic /port/v1/users/me and /port/v1/accounts/me responses (no network)."""
+
+    def user(self):
+        return {"ClientKey": "client"}
+
+    def accounts(self):
+        return {"Data": [{"AccountId": "approved", "AccountKey": "opaque-account-key",
+                          "Active": True}]}
+
+
+def authenticated_scope() -> SaxoAccountScope:
+    from sidedeck.infrastructure.saxo_account_scope import verified_scope
+    return verified_scope(FakeReadOnlySimClient(), "approved")  # type: ignore[arg-type]
+
+
 def precheck(body=None) -> PrecheckEvidence:
     """Unsealed parse of a synthetic body, as a fixture or hand-built object would be."""
     return parse_precheck(body or PRECHECK_BODY, instrument_currency="USD", account_currency="EUR",
@@ -90,6 +106,12 @@ class TrustedVerifier:
 class TrustedMarketVerifier:
     def verify(self, market_evidence):
         return market_evidence.quote_origin is EvidenceOrigin.AUTHENTICATED_PROVIDER
+
+
+@pytest.fixture(autouse=True)
+def registered_fixture_market_verifier(monkeypatch):
+    """Test-only: registers the fixture verifier type. The shipped registry is empty."""
+    monkeypatch.setattr(submission_module, "TRUSTED_MARKET_VERIFIER_TYPES", (TrustedMarketVerifier,))
 
 
 def test_market_and_fx_evidence_rejects_stale_or_wrong_direction():
@@ -204,7 +226,7 @@ def test_official_history_path_and_sim_payload_boundary():
 def prepared(monkeypatch, *, order_key="sofi-1", portfolio_id="tradingagents", now=NOW,
              **overrides):
     kwargs = dict(order_key=order_key, portfolio_id=portfolio_id, evidence=evidence(),
-                  precheck=sealed_precheck(monkeypatch), account_scope=SCOPE,
+                  precheck=sealed_precheck(monkeypatch), account_scope=authenticated_scope(),
                   expected_account_id="approved", portfolio_cash_usd=Decimal("1000"), now=now,
                   market_verifier=TrustedMarketVerifier())
     kwargs.update(overrides)
@@ -517,14 +539,158 @@ def test_offline_acceptance_reports_no_go_with_code_gates_passing(tmp_path, caps
     assert data["decision"] == "NO-GO" and data["broker_requests_made"] == 0
 
 
-def test_acceptance_stays_no_go_while_release_is_disabled_even_with_full_evidence(tmp_path, monkeypatch):
+EXTERNAL_GATES = ("AUTHENTICATED_SIM_ACCOUNT_AND_INSTRUMENT", "CURRENT_SOFI_QUOTE_PROVENANCE",
+                  "CURRENT_EURUSD_FX_PROVENANCE", "BROKER_PRECHECK_AND_ACCOUNT_CURRENCY",
+                  "EXACT_ORDER_PAYLOAD", "INDEPENDENT_OPERATOR_APPROVAL")
+
+
+def evaluated(**kwargs):
     from sidedeck.application import saxo_p4_acceptance
-    request = prepared(monkeypatch)
+    gates, decision = saxo_p4_acceptance.evaluate(now=NOW, **kwargs)
+    return {gate.name: (gate.status, gate.detail) for gate in gates}, decision
+
+
+def full_inputs(monkeypatch, tmp_path):
+    """Sealed precheck, the exact evidence object, and a prepared request."""
+    sealed = sealed_precheck(monkeypatch)
+    market = evidence()
+    request = prepared(monkeypatch, precheck=sealed, evidence=market)
     signers = tmp_path / "allowed_signers"
-    signers.write_text("operator ssh-ed25519 AAAA\n", encoding="utf-8")
-    gates, decision = saxo_p4_acceptance.evaluate(request=request, authorization=approve(request),
-                                                  allowed_signers=signers, now=NOW)
-    status = {gate.name: gate.status for gate in gates}
-    assert status["INDEPENDENT_OPERATOR_APPROVAL"] == "PASS"
-    assert status["SIM_SUBMISSION_RELEASE"] == "DISABLED"
+    signers.write_text("operator ssh-ed25519 AAAAplaceholder\n", encoding="utf-8")
+    return request, sealed, market, signers
+
+
+def test_hand_built_or_altered_request_cannot_pass_any_external_gate(monkeypatch, tmp_path):
+    from dataclasses import replace
+    request, sealed, market, signers = full_inputs(monkeypatch, tmp_path)
+    assert request.is_prepared()
+    unsealed = replace(request, preparation_seal="")
+    altered = replace(request, expected_price_usd=Decimal("1"))  # keeps the old seal
+    for candidate in (unsealed, altered):
+        assert not candidate.is_prepared()
+        status, decision = evaluated(request=candidate, precheck=sealed, evidence=market,
+                                     market_verifier=TrustedMarketVerifier(),
+                                     authorization=approve(request), allowed_signers=signers)
+        assert decision == "NO-GO"
+        for name in EXTERNAL_GATES:
+            assert status[name][0] == "MISSING", name
+        assert "hand-built or altered" in status["EXACT_ORDER_PAYLOAD"][1]
+
+
+def test_matching_authorization_values_are_not_an_approval(monkeypatch, tmp_path):
+    request, sealed, market, signers = full_inputs(monkeypatch, tmp_path)
+    fixture_signed = approve(request)  # every field matches; signature is not an operator's
+    forged = ExecutionAuthorization(
+        "approval-1", "operator", request.requested_by, request.order_key, request.account_id,
+        request.portfolio_id, request.ticker, request.uic, "Buy", request.quantity, "Market",
+        request.digest(), request.broker_payload_digest(), request.risk_evidence_sha256,
+        NOW + timedelta(minutes=5), attestation="-----BEGIN SSH SIGNATURE-----\nAA\n"
+        "-----END SSH SIGNATURE-----")
+    for authorization in (fixture_signed, forged):
+        status, decision = evaluated(request=request, precheck=sealed, evidence=market,
+                                     market_verifier=TrustedMarketVerifier(),
+                                     authorization=authorization, allowed_signers=signers)
+        assert status["INDEPENDENT_OPERATOR_APPROVAL"][0] == "MISSING"
+        assert "does not verify" in status["INDEPENDENT_OPERATOR_APPROVAL"][1]
+        assert decision == "NO-GO"
+    status, _ = evaluated(request=request, precheck=sealed, evidence=market,
+                          market_verifier=TrustedMarketVerifier(), authorization=fixture_signed)
+    assert status["OPERATOR_VERIFIER_CONFIGURED"][0] == "MISSING"
+    assert status["INDEPENDENT_OPERATOR_APPROVAL"][0] == "MISSING"
+
+
+def test_market_evidence_must_be_reverified_by_a_registered_verifier_type(monkeypatch, tmp_path):
+    request, sealed, market, _ = full_inputs(monkeypatch, tmp_path)
+
+    class DuckVerifier:
+        def verify(self, market_evidence):
+            return True
+
+    class SubclassVerifier(TrustedMarketVerifier):
+        pass
+
+    for verifier in (None, DuckVerifier(), SubclassVerifier()):
+        status, _ = evaluated(request=request, precheck=sealed, evidence=market,
+                              market_verifier=verifier)
+        assert status["CURRENT_SOFI_QUOTE_PROVENANCE"] == (
+            "MISSING", "no registered market-data verifier type")
+    status, _ = evaluated(request=request, precheck=sealed, evidence=evidence(),
+                          market_verifier=TrustedMarketVerifier())
+    assert "differs from the evidence" in status["CURRENT_EURUSD_FX_PROVENANCE"][1]
+    status, _ = evaluated(request=request, precheck=sealed, evidence=market,
+                          market_verifier=TrustedMarketVerifier())
+    assert status["CURRENT_SOFI_QUOTE_PROVENANCE"][0] == "PASS"
+    monkeypatch.setattr(submission_module, "TRUSTED_MARKET_VERIFIER_TYPES", ())
+    status, _ = evaluated(request=request, precheck=sealed, evidence=market,
+                          market_verifier=TrustedMarketVerifier())
+    assert status["CURRENT_SOFI_QUOTE_PROVENANCE"][0] == "MISSING"
+
+
+def test_precheck_gate_requires_the_sealed_precheck_bound_to_the_request(monkeypatch, tmp_path):
+    from dataclasses import replace
+    request, sealed, market, _ = full_inputs(monkeypatch, tmp_path)
+    other = sealed_precheck(monkeypatch, dict(PRECHECK_BODY, EstimatedCashRequired="37.60"))
+    for candidate in (None, precheck(), replace(sealed, transport_seal=""), other):
+        status, _ = evaluated(request=request, precheck=candidate)
+        assert status["BROKER_PRECHECK_AND_ACCOUNT_CURRENCY"][0] == "MISSING"
+        assert status["AUTHENTICATED_SIM_ACCOUNT_AND_INSTRUMENT"][0] == "MISSING"
+    status, _ = evaluated(request=request, precheck=sealed)
+    assert status["BROKER_PRECHECK_AND_ACCOUNT_CURRENCY"][0] == "PASS"
+    from sidedeck.application import saxo_p4_acceptance
+    gates, _ = saxo_p4_acceptance.evaluate(request=request, precheck=sealed,
+                                           now=NOW + timedelta(minutes=6))
+    stale = {g.name: (g.status, g.detail) for g in gates}["BROKER_PRECHECK_AND_ACCOUNT_CURRENCY"]
+    assert stale == ("MISSING", "prepared request is stale")
+
+
+def test_hand_built_scope_and_unprepared_request_are_refused(tmp_path, monkeypatch, released):
+    from dataclasses import replace
+    with pytest.raises(SubmissionBlocked, match="authenticated SIM responses"):
+        prepared(monkeypatch, account_scope=SCOPE)
+    with pytest.raises(SubmissionBlocked, match="authenticated SIM responses"):
+        prepared(monkeypatch, account_scope=replace(authenticated_scope(), account_id="approved",
+                                                    account_key="other-key"))
+    request = prepared(monkeypatch)
+    transport = Acknowledged()
+    submitter = SaxoSimSubmitter(str(tmp_path / "o.sqlite"), network_enabled=True,
+                                 transport=transport, approval_verifier=TrustedVerifier())
+    unsealed = replace(request, preparation_seal="")
+    with pytest.raises(SubmissionBlocked, match="production preparation"):
+        submitter.submit(unsealed, approve(request), now=NOW)
+    assert transport.calls == 0
+
+
+def test_unregistered_market_verifier_cannot_prepare_an_order(monkeypatch):
+    monkeypatch.setattr(submission_module, "TRUSTED_MARKET_VERIFIER_TYPES", ())
+    with pytest.raises(SubmissionBlocked, match="no registered market-data verifier"):
+        prepared(monkeypatch)
+
+
+def test_real_operator_signature_passes_but_release_keeps_no_go(monkeypatch, tmp_path):
+    import test_saxo_operator_approval as ssh
+    if ssh.SSH_KEYGEN is None:
+        pytest.skip("ssh-keygen unavailable")
+    from sidedeck.infrastructure.saxo_operator_approval import SshSignatureApprovalVerifier
+    request, sealed, market, _ = full_inputs(monkeypatch, tmp_path)
+    key, signers = ssh.operator_setup(tmp_path)
+    expires = NOW + timedelta(minutes=5)
+    material = approval_material(request, authorization_id="approval-1", approver="operator",
+                                 expires_at=expires)
+    signature = ssh.operator_signs(tmp_path, key, material)
+    authorization = accept_operator_approval(
+        request, authorization_id="approval-1", approver="operator", expires_at=expires,
+        attestation=signature, verifier=SshSignatureApprovalVerifier(signers), now=NOW)
+    status, decision = evaluated(request=request, precheck=sealed, evidence=market,
+                                 market_verifier=TrustedMarketVerifier(),
+                                 authorization=authorization, allowed_signers=signers,
+                                 ssh_keygen=ssh.SSH_KEYGEN)
+    for name in EXTERNAL_GATES:
+        assert status[name][0] == "PASS", (name, status[name])
+    assert status["SIM_SUBMISSION_RELEASE"][0] == "DISABLED"
     assert decision == "NO-GO"
+    from dataclasses import replace
+    tampered = replace(authorization, expires_at=NOW + timedelta(minutes=4))
+    status, _ = evaluated(request=request, precheck=sealed, evidence=market,
+                          market_verifier=TrustedMarketVerifier(), authorization=tampered,
+                          allowed_signers=signers, ssh_keygen=ssh.SSH_KEYGEN)
+    assert status["INDEPENDENT_OPERATOR_APPROVAL"][0] == "MISSING"

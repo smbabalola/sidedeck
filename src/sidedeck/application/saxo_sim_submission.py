@@ -9,10 +9,12 @@ outside SideDeck. The normal SideDeck application sets none of them.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
+import secrets
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Protocol
@@ -37,6 +39,14 @@ CASH_TOLERANCE = Decimal("0.05")
 APPROVAL_VERSION = "sidedeck-saxo-sim-approval-v1"
 _ORDER_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,49}")
 _SELF_ATTESTING = ("attest", "sign", "approve", "issue")
+# Process-local key: only prepare_sofi_request() in this process can mark a
+# request as having passed every production pre-submission check.
+_PREPARATION_SEAL_KEY = secrets.token_bytes(32)
+
+# Market-data verifier *types* trusted to attest authenticated quote/FX
+# provenance. Empty until a provider verifier is implemented and reviewed in
+# Stage 2; an injected object that merely returns True is not enough.
+TRUSTED_MARKET_VERIFIER_TYPES: tuple[type, ...] = ()
 
 AUTHORIZATION_DDL = (
     "CREATE TABLE IF NOT EXISTS saxo_execution_authorization ("
@@ -109,6 +119,14 @@ class SimOrderRequest:
     risk_evidence_sha256: str
     prepared_at: datetime
     requested_by: str
+    evidence_sha256: str
+    preparation_seal: str = field(default="", repr=False, compare=False)
+
+    def is_prepared(self) -> bool:
+        """True only for a request built by prepare_sofi_request() in this process."""
+        if not self.preparation_seal:
+            return False
+        return hmac.compare_digest(_preparation_mac(self), self.preparation_seal)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -134,12 +152,38 @@ class SimOrderRequest:
             "risk_evidence_sha256": self.risk_evidence_sha256,
             "prepared_at": self.prepared_at.isoformat(),
             "requested_by": self.requested_by,
+            "evidence_sha256": self.evidence_sha256,
         }, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
     def broker_payload_digest(self) -> str:
         body = json.dumps(self.payload(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _preparation_mac(request: SimOrderRequest) -> str:
+    material = (request.digest() + "|" + request.broker_payload_digest()).encode("ascii")
+    return hmac.new(_PREPARATION_SEAL_KEY, material, hashlib.sha256).hexdigest()
+
+
+def evidence_digest(evidence: ExecutionEvidence) -> str:
+    """Stable digest of the exact quote/FX evidence a request was built from."""
+    quote, fx = evidence.quote, evidence.fx
+    return hashlib.sha256(json.dumps({
+        "quote": [quote.instrument_id, quote.ticker, quote.provider, str(quote.price),
+                  quote.currency, quote.market_timestamp.isoformat(),
+                  quote.ingestion_timestamp.isoformat(), str(quote.snapshot_id)],
+        "fx": [fx.provider, fx.pair, str(fx.usd_per_eur), fx.observed_at.isoformat(),
+               fx.ingestion_at.isoformat()],
+        "costs": [str(evidence.spread_usd), str(evidence.fees_usd), str(evidence.fx_fee_usd)],
+        "origins": [str(evidence.quote_origin), str(evidence.fx_origin)],
+        "observed_at": evidence.observed_at.isoformat(),
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def trusted_market_verifier(verifier: object | None) -> bool:
+    """Exact registered type only; subclasses and duck types are not trusted."""
+    return verifier is not None and type(verifier) in TRUSTED_MARKET_VERIFIER_TYPES
 
 
 class SubmissionBlocked(RuntimeError):
@@ -198,6 +242,8 @@ def prepare_sofi_request(
     if not valid_principal(requested_by):
         raise ValueError("invalid requesting principal")
     cutoff = _utc(now, "submission time")
+    if not account_scope.is_authenticated():
+        raise SubmissionBlocked("Saxo account scope was not derived from authenticated SIM responses")
     if account_scope.account_id != expected_account_id:
         raise SubmissionBlocked("verified Saxo account identity does not match expectation")
     request_payload = precheck_payload(account_scope, uic=SOFI_UIC, amount=1)
@@ -218,7 +264,10 @@ def prepare_sofi_request(
     if (evidence.quote_origin is not EvidenceOrigin.AUTHENTICATED_PROVIDER
             or evidence.fx_origin is not EvidenceOrigin.AUTHENTICATED_PROVIDER):
         raise SubmissionBlocked("authenticated quote and FX evidence are required")
-    if market_verifier is None or not market_verifier.verify(evidence):
+    if market_verifier is None or not trusted_market_verifier(market_verifier):
+        raise SubmissionBlocked("trusted market-data attestation is required: "
+                                "no registered market-data verifier")
+    if not market_verifier.verify(evidence):
         raise SubmissionBlocked("trusted market-data attestation is required")
     # Check each observation against the submission time directly; the
     # evidence bundle's own max_age is caller-chosen and is not trusted here.
@@ -247,7 +296,7 @@ def prepare_sofi_request(
         "precheck_sha256": precheck.response_sha256,
         "precheck_cash_eur": str(precheck.estimated_cash_required),
     }, sort_keys=True, separators=(",", ":"))
-    return SimOrderRequest(
+    request = SimOrderRequest(
         order_key=order_key, portfolio_id=portfolio_id, account_id=account_scope.account_id,
         broker_account_key=account_scope.account_key, external_reference=order_key,
         ticker="SOFI", uic=SOFI_UIC, quantity=1,
@@ -257,7 +306,9 @@ def prepare_sofi_request(
         precheck_sha256=precheck.response_sha256,
         risk_evidence_sha256=hashlib.sha256(risk_material.encode()).hexdigest(),
         prepared_at=cutoff, requested_by=requested_by,
+        evidence_sha256=evidence_digest(evidence),
     )
+    return replace(request, preparation_seal=_preparation_mac(request))
 
 
 def approval_material(request: SimOrderRequest, *, authorization_id: str,
@@ -275,6 +326,7 @@ def approval_material(request: SimOrderRequest, *, authorization_id: str,
         "request_sha256": request.digest(),
         "risk_evidence_sha256": request.risk_evidence_sha256,
         "precheck_sha256": request.precheck_sha256,
+        "evidence_sha256": request.evidence_sha256,
         "expected_price_usd": str(request.expected_price_usd),
         "expected_cost_usd": str(request.expected_cost_usd),
         "precheck_cash_eur": str(request.precheck_cash_eur),
@@ -370,6 +422,8 @@ class SaxoSimSubmitter:
         if not self._network_enabled or self._transport is None:
             raise SubmissionBlocked("Saxo SIM submission is disabled")
         verifier = _require_verify_only(self._approval_verifier)
+        if not request.is_prepared():
+            raise SubmissionBlocked("order request did not pass production preparation checks")
         self._prepare_db()
         if (authorization.request_sha256 != request.digest()
                 or authorization.broker_payload_sha256 != request.broker_payload_digest()
