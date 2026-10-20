@@ -9,6 +9,7 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 
 DISCLOSURES = (
@@ -27,7 +28,7 @@ DISCLOSURES = (
 )
 
 
-def disclosure_review(joined: dict, raw: dict) -> dict:
+def disclosure_review(joined: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
     if joined.get("ticker") != "SOFI" or raw.get("cik") != 1818874:
         raise ValueError("unexpected issuer")
     if joined.get("buffett_ready") is not False or joined.get("broker_execution") != "DISABLED":
@@ -43,7 +44,7 @@ def disclosure_review(joined: dict, raw: dict) -> dict:
         if report > cutoff or item.get("mapped_to_buffett") is not False:
             raise ValueError("invalid research period")
         supporting = [d for d in DISCLOSURES
-                      if date.fromisoformat(d["date"]) <= cutoff and d["period"] == item["report_period"]]
+                      if date.fromisoformat(str(d["date"])) <= cutoff and d["period"] == item["report_period"]]
         sample = [x for x in source if x.get("end") == item["report_period"]
                   and x.get("val") == 1290312404 and x.get("filed", "9999") <= joined["as_of"]]
         share_confirmed = (item["report_period"] == "2026-06-30" and bool(sample))
