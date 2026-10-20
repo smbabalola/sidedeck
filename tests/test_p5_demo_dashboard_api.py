@@ -28,7 +28,7 @@ def test_read_only_saved_baseline_summary(tmp_path):
         "schema_version", "source", "baseline_status", "captured_at",
         "protected_positions", "reconciliation_status", "discrepancy_count",
         "available_cash_usd_status", "unrealized_pnl_status",
-        "execution_enabled", "books",
+        "execution_enabled", "books", "fresh_snapshot",
     }
     assert all(set(book) == {"id", "positions", "allocation_status"} for book in result["books"])
     assert result["books"][2]["positions"] == 2
