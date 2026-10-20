@@ -22,7 +22,16 @@ def test_read_only_saved_baseline_summary(tmp_path):
     assert result["discrepancy_count"] is None
     assert result["available_cash_usd_status"] == "UNAVAILABLE"
     assert result["execution_enabled"] is False
-    assert "11" not in str(result) and "12" not in str(result)
+    # Check structured exposure, not digit substrings that may appear in timestamps.
+    # The browser receives counts and status only; raw broker identifiers stay in SQLite.
+    assert set(result) == {
+        "schema_version", "source", "baseline_status", "captured_at",
+        "protected_positions", "reconciliation_status", "discrepancy_count",
+        "available_cash_usd_status", "unrealized_pnl_status",
+        "execution_enabled", "books",
+    }
+    assert all(set(book) == {"id", "positions", "allocation_status"} for book in result["books"])
+    assert result["books"][2]["positions"] == 2
     assert result["books"][0]["positions"] is None
 
 
