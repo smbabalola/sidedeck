@@ -125,6 +125,10 @@
 - [x] Local: `312 passed, 1 skipped` (the skip is PostgreSQL, CI only). Ruff
   and mypy (57 files) clean. A throwaway SQLite Alembic head→base→head round
   trip at `0010` passed.
+- [x] CI evidence: code `378babc`, CI #461
+  ([run 39389946214](https://github.com/smbabalola/sidedeck/actions/runs/39389946214))
+  **passed: 313 tests, 0 skipped**, including the disposable PostgreSQL upgrade
+  through `0010` and the rollback.
 - [ ] **BLOCKED (owner permission):** one live, read-only Stage 2 run (account
   evidence, SOFI quote, EUR/USD, precheck). After review, register
   `SaxoSimMarketEvidence` in `TRUSTED_MARKET_VERIFIER_TYPES`.
