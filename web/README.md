@@ -27,3 +27,19 @@ From the repository root, in a second terminal:
 Then run `npm run dev` in `web`. Vite proxies only `/api` to the loopback Python API. No eToro credentials or internet access are used by this service. It opens the existing SQLite database in read-only mode; if it cannot read a valid baseline it returns HTTP 503. The response contains only baseline timestamp, counts and explicit unavailable statuses—never raw broker IDs, monetary values or a false live reconciliation. Do not expose either development server on public interfaces.
 
 Run `python -m pytest tests/test_p5_demo_dashboard_api.py -q` and `npm run build` for verification.
+
+## M1 explicit owner refresh (read-only)
+
+Run the local backend with the short-lived sanitized snapshot path:
+
+```powershell
+.\.venv\Scripts\python.exe -m sidedeck.application.p5_demo_dashboard_api --db "data\etoro_demo.sqlite3" --snapshot "data\etoro_demo_refresh.json"
+```
+
+In another terminal, **after loading the existing ETORO_API_KEY and ETORO_USER_KEY into that terminal's process environment**, explicitly authorize one Demo GET:
+
+```powershell
+.\.venv\Scripts\python.exe -m sidedeck.application.p5_demo_refresh --confirm-owner-demo-read --db "data\etoro_demo.sqlite3" --snapshot "data\etoro_demo_refresh.json"
+```
+
+The dashboard reads the newly saved sanitized summary on its next page refresh. The report expires after five minutes; reload the page after an owner-authorized CLI refresh. The dashboard never triggers a broker request, and **no raw broker payload, broker IDs, account details or monetary amounts** are saved to the report. Cash and P&L amounts remain withheld until separate value-level acceptance. The baseline is never captured again or modified. Snapshot files must remain local and git-ignored. No order endpoint exists.
