@@ -79,13 +79,7 @@ Builds on [`ETORO_DEMO_READ_2026-10-20.md`](ETORO_DEMO_READ_2026-10-20.md): one 
 ## Verification
 
 - Local: `388 passed, 1 skipped` (the skip is PostgreSQL, CI only). Ruff and mypy are clean across all 89 source files. A throwaway SQLite Alembic head→base→head round trip passed.
-- CI history: run 39401263762 on `9014e95` passed pytest (378, 0 skipped) but failed at Ruff on two unused imports that already existed. Those, and the 20 existing mypy errors in 9 P5 files, are now fixed narrowly in the CI-remediation commit:
-  - type parameters on `dict`/`list`;
-  - `cast` on the results of `json.loads`;
-  - two renamed variables that were shadowing others;
-  - an explicit string check on `as_of` in `consolidate_bvps`.
-
-  There are no `type: ignore` comments and no configuration changes. The final CI run is recorded below.
+- CI history: run 39401263762 on `9014e95` passed pytest (378, 0 skipped) but failed at Ruff on two unused imports that already existed. Those, and the 20 existing mypy errors in 9 P5 files, were fixed by the owner-side commits `7c59b11`…`27fd95e` ("P5: resolve Ruff and mypy issues without changing research gates"), which landed while this work was in progress. A parallel fix from Claude was dropped in favour of them to avoid conflicting edits. The eToro hardening commit sits on top, and Ruff and mypy are clean.
 
 ## Remaining gaps and gates
 
