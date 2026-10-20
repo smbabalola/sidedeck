@@ -37,8 +37,10 @@ only. It was not executed. No synthetic decision is presented as real research.
 
 - Paid/provider research is not authorized; do not run either bridge against a
   model provider yet.
-- AI Hedge Fund requires a permitted model provider and Financial Datasets
-  access, plus a versioned upstream runtime identity.
+- AI Hedge Fund requires a permitted model provider. Financial Datasets is no
+  longer required when local SEC fundamentals are supplied, and the upstream
+  identity is now pinned (`aihf==2.5.0+git.ec02537…`). SOFI SEC coverage is
+  still insufficient; see `M2_BUFFETT_DATA_COMPATIBILITY.md`.
 - A future owner-approved SOFI research run must use the isolated interpreters,
   an explicitly selected provider/model, independent genuine market/fundamental
   evidence, and produce two enriched `RESEARCH_ONLY` records for the paired

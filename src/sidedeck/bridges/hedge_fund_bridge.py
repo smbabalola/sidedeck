@@ -1,7 +1,9 @@
 """Genuine AI Hedge Fund v2 persona research bridge, without its paper broker.
 
 Install https://github.com/virattt/ai-hedge-fund separately. Uses upstream
-BuffettAgent.predict() and FDClient, never advance(), paper tick or order tools.
+BuffettAgent.predict() with either SideDeck's local SEC fundamentals client
+(--fundamentals-json, no Financial Datasets access) or upstream FDClient.
+Never advance(), paper tick or order tools.
 """
 from __future__ import annotations
 
@@ -11,21 +13,15 @@ import io
 import json
 import math
 import sys
-from importlib import metadata as package_metadata
 from importlib import import_module
+
+from sidedeck.bridges.upstream_identity import resolve_hedge_fund_identity
 
 
 def _upstream_version() -> str:
-    for distribution in ("ai-hedge-fund", "ai_hedge_fund"):
-        try:
-            return package_metadata.version(distribution)
-        except package_metadata.PackageNotFoundError:
-            continue
-    package = import_module("hedge_fund")
-    version = getattr(package, "__version__", "")
-    if isinstance(version, str) and version.strip():
-        return version
-    raise ValueError("AI Hedge Fund upstream version is unavailable")
+    # The upstream distribution is "aihf"; editable installs are pinned to a
+    # clean git commit. Fails closed rather than inventing a version.
+    return str(resolve_hedge_fund_identity()["identity"])
 
 
 def classify_signal(value: object, *, abstained: bool = False) -> str:
