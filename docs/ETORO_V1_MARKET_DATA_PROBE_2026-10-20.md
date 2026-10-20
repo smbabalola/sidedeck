@@ -34,14 +34,14 @@ The prior one-shot request returned HTTP 403 with Cloudflare error **1010** usin
 - [x] Local eToro credentials present (keys not disclosed).
 - [x] Authenticated eToro v1 market-data search succeeded.
 - [x] Exact Nasdaq AAPL instrument identified, ID 1001.
-- [ ] eToro **Demo** portfolio read permission / environment access (**not tested**).
-- [ ] eToro Demo cash, positions and open order reconciliation (**not tested**).
+- [x] eToro **Demo** portfolio read permission confirmed: one authenticated GET HTTP 200 on 2026-10-20; see `ETORO_DEMO_READ_2026-10-20.md`.
+- [x] Demo P&L response field schema observed, with 4 existing positions and 0 pending orders; no values printed.\n- [ ] eToro Demo cash, positions and open-order **value-level reconciliation** (read-only adapter not built).
 - [ ] Demo-only order execution authorization and complete idempotent lifecycle (separate future review).
 - [ ] Real-money execution must remain disabled.
 
 No eToro orders were submitted by these probes. Saxo P4 remains `P4_DECISION=NO-GO` and `SIM_SUBMISSION_RELEASED=False`; Alpaca unchanged.
 
-**Next suggested test (not executed or authorized by this note):** a separately approved, single `GET /api/v1/trading/info/demo/pnl` with a key confirmed to be issued for the **Demo** environment, redacting account holdings before sharing any report. eToro's documentation states API keys are environment-specific and documents this demo-only endpoint.
+**Next:** implement and test a fail-closed **read-only eToro Demo portfolio adapter** offline. Do not submit orders or use real-money endpoints. See `ETORO_DEMO_READ_2026-10-20.md` for sanitized evidence and safeguards.
 
 References:
 - https://api-portal.etoro.com/guides/get-instrument-id
