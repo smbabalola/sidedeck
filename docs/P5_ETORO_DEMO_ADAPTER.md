@@ -69,6 +69,7 @@ Builds on [`ETORO_DEMO_READ_2026-10-20.md`](ETORO_DEMO_READ_2026-10-20.md): one 
 - `377 passed, 1 skipped` (the skip is PostgreSQL, CI only).
 - A throwaway SQLite Alembic head→base→head round trip passed.
 - Ruff and mypy are clean for every new file. The branch already had 2 Ruff and 20 mypy errors in 9 unrelated P5 files that this work doesn't touch.
+- CI run 39401263762 on `9014e95`: pytest **378 passed, 0 skipped**, so the disposable PostgreSQL test ran through `0005`. The job then **failed at `ruff check .`** on the two unused imports that already existed, the same failure as run #470 on `f279df1`. The mypy step would still fail on the 20 existing errors after that.
 
 ## Remaining gaps and gates
 
