@@ -62,7 +62,7 @@ def main() -> int:
     for agent in agents:
         try:
             result = agent.run(args.ticker, now)
-            output.append({"portfolio": result.portfolio_id, "upstream": result.upstream,
+            output.append({"portfolio": result.portfolio_id, "ticker": result.ticker, "upstream": result.upstream,
                            "status": "RESEARCH_ONLY", "decision": result.decision,
                            "rationale": result.rationale,
                            "model_config_fingerprint": settings.fingerprint,
