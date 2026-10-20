@@ -370,6 +370,9 @@ def reconstruct_msft_metrics(
         "periods": audits,
         "latest_validated_metric_count": latest["validated_metric_count"],
         "reconciled_historical_periods": sum(
+            1 for row in audits if row["validated_metric_count"] >= 10
+        ),
+        "periods_with_any_validated_metrics": sum(
             1 for row in audits if row["validated_metric_count"] >= 1
         ),
         "valuation": "UNRESOLVED_HISTORICAL_PRICE_AND_SHARE_BASIS",

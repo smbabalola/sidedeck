@@ -27,8 +27,9 @@ BuffettAgent candidate metrics are validated in that period:
 - unavailable: market cap and P/E, because no independently validated
   historical price and matching share-basis evidence is present.
 
-There are 70 historical periods with at least one validated metric in the
-audit. Every exported metric remains filing-dated; missing capex, ambiguous
+There are 8 historical periods with all ten non-valuation metrics validated,
+and 70 periods with at least one validated metric in the audit. Every exported
+metric remains filing-dated; missing capex, ambiguous
 shares, future filings and failed quarter reconciliation are excluded rather
 than converted to zero or carried forward. EPS allows only a documented
 two-cent rounded-fact tolerance. FCF/share uses annual weighted diluted shares

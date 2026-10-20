@@ -65,7 +65,8 @@
 - Broker execution: disabled; eToro/Saxo/Alpaca untouched.
 - P4: `P4_DECISION=NO-GO`.
 - MSFT SEC reconstruction: latest 2026-06-30 period has `10/12` validated
-  metrics; `70` historical periods contain at least one validated metric.
+  metrics; `8` historical periods have all ten non-valuation metrics
+  reconciled, while `70` contain at least one validated metric.
   General-sector coverage gate: `FAIL` (`10/12`; valuation has no evidence).
   Outputs are local temporary audit/data artifacts and the raw Company Facts
   file remains ignored; see `docs/M2_MSFT_FINANCIAL_RECONSTRUCTION.md`.
