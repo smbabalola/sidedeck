@@ -1,0 +1,313 @@
+# ADR-003 — Separate Saxo SIM execution accounting with per-strategy attribution
+
+**Status:** Accepted and implemented offline (2026-10-20). `P4_DECISION=NO-GO`.
+**Date:** 2026-10-20. **Branch:** `feat/p4-claude-review` (PR #4, draft).
+
+Implemented after owner sign-off; see §8 for the decisions and §9 for where the
+implementation differs from the original proposal. No broker call, order,
+credential use or release-switch change was made.
+
+## 1. Context — what happens today
+
+- `SaxoExecutionPipeline.apply_buy_fill` appends `BUY_FILL` events into the
+  in-memory research `Ledger`. Its `portfolio_id` is one of
+  `AUTHORIZED_PORTFOLIOS = ("tradingagents", "ai-trading")`, the same USD 1,000
+  research portfolios used by the P1–P3 experiment and persisted in
+  `journal_events`.
+- `application/reconciliation.py` compares **Alpaca paper** broker positions
+  with the *combined* `tradingagents` + `ai-trading` portfolio states.
+- The Saxo SIM account is EUR-denominated with its own (large) SIM balance.
+  The research portfolios are USD 1,000 virtual books.
+
+Consequences if a SIM order were filled today:
+
+1. The research experiment's cash and positions would change because of a
+   Saxo SIM trade. Strategy performance would mix simulated research fills
+   with broker-SIM fills.
+2. Alpaca paper reconciliation would see a SOFI position in the research books
+   that Alpaca does not hold, and report a mismatch. Worse, a matching Alpaca
+   trade could appear to "explain" it.
+3. EUR settlement, FX and broker fees would be forced into USD-only books with
+   no record of the account-currency amounts.
+
+None of this has happened: no SIM order has ever been submitted
+(`SIM_SUBMISSION_RELEASED = False`), so no SIM fill rows exist.
+
+## 2. Decision (proposed)
+
+Introduce a **separate SIM venue ledger** with one *book* per strategy:
+
+| Book ID | Purpose |
+|---|---|
+| `saxo-sim:tradingagents` | SIM executions attributed to the TradingAgents strategy |
+| `saxo-sim:ai-trading` | SIM executions attributed to the AI-Trading strategy |
+| `saxo-sim:unattributed` | Control book: broker activity without a SideDeck order key (pre-existing positions, manual trades, interest, unexplained fees). Never auto-assigned to a strategy. |
+
+Rules:
+
+- **No shared code path with the research ledger.** A new `SimLedger`
+  (`domain/sim_accounting.py`) accepts only `saxo-sim:*` book IDs. The research
+  `Ledger` keeps accepting only `tradingagents` / `ai-trading`, and additionally
+  rejects any event whose idempotency key starts with `saxo:`. The pipeline's
+  type changes from `Ledger` to `SimLedger`, so the separation is enforced by
+  types and tests.
+- **Attribution is fixed at approval time.** The strategy comes from the
+  proposal, is written into the request and the operator-signed approval
+  material as `book_id`, and is stored durably with the authorization. Fills
+  are attributed through `order_key → authorization.book_id`, never from
+  broker fields or caller arguments.
+- **Currencies.** Book cash is in the **account currency (EUR)**. Positions and
+  prices are in the **instrument currency (USD)**. Each fill stores the USD
+  price and quantity, the EUR settlement amount (broker figure when available,
+  otherwise USD × the request's validated FX rate, labelled as derived), the
+  FX rate and its source, and the fee with its explicit currency. P&L is
+  reported in EUR, with USD shown alongside.
+- **Capital.** Each strategy book is opened with an explicit
+  `SIM_ALLOCATION` event in EUR. The sum of allocations must not exceed the
+  authenticated SIM cash balance observed at opening. The allocation size is an
+  owner decision (see §7). The SIM account's remaining balance is not strategy
+  capital.
+- **Alpaca paper accounts and research ledgers are untouched.** Neither the
+  existing tables nor `reconciliation.py` inputs change.
+
+## 3. Schema (migration `0009_saxo_sim_books`, proposed)
+
+New tables only; no change to `journal_events` or `proposal_audit`.
+
+```text
+saxo_sim_books
+  book_id            VARCHAR(64)  PK        -- 'saxo-sim:tradingagents' | 'saxo-sim:ai-trading' | 'saxo-sim:unattributed'
+  strategy_id        VARCHAR(64)  NULL      -- NULL only for the unattributed control book
+  account_id         VARCHAR(100) NOT NULL  -- verified SIM AccountId (stored, never logged)
+  account_currency   CHAR(3)      NOT NULL  -- 'EUR'
+  opened_at          TIMESTAMPTZ  NOT NULL
+  status             VARCHAR(16)  NOT NULL  CHECK IN ('OPEN','FROZEN','CLOSED')
+  UNIQUE (account_id, strategy_id)
+
+saxo_sim_journal
+  journal_sequence   INTEGER      PK autoincrement
+  event_id           CHAR(36)     UNIQUE NOT NULL
+  book_id            VARCHAR(64)  NOT NULL REFERENCES saxo_sim_books(book_id)
+  idempotency_key    VARCHAR(200) NOT NULL   -- 'saxo:<ExecutionId>' for fills
+  event_type         VARCHAR(32)  NOT NULL   CHECK IN ('SIM_ALLOCATION','SIM_BUY_FILL','SIM_SELL_FILL',
+                                                       'SIM_FEE','SIM_BASELINE','SIM_ADJUSTMENT')
+  order_key          VARCHAR(50)  NULL
+  broker_execution_id VARCHAR(200) NULL UNIQUE
+  occurred_at        TIMESTAMPTZ  NOT NULL
+  payload            TEXT         NOT NULL   -- canonical JSON: Decimal strings, explicit currencies, FX source
+  payload_sha256     CHAR(64)     NOT NULL
+  UNIQUE (book_id, idempotency_key)
+
+saxo_execution_authorization   (existing, add)
+  book_id            VARCHAR(64)  NULL      -- required for new rows; included in approval material
+
+saxo_execution_recovery        (existing, add)
+  book_id            VARCHAR(64)  NULL      -- recovery replays into SimLedger by book
+```
+
+`SIM_ADJUSTMENT` (manual correction) requires an operator-signed approval,
+like orders, and is never generated automatically.
+
+## 4. Reconciliation
+
+Three separate, read-only checks; none of them submits or cancels anything.
+
+1. **Per order** (exists today, kept): cumulative `FillAmount` equals the
+   authorized quantity, `FinalFill` closes it, and the broker order ID matches
+   the acknowledged lifecycle. Additionally, the book must equal the
+   authorization's `book_id`.
+2. **Per SIM account** (new): for each Uic,
+   `Σ strategy book positions + unattributed position = broker position`
+   from `/port/v1/positions`. Cash is reconciled as a *delta since baseline*:
+   the EUR movement of attributed fills plus fees must match the broker cash
+   change, with any remainder posted to `saxo-sim:unattributed` for review,
+   never to a strategy. Mismatches freeze the affected books (`FROZEN`), and a
+   frozen book blocks new SIM orders for that strategy.
+3. **Baseline at opening** (new): when a book is opened, the authenticated
+   positions and open orders are recorded once as `SIM_BASELINE` in the control
+   book. Pre-existing exposure is never attributed to a strategy.
+
+Alpaca paper reconciliation (`reconciliation.py`) keeps its inputs, the two
+research portfolios. A regression test will assert that SIM books cannot be
+passed to it and that a SIM fill leaves both research portfolio states
+unchanged.
+
+## 5. Migration implications
+
+- **Forward (`0009`)**: create `saxo_sim_books` and `saxo_sim_journal`, and add
+  nullable `book_id` to the two Saxo tables (SQLite via `batch_alter_table`,
+  PostgreSQL directly). Seed the three book rows only when a verified account
+  ID is supplied by the opening command, never inside the migration.
+- **Existing data safety check**: the migration *refuses to run* if
+  `saxo_execution_recovery` has any `POSTED`/`PENDING`/`RECOVERING` rows, or if
+  `journal_events` contains an idempotency key starting with `saxo:`. Such rows
+  would mean a SIM fill was already booked into a research portfolio. That needs
+  owner review and a signed correction, not a silent move. With releases
+  disabled, the expected count is zero.
+- **Downgrade**: drops the new tables and columns only when `saxo_sim_journal`
+  is empty. Otherwise it refuses, to avoid destroying accounting history.
+- **Runtime DDL**: the `CREATE TABLE IF NOT EXISTS` statements in
+  `saxo_execution_pipeline.py` / `saxo_sim_submission.py` will be updated in
+  step with the migration, as was done for `0008`.
+- **Verification**: disposable SQLite `0001→0009→base→0009`, the PostgreSQL CI
+  round trip, a refusal test with a seeded `saxo:` research row, and an
+  idempotent crash-recovery test replaying into `SimLedger`.
+
+## 6. Implementation plan (after owner sign-off)
+
+1. `domain/sim_accounting.py`: `SimLedger`, `SimBookState` (EUR cash, USD
+   positions, fees by currency) with deterministic replay.
+2. Research `Ledger`: reject `saxo:` idempotency keys (one-line guard plus a test).
+3. Request, approval material and authorization gain `book_id`; the pipeline
+   switches to `SimLedger` and reads `book_id` from the authorization.
+4. Migration `0009` with safety refusals; runtime DDL parity.
+5. Account-level reconciliation and the baseline command (read-only, injected
+   transport; the live run needs separate Stage 2 permission).
+6. Acceptance evaluator gate `SIM_ACCOUNTING_SEPARATED` (currently `MISSING`)
+   turns `PASS` only when the pipeline is bound to `SimLedger`.
+
+## 7. Owner decisions needed
+
+1. EUR allocation per strategy book (for example EUR 200 each, matching the
+   current USD 200 position cap) and whether allocations may be topped up.
+2. Whether a reconciliation mismatch freezes only the affected strategy book or
+   all SIM trading.
+3. One SIM account with logical per-strategy books (proposed), or separate
+   Saxo SIM accounts per strategy (stronger isolation; needs a separately
+   verified second account).
+4. Whether SIM results should ever be reported side by side with research
+   results (proposed: separate reports, never merged totals).
+
+## 8. Owner decisions (2026-10-20) — implemented
+
+| Decision | Implementation |
+|---|---|
+| EUR 1,000 per strategy book; EUR 2,000 total virtual SIM capital | `SimJournalStore.open_books` writes one `SIM_ALLOCATION` of exactly EUR 1,000 to each strategy book; the unattributed book gets none. Allocations are internal budgets, not broker transfers. |
+| No automatic top-ups | `SimLedger` refuses any second allocation ("top-ups need an owner-approved audited allocation"). No top-up path exists yet. |
+| USD 200 per-position cap | Enforced at preparation (`MAX_POSITION_COST_USD`) and again on every fill against cumulative book cost. |
+| Freeze policy | Account-wide, unexplained or incomplete evidence freezes **all** SIM books. A proven book mismatch freezes only that book when the other strategy book is independently verified against broker order evidence and the account position difference is fully explained by it. |
+| One SIM account, three logical books | `saxo-sim:tradingagents`, `saxo-sim:ai-trading`, `saxo-sim:unattributed`; all bound to one verified account. |
+| Separate reporting | `saxo_sim_report` reports per strategy book (returns, realised/unrealised P&L, fees, status) with no cross-book or cross-venue totals. |
+| Unattributed book never conceals discrepancies | It accepts only read-only `SIM_BASELINE` records; never fills, allocations or balancing entries. Reconciliation never writes journal entries. |
+| SIM failure must not freeze Alpaca | SIM freezes live only in `saxo_sim_books`; no Saxo/SIM module imports Alpaca code and `reconciliation.py` is unchanged (tested). |
+| Kill switch unchanged | `SIM_SUBMISSION_RELEASED = False`. |
+
+## 9. Implementation notes and differences from the proposal
+
+- **Modules:** `domain/sim_accounting.py` (`SimEvent`, `SimLedger`),
+  `infrastructure/saxo_sim_journal.py` (durable store), rewritten
+  `application/saxo_execution_pipeline.py` (constructor takes only `db_path`;
+  it cannot be given the research `Ledger`), `application/saxo_sim_reconciliation.py`,
+  `application/saxo_sim_report.py`, migration `0009_saxo_sim_books`.
+- **Atomic journal instead of a recovery table:** each fill is validated and
+  inserted in one `BEGIN IMMEDIATE` SQLite transaction, so there is no
+  half-posted state. `recover()` rebuilds the ledger from the hash-verified
+  journal and only advances lifecycles. `saxo_execution_recovery` therefore
+  gets **no** `book_id`; any row in it now means a legacy research-ledger fill,
+  and both the pipeline and migration `0009` refuse to run.
+- **Authorization binding:** `saxo_execution_authorization` gains `book_id`,
+  `fx_usd_per_eur` and `fx_provider`. All three come from the prepared request
+  and are part of the operator-signed approval material. Fills read them from
+  the row, never from the caller.
+- **Settlement:** fills are booked at USD price / approved EUR/USD
+  (`settlement_source = DERIVED_FX`, 4 dp). Broker-reported EUR settlement is
+  not yet available in the parsed order activity; account-level cash
+  reconciliation uses a EUR 1.00 tolerance for this reason.
+- **Event types implemented:** `SIM_ALLOCATION`, `SIM_BUY_FILL`, `SIM_BASELINE`.
+  Not implemented (no current order path produces them): sells, separate fee
+  events, and `SIM_ADJUSTMENT`. Realised P&L is therefore 0 until sells exist.
+- **Submission gating:** the submitter refuses when the books are not opened,
+  the book or account is frozen, the book has an unresolved order, or the
+  precheck EUR cash exceeds the book's remaining cash.
+- **Freeze release:** only a later reconciliation report produced by
+  `reconcile_sim_account` in the same process (sealed), with status `MATCHED`,
+  plus a named principal. Hand-built reports are refused.
+- **Downgrade:** refuses while any SIM journal entry exists, including allocations.
+- **Evaluator:** `SIM_ACCOUNTING_SEPARATED` is computed by a probe that exercises
+  the real guards (research ledger rejects `saxo:` events, `SimLedger` rejects
+  research portfolio IDs, pipeline cannot take a ledger, books open with
+  EUR 1,000 / 1,000 / 0). It reports `PASS`; the decision remains `NO-GO`.
+
+## 10. Reconciliation trust boundary (review follow-up, 2026-10-20)
+
+The PR #4 review found that `reconcile_sim_account()` sealed a report built from
+caller-supplied broker evidence and a caller-supplied ledger, so a fabricated
+"clean" report could lift a freeze. Fixed as follows (migration
+`0010_sim_reconciliation_evidence`):
+
+- **Sealed broker evidence.** `application/saxo_sim_evidence.collect_account_evidence`
+  is the only producer of `SimAccountEvidence`. It requires the exact
+  `SaxoSimClient` type (SIM base URL, path allowlist, GET only, no redirects)
+  and an account scope sealed by `verified_scope()`, which now also refuses any
+  client that is not that exact type. It reads complete positions, the EUR cash
+  balance and order activity (per-order fill totals by `ExternalReference`). It
+  fails closed on pagination gaps, rows for another account, duplicate
+  execution IDs, sells, and missing or non-EUR cash. The result carries the
+  source, observation time, account ID, a fingerprint of the verified
+  account/client keys and a response digest, all under a process-local HMAC seal.
+- **Opening from evidence.** `open_sim_books(store, evidence, approval_ref)`
+  needs sealed, fresh (≤ 5 min) evidence. It records the opening EUR cash and
+  every pre-existing position (as unattributed baselines) in
+  `saxo_sim_account_openings`. There is no other way to open books or add
+  baselines. The store's public `open_books`, `record_baseline`, `freeze` and
+  `release` were removed; the private primitives that replace them refuse to
+  run outside a transaction.
+- **Persisted journal, not a caller ledger.** `reconcile_sim_account(store,
+  evidence)` has no ledger parameter. Inside one `BEGIN IMMEDIATE` transaction it:
+  - checks the evidence is for the opened account and login, and newer than
+    both the opening and the latest run;
+  - loads the hash-verified journal and compares;
+  - records the run with the evidence ID, observation time, journal digest and
+    evidence digest (evidence IDs are unique);
+  - applies any freeze.
+
+  A crash leaves either the complete decision or nothing; unconsumed evidence
+  can be retried while still fresh.
+- **Completeness.** Missing cash evidence makes the run `INCOMPLETE` (account
+  freeze), never `MATCHED`. Broker fills for an operator-approved order that
+  never reached the journal are attributed to that order's book and flagged.
+  A single-book freeze still requires all three: the other book verified, the
+  position difference fully explained, and cash agreeing. Otherwise the whole
+  account freezes. An `ACCOUNT` freeze is never downgraded to `BOOK`.
+- **Release.** `release_freeze(store, report, released_by, attestation,
+  verifier)` requires:
+  - a sealed `MATCHED` report that is still the latest recorded run;
+  - evidence read after every freeze and no more than 5 minutes old;
+  - an unchanged journal digest;
+  - an OpenSSH signature over `release_material(report, released_by)` (purpose
+    `saxo-sim-freeze-release`), verified by `SshSignatureApprovalVerifier`
+    against `allowed_signers`.
+
+  Each release is appended to `saxo_sim_freeze_releases` with the SHA-256 of
+  the signature.
+- **Migration `0010`.** Adds the evidence columns to
+  `saxo_sim_reconciliation_runs`, plus the `saxo_sim_account_openings` and
+  `saxo_sim_freeze_releases` tables.
+  - Upgrade refuses if books already exist: they were opened under `0009`
+    without verified evidence and need owner review.
+  - Downgrade refuses while any evidence-backed record exists.
+  - The runtime refuses a pre-`0010` schema without changing it.
+
+**Stage 2 read-only infrastructure (offline only).** `SaxoSimMarketEvidence`
+reads SOFI and EUR/USD from SIM `/trade/v1/infoprices`. EUR/USD is FxSpot Uic 21,
+newly allowlisted.
+- **Price checks:** each price must be for the requested instrument, tradable,
+  undelayed, error-free and no more than 2 minutes old. SOFI must also be in
+  USD with the market open. The quote used is the Ask.
+- **Verification:** `verify()` accepts only snapshots that the same instance
+  read itself.
+- **Account binding:** the instance is bound to one verified account
+  (`bound_scope_sha256`). `prepare_sofi_request` refuses a verifier bound to a
+  different account or login.
+- **Registration:** the type is **not** in `TRUSTED_MARKET_VERIFIER_TYPES`. It
+  is registered only after a separately approved live Stage 2 run.
+- **Evaluator:** two new gates. `SIM_RECONCILIATION_EVIDENCE_BOUND` is a code
+  gate and passes; `STAGE2_SIM_ACCOUNT_EVIDENCE` reports MISSING offline.
+
+**Known limits.**
+- A real fill error in one book normally also moves account cash, so it will
+  usually escalate to an account-wide freeze. That is fail-closed. Pricing the
+  unexplained cash per fill is a later refinement.
+- Saxo's order-activity retention window is not yet confirmed. If journaled
+  fills fall outside it, reconciliation reports `UNVERIFIED` and freezes the
+  account.

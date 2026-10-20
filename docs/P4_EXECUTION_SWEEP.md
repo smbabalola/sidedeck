@@ -2,6 +2,10 @@
 
 **Status: NO-GO — prepared for controlled SIM order approval, but no order was submitted.**
 
+> 2026-10-19 independent review: twelve defects fixed (including self-generated
+> operator approval). See [`P4_CLAUDE_REVIEW.md`](P4_CLAUDE_REVIEW.md). Rows
+> below marked *(review)* were added or corrected in that pass.
+
 This batch adds one coherent, disabled-by-default execution boundary for the
 SOFI one-share SIM candidate. It does not enable unattended execution, contact
 Saxo, read credentials, or mutate an existing portfolio database.
@@ -73,13 +77,13 @@ and [order-activity guide](https://www.developer.saxo/openapi/learn/audit-ordera
 | Costs and $200 position cap | PASS in offline gate |
 | Typed broker precheck evidence, separate from authorization | PASS in offline tests |
 | Durable exact-payload one-time approval | PASS in offline tests |
-| Trusted approval attestation; manual approval objects rejected | PASS in offline tests |
+| Verify-only operator approval; self-attesting verifier and requester-as-approver rejected *(review)* | PASS in offline tests; real OpenSSH signature verified with a throwaway key |
 | Crash/timeout uncertainty does not retry | PASS in offline tests |
 | Account/order/reference-matched fill history | PASS in parser and pipeline tests |
 | Explicit instrument/account/price/fee currencies | PASS in offline tests; no live confirmation |
 | Crash recovery across pending ledger persistence | PASS in offline tests |
 | Duplicate execution cannot double-post | PASS in pipeline tests |
-| Recovery and authorization Alembic schema | PASS in disposable SQLite migration round trip |
+| Recovery and authorization Alembic schema (through `0008`) | PASS in disposable SQLite migration round trip |
 | Pagination cursor remains account/order scoped | PASS in offline tests |
 | Two-page pagination through the actual allowlisted SIM client | PASS with an offline transport fixture |
 | Fresh-ledger recovery of POSTED events | PASS in offline tests |
@@ -87,6 +91,13 @@ and [order-activity guide](https://www.developer.saxo/openapi/learn/audit-ordera
 | Cumulative quantity and FinalFill reconciliation | PASS in offline tests |
 | Chronological/hash-verified recovery | PASS in offline tests |
 | Broker order identity checked against acknowledged lifecycle | PASS in offline tests |
+| Hand-built/fixture precheck cannot authorize (transport seal) *(review)* | PASS in offline tests |
+| Broker EUR rate/cost/cash consistent with quote and FX *(review)* | PASS in offline tests |
+| Quote/FX age checked against submission time, not caller max_age *(review)* | PASS in offline tests |
+| Submission writes lifecycle before POST; malformed ack is UNKNOWN *(review)* | PASS in offline tests |
+| UNKNOWN resolved only by read-only activity; never re-POSTed *(review)* | PASS in offline tests |
+| Fills bound to the durable consumed authorization (portfolio/account/quantity) *(review)* | PASS in offline tests |
+| Module release gate `SIM_SUBMISSION_RELEASED=False` *(review)* | DISABLED |
 | Real authenticated fill reconciliation | NOT VERIFIED |
 | Current authenticated executable quote and FX provenance | NOT VERIFIED |
 | Current Saxo account/instrument currency evidence | NOT VERIFIED in this batch |
@@ -103,8 +114,10 @@ $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe -m sidedeck.application.saxo_p4_acceptance --offline
 ```
 
-This command is intentionally offline and returns `P4_DECISION=NO-GO` until
-the external evidence and one-time approval gates are separately satisfied.
+This command is intentionally offline. It exercises the real code guards,
+prints one line per gate (add `--json <path>` for a report) and returns
+`P4_DECISION=NO-GO` until the external evidence, operator approval and
+release gates are separately satisfied.
 
 ## Proposed future order, not approved
 

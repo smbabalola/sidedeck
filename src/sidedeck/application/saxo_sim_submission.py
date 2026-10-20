@@ -1,24 +1,72 @@
 """Controlled Saxo SIM submission boundary.
 
 This module constructs and validates one SOFI share request but is disabled by
-default. A caller must inject a transport and explicitly enable a one-time
-attempt; the normal SideDeck application never does so.
+default. Three independent switches must all be on before a POST can happen:
+the module release constant (``SIM_SUBMISSION_RELEASED``), an explicitly
+enabled submitter with an injected transport, and an operator approval signed
+outside SideDeck. The normal SideDeck application sets none of them.
 """
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import re
+import secrets
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Protocol
 
 from sidedeck.application.saxo_market_data import EvidenceOrigin, ExecutionEvidence, MarketEvidenceVerifier
+from sidedeck.application.saxo_order_lifecycle import advance_lifecycle, create_lifecycle, lifecycle_state
+from sidedeck.domain.sim_accounting import (
+    MAX_POSITION_COST_USD, STRATEGY_BOOKS, SimAccountingError, book_for_strategy,
+)
+from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope, scope_digest
+from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
+from sidedeck.infrastructure.saxo_operator_approval import APPROVAL_NAMESPACE, valid_principal
 from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence, precheck_payload
-from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
+
 SIM_HOST = "https://gateway.saxobank.com/sim/openapi"
 SOFI_UIC = 23241352
+
+# P4_DECISION=NO-GO. Only a separately approved release may change this value;
+# no constructor argument, environment variable or CLI flag can override it.
+SIM_SUBMISSION_RELEASED = False
+
+MAX_REQUEST_AGE = timedelta(minutes=5)
+MAX_APPROVAL_LIFETIME = timedelta(minutes=10)
+FX_TOLERANCE = Decimal("0.02")
+CASH_TOLERANCE = Decimal("0.05")
+APPROVAL_VERSION = "sidedeck-saxo-sim-approval-v1"
+_ORDER_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,49}")
+_SELF_ATTESTING = ("attest", "sign", "approve", "issue")
+# Process-local key: only prepare_sofi_request() in this process can mark a
+# request as having passed every production pre-submission check.
+_PREPARATION_SEAL_KEY = secrets.token_bytes(32)
+
+# Market-data verifier *types* trusted to attest authenticated quote/FX
+# provenance. Empty until a provider verifier is implemented and reviewed in
+# Stage 2; an injected object that merely returns True is not enough.
+TRUSTED_MARKET_VERIFIER_TYPES: tuple[type, ...] = ()
+
+AUTHORIZATION_DDL = (
+    "CREATE TABLE IF NOT EXISTS saxo_execution_authorization ("
+    "authorization_id TEXT PRIMARY KEY, order_key TEXT UNIQUE NOT NULL, "
+    "account_id TEXT NOT NULL, portfolio_id TEXT NOT NULL, "
+    "request_sha256 TEXT NOT NULL, broker_payload_sha256 TEXT NOT NULL, "
+    "risk_evidence_sha256 TEXT NOT NULL, attestation TEXT NOT NULL, "
+    "issued_by TEXT NOT NULL, expires_at TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK(status IN ('ISSUED','CONSUMED','REJECTED','UNKNOWN')), "
+    "broker_order_id TEXT, quantity TEXT NOT NULL DEFAULT '1', "
+    "requested_by TEXT NOT NULL DEFAULT '', book_id TEXT, fx_usd_per_eur TEXT, fx_provider TEXT)"
+)
+
+
+def ensure_authorization_table(db: sqlite3.Connection) -> None:
+    db.execute(AUTHORIZATION_DDL)
 
 
 class SimSubmitTransport(Protocol):
@@ -26,11 +74,13 @@ class SimSubmitTransport(Protocol):
 
 
 class ApprovalVerifier(Protocol):
-    """Trusted boundary for human approval; plain dataclasses are insufficient."""
+    """Verify-only boundary for a human approval made outside SideDeck.
 
-    def attest(self, material: str) -> str: ...
+    Implementations hold public verification material only. An object that can
+    also attest/sign is rejected, because it would let SideDeck approve itself.
+    """
 
-    def verify(self, attestation: str, material: str) -> bool: ...
+    def verify(self, attestation: str, material: str, principal: str) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -39,6 +89,8 @@ class ExecutionAuthorization:
 
     authorization_id: str
     issued_by: str
+    requested_by: str
+    order_key: str
     account_id: str
     portfolio_id: str
     ticker: str
@@ -69,6 +121,18 @@ class SimOrderRequest:
     precheck_cash_eur: Decimal
     precheck_sha256: str
     risk_evidence_sha256: str
+    prepared_at: datetime
+    requested_by: str
+    evidence_sha256: str
+    book_id: str
+    fx_provider: str
+    preparation_seal: str = field(default="", repr=False, compare=False)
+
+    def is_prepared(self) -> bool:
+        """True only for a request built by prepare_sofi_request() in this process."""
+        if not self.preparation_seal:
+            return False
+        return hmac.compare_digest(_preparation_mac(self), self.preparation_seal)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -92,6 +156,10 @@ class SimOrderRequest:
             "precheck_cash_eur": str(self.precheck_cash_eur),
             "precheck_sha256": self.precheck_sha256,
             "risk_evidence_sha256": self.risk_evidence_sha256,
+            "prepared_at": self.prepared_at.isoformat(),
+            "requested_by": self.requested_by,
+            "evidence_sha256": self.evidence_sha256,
+            "book_id": self.book_id, "fx_provider": self.fx_provider,
         }, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
@@ -100,8 +168,63 @@ class SimOrderRequest:
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _preparation_mac(request: SimOrderRequest) -> str:
+    material = (request.digest() + "|" + request.broker_payload_digest()).encode("ascii")
+    return hmac.new(_PREPARATION_SEAL_KEY, material, hashlib.sha256).hexdigest()
+
+
+def evidence_digest(evidence: ExecutionEvidence) -> str:
+    """Stable digest of the exact quote/FX evidence a request was built from."""
+    quote, fx = evidence.quote, evidence.fx
+    return hashlib.sha256(json.dumps({
+        "quote": [quote.instrument_id, quote.ticker, quote.provider, str(quote.price),
+                  quote.currency, quote.market_timestamp.isoformat(),
+                  quote.ingestion_timestamp.isoformat(), str(quote.snapshot_id)],
+        "fx": [fx.provider, fx.pair, str(fx.usd_per_eur), fx.observed_at.isoformat(),
+               fx.ingestion_at.isoformat()],
+        "costs": [str(evidence.spread_usd), str(evidence.fees_usd), str(evidence.fx_fee_usd)],
+        "origins": [str(evidence.quote_origin), str(evidence.fx_origin)],
+        "observed_at": evidence.observed_at.isoformat(),
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def trusted_market_verifier(verifier: object | None) -> bool:
+    """Exact registered type only; subclasses and duck types are not trusted."""
+    return verifier is not None and type(verifier) in TRUSTED_MARKET_VERIFIER_TYPES
+
+
 class SubmissionBlocked(RuntimeError):
     """A safety gate prevented a broker submission attempt."""
+
+
+def _utc(value: datetime, what: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{what} must be timezone-aware")
+    return value.astimezone(timezone.utc)
+
+
+def _within(actual: Decimal, expected: Decimal, tolerance: Decimal) -> bool:
+    return expected > 0 and abs(actual - expected) <= expected * tolerance + Decimal("0.01")
+
+
+def _check_precheck_economics(precheck: PrecheckEvidence, evidence: ExecutionEvidence) -> None:
+    """The broker's EUR figures must agree with the independent quote and FX."""
+    rate = precheck.instrument_to_account_rate
+    cost = precheck.estimated_total_cost
+    cost_eur = precheck.estimated_total_cost_account
+    cash_eur = precheck.estimated_cash_required
+    if rate is None or cost is None or cost_eur is None or cash_eur is None:
+        raise SubmissionBlocked("precheck conversion evidence is incomplete")
+    eur_per_usd = Decimal("1") / evidence.fx.usd_per_eur
+    if not _within(rate, eur_per_usd, FX_TOLERANCE):
+        raise SubmissionBlocked("broker USD->EUR rate disagrees with validated EUR/USD FX")
+    if not _within(cost_eur, cost * rate, FX_TOLERANCE):
+        raise SubmissionBlocked("broker account-currency cost disagrees with its own rate")
+    notional_eur = evidence.quote.price * rate
+    low = notional_eur * (Decimal("1") - CASH_TOLERANCE)
+    high = (notional_eur + cost_eur) * (Decimal("1") + CASH_TOLERANCE) + Decimal("0.01")
+    if not low <= cash_eur <= high:
+        raise SubmissionBlocked("broker EUR cash requirement disagrees with quote and FX")
 
 
 def prepare_sofi_request(
@@ -112,16 +235,23 @@ def prepare_sofi_request(
     precheck: PrecheckEvidence,
     account_scope: SaxoAccountScope,
     expected_account_id: str,
-    portfolio_cash_usd: Decimal,
+    book_cash_eur: Decimal,
     now: datetime,
     market_verifier: MarketEvidenceVerifier | None = None,
     quote_max_age: timedelta = timedelta(minutes=2),
+    requested_by: str = "sidedeck-automation",
 ) -> SimOrderRequest:
     """Build the only currently supported request after all local checks."""
-    if not order_key or not order_key.isascii() or len(order_key) > 100:
+    if not isinstance(order_key, str) or not _ORDER_KEY.fullmatch(order_key):
         raise ValueError("invalid order identity")
-    if not portfolio_id or not portfolio_id.isascii():
-        raise ValueError("invalid portfolio identity")
+    if portfolio_id not in STRATEGY_BOOKS:
+        raise ValueError("SIM orders must belong to a SideDeck strategy book")
+    book_id = book_for_strategy(portfolio_id)
+    if not valid_principal(requested_by):
+        raise ValueError("invalid requesting principal")
+    cutoff = _utc(now, "submission time")
+    if not account_scope.is_authenticated():
+        raise SubmissionBlocked("Saxo account scope was not derived from authenticated SIM responses")
     if account_scope.account_id != expected_account_id:
         raise SubmissionBlocked("verified Saxo account identity does not match expectation")
     request_payload = precheck_payload(account_scope, uic=SOFI_UIC, amount=1)
@@ -131,37 +261,53 @@ def prepare_sofi_request(
     try:
         precheck.validate_for_order(
             instrument_currency="USD", account_currency="EUR", account_id=account_scope.account_id,
-            uic=SOFI_UIC, request_sha256=request_sha256, now=now,
+            uic=SOFI_UIC, request_sha256=request_sha256, now=cutoff,
         )
     except ValueError as exc:
         raise SubmissionBlocked(str(exc)) from exc
+    if not precheck.is_transport_sealed():
+        raise SubmissionBlocked("precheck evidence did not come from the SIM precheck transport")
     if precheck.estimated_cash_required is None:
         raise SubmissionBlocked("EUR precheck estimate is required")
     if (evidence.quote_origin is not EvidenceOrigin.AUTHENTICATED_PROVIDER
             or evidence.fx_origin is not EvidenceOrigin.AUTHENTICATED_PROVIDER):
         raise SubmissionBlocked("authenticated quote and FX evidence are required")
-    if market_verifier is None or not market_verifier.verify(evidence):
+    if market_verifier is None or not trusted_market_verifier(market_verifier):
+        raise SubmissionBlocked("trusted market-data attestation is required: "
+                                "no registered market-data verifier")
+    if getattr(market_verifier, "bound_scope_sha256", None) != scope_digest(account_scope):
+        raise SubmissionBlocked("market evidence verifier is bound to a different Saxo account")
+    if not market_verifier.verify(evidence):
         raise SubmissionBlocked("trusted market-data attestation is required")
-    cutoff = now.astimezone(timezone.utc) if now.tzinfo else None
-    if cutoff is None:
-        raise ValueError("submission time must be timezone-aware")
-    if evidence.observed_at > cutoff or cutoff - evidence.observed_at > quote_max_age:
-        raise SubmissionBlocked("market evidence is stale or future-dated")
-    if not portfolio_cash_usd.is_finite() or portfolio_cash_usd < 0:
-        raise ValueError("invalid portfolio cash")
+    # Check each observation against the submission time directly; the
+    # evidence bundle's own max_age is caller-chosen and is not trusted here.
+    for stamp in (evidence.observed_at, evidence.quote.market_timestamp,
+                  evidence.quote.ingestion_timestamp, evidence.fx.observed_at,
+                  evidence.fx.ingestion_at):
+        observed = _utc(stamp, "market evidence time")
+        if observed > cutoff or cutoff - observed > quote_max_age:
+            raise SubmissionBlocked("market evidence is stale or future-dated")
+    if not book_cash_eur.is_finite() or book_cash_eur < 0:
+        raise ValueError("invalid SIM book cash")
     total = evidence.quote.price + evidence.total_cost_usd
-    if total > Decimal("200") or total > portfolio_cash_usd:
+    if total > MAX_POSITION_COST_USD:
         raise SubmissionBlocked("USD position risk limit exceeded")
-    if precheck.estimated_cash_required > Decimal("200"):
-        raise SubmissionBlocked("EUR broker cash limit exceeded")
+    if precheck.estimated_cash_required > book_cash_eur:
+        raise SubmissionBlocked("SIM book EUR allocation exceeded")
+    _check_precheck_economics(precheck, evidence)
     risk_material = json.dumps({
         "quote_snapshot": str(evidence.quote.snapshot_id),
         "quote_provider": evidence.quote.provider,
+        "quote_price_usd": str(evidence.quote.price),
         "fx_provider": evidence.fx.provider,
+        "fx_usd_per_eur": str(evidence.fx.usd_per_eur),
         "costs": str(evidence.total_cost_usd),
-        "cash": str(portfolio_cash_usd),
+        "book_id": book_id,
+        "book_cash_eur": str(book_cash_eur),
+        "precheck_sha256": precheck.response_sha256,
+        "precheck_cash_eur": str(precheck.estimated_cash_required),
     }, sort_keys=True, separators=(",", ":"))
-    return SimOrderRequest(
+    request = SimOrderRequest(
         order_key=order_key, portfolio_id=portfolio_id, account_id=account_scope.account_id,
         broker_account_key=account_scope.account_key, external_reference=order_key,
         ticker="SOFI", uic=SOFI_UIC, quantity=1,
@@ -170,44 +316,100 @@ def prepare_sofi_request(
         precheck_cash_eur=precheck.estimated_cash_required,
         precheck_sha256=precheck.response_sha256,
         risk_evidence_sha256=hashlib.sha256(risk_material.encode()).hexdigest(),
+        prepared_at=cutoff, requested_by=requested_by,
+        evidence_sha256=evidence_digest(evidence),
+        book_id=book_id, fx_provider=evidence.fx.provider,
     )
+    return replace(request, preparation_seal=_preparation_mac(request))
 
 
-def authorize_execution(request: SimOrderRequest, *, authorization_id: str,
-                        issued_by: str, expires_at: datetime,
-                        verifier: ApprovalVerifier | None = None) -> ExecutionAuthorization:
-    """Create an authorization only through a trusted verifier boundary."""
-    if not authorization_id or not issued_by or verifier is None:
+def approval_material(request: SimOrderRequest, *, authorization_id: str,
+                      approver: str, expires_at: datetime) -> str:
+    """Exact text the operator reviews and signs outside SideDeck."""
+    return json.dumps({
+        "version": APPROVAL_VERSION, "namespace": APPROVAL_NAMESPACE,
+        "authorization_id": authorization_id, "approver": approver,
+        "requested_by": request.requested_by, "order_key": request.order_key,
+        "account_id": request.account_id, "portfolio_id": request.portfolio_id,
+        "ticker": request.ticker, "uic": request.uic, "side": "Buy",
+        "quantity": request.quantity, "order_type": "Market",
+        "broker_payload": request.payload(),
+        "broker_payload_sha256": request.broker_payload_digest(),
+        "request_sha256": request.digest(),
+        "risk_evidence_sha256": request.risk_evidence_sha256,
+        "precheck_sha256": request.precheck_sha256,
+        "evidence_sha256": request.evidence_sha256,
+        "book_id": request.book_id, "fx_provider": request.fx_provider,
+        "fx_usd_per_eur": str(request.fx_eur_to_usd),
+        "expected_price_usd": str(request.expected_price_usd),
+        "expected_cost_usd": str(request.expected_cost_usd),
+        "precheck_cash_eur": str(request.precheck_cash_eur),
+        "expires_at": _utc(expires_at, "authorization expiry").isoformat(),
+    }, sort_keys=True, separators=(",", ":"))
+
+
+def _require_verify_only(verifier: object | None) -> ApprovalVerifier:
+    if verifier is None or not callable(getattr(verifier, "verify", None)):
         raise SubmissionBlocked("trusted approval verifier unavailable")
-        raise ValueError("operator authorization identity is required")
-    if expires_at.tzinfo is None or expires_at.utcoffset() is None:
-        raise ValueError("authorization expiry must be timezone-aware")
-    material = json.dumps({"authorization_id": authorization_id, "issued_by": issued_by,
-                           "request_sha256": request.digest(),
-                           "broker_payload_sha256": request.broker_payload_digest(),
-                           "risk_evidence_sha256": request.risk_evidence_sha256,
-                           "account_id": request.account_id, "portfolio_id": request.portfolio_id,
-                           "order_key": request.order_key, "expires_at": expires_at.isoformat()},
-                          sort_keys=True, separators=(",", ":"))
-    attestation = verifier.attest(material)
-    if not isinstance(attestation, str) or not attestation:
-        raise SubmissionBlocked("trusted approval verifier rejected authorization")
+    if any(callable(getattr(verifier, name, None)) for name in _SELF_ATTESTING):
+        raise SubmissionBlocked("a verifier that can attest cannot authorize its own request")
+    return verifier  # type: ignore[return-value]
+
+
+def accept_operator_approval(
+    request: SimOrderRequest, *, authorization_id: str, approver: str,
+    expires_at: datetime, attestation: str, verifier: ApprovalVerifier | None,
+    now: datetime,
+) -> ExecutionAuthorization:
+    """Accept an operator-signed approval; SideDeck never creates the signature."""
+    checked = _require_verify_only(verifier)
+    if not authorization_id or not authorization_id.isascii() or len(authorization_id) > 100:
+        raise SubmissionBlocked("operator authorization identity is required")
+    if not valid_principal(approver):
+        raise SubmissionBlocked("operator principal is invalid")
+    if approver == request.requested_by:
+        raise SubmissionBlocked("the requesting principal cannot approve its own order")
+    current = _utc(now, "approval time")
+    expiry = _utc(expires_at, "authorization expiry")
+    if expiry <= current or expiry - current > MAX_APPROVAL_LIFETIME:
+        raise SubmissionBlocked("authorization expiry is outside the allowed window")
+    material = approval_material(request, authorization_id=authorization_id,
+                                 approver=approver, expires_at=expiry)
+    if not checked.verify(attestation, material, approver):
+        raise SubmissionBlocked("operator approval signature is not valid for this order")
     return ExecutionAuthorization(
-        authorization_id=authorization_id, issued_by=issued_by,
+        authorization_id=authorization_id, issued_by=approver,
+        requested_by=request.requested_by, order_key=request.order_key,
         account_id=request.account_id, portfolio_id=request.portfolio_id,
         ticker=request.ticker, uic=request.uic, side="Buy", quantity=request.quantity,
         order_type="Market", request_sha256=request.digest(),
         broker_payload_sha256=request.broker_payload_digest(),
-        risk_evidence_sha256=request.risk_evidence_sha256, expires_at=expires_at,
+        risk_evidence_sha256=request.risk_evidence_sha256, expires_at=expiry,
         attestation=attestation,
     )
+
+
+def _classify_ack(response: object) -> tuple[str, str | None]:
+    """ACKNOWLEDGED only on a clean order id; explicit errors are REJECTED."""
+    if not isinstance(response, dict):
+        return "UNKNOWN", None
+    order_id = response.get("OrderId")
+    clean_id = (isinstance(order_id, str) and 0 < len(order_id) <= 128
+                and not any(ch.isspace() for ch in order_id))
+    if clean_id and not response.get("ErrorInfo"):
+        return "ACKNOWLEDGED", str(order_id)
+    if response.get("ErrorInfo") and order_id in (None, ""):
+        return "REJECTED", None
+    # A 2xx body without a usable order id may still have created an order.
+    return "UNKNOWN", None
 
 
 class SaxoSimSubmitter:
     """Single-attempt durable submitter; production construction is disabled."""
 
     def __init__(self, db_path: str, *, transport: SimSubmitTransport | None = None,
-                 network_enabled: bool = False, approval_verifier: ApprovalVerifier | None = None) -> None:
+                 network_enabled: bool = False,
+                 approval_verifier: ApprovalVerifier | None = None) -> None:
         self._db_path = db_path
         self._transport = transport
         self._network_enabled = network_enabled
@@ -217,25 +419,51 @@ class SaxoSimSubmitter:
 
     def _prepare_db(self) -> None:
         with sqlite3.connect(self._db_path) as db:
-            db.execute("CREATE TABLE IF NOT EXISTS saxo_execution_authorization ("
-                       "authorization_id TEXT PRIMARY KEY, order_key TEXT UNIQUE NOT NULL, "
-                       "account_id TEXT NOT NULL, portfolio_id TEXT NOT NULL, "
-                       "request_sha256 TEXT NOT NULL, broker_payload_sha256 TEXT NOT NULL, "
-                       "risk_evidence_sha256 TEXT NOT NULL, attestation TEXT NOT NULL, "
-                       "issued_by TEXT NOT NULL, expires_at TEXT NOT NULL, status TEXT NOT NULL, "
-                       "broker_order_id TEXT)")
+            ensure_authorization_table(db)
+
+    def _set_status(self, order_key: str, status: str, broker_order_id: str | None = None) -> None:
+        with sqlite3.connect(self._db_path) as db:
+            db.execute("UPDATE saxo_execution_authorization SET status=?, "
+                       "broker_order_id=COALESCE(?, broker_order_id) WHERE order_key=?",
+                       (status, broker_order_id, order_key))
+
+    def _require_book_capacity(self, request: SimOrderRequest) -> None:
+        """Book must be open, unfrozen, idle, and hold enough EUR allocation."""
+        store = SimJournalStore(self._db_path)
+        try:
+            store.require_tradable(request.book_id)
+        except SimAccountingError as exc:
+            raise SubmissionBlocked(str(exc)) from exc
+        with sqlite3.connect(self._db_path) as db:
+            busy = db.execute(
+                "SELECT COUNT(*) FROM saxo_execution_authorization a "
+                "LEFT JOIN broker_lifecycle l ON l.order_key = a.order_key "
+                "WHERE a.book_id = ? AND (a.status IN ('ISSUED','UNKNOWN') OR "
+                "l.status IN ('STAGED','SUBMITTING','UNKNOWN','ACKNOWLEDGED','PARTIAL'))",
+                (request.book_id,)).fetchone()[0]
+        if busy:
+            raise SubmissionBlocked("this SIM book already has an unresolved order")
+        cash = store.load_ledger().replay(request.book_id).cash_eur
+        if request.precheck_cash_eur > cash:
+            raise SubmissionBlocked("SIM book EUR allocation exceeded")
 
     def submit(self, request: SimOrderRequest, authorization: ExecutionAuthorization,
                *, now: datetime) -> str:
         """Make at most one injected attempt; network submission is opt-in only."""
-        self._prepare_db()
+        if not SIM_SUBMISSION_RELEASED:
+            raise SubmissionBlocked("Saxo SIM submission is disabled: no approved release "
+                                    "(P4_DECISION=NO-GO)")
         if not self._network_enabled or self._transport is None:
             raise SubmissionBlocked("Saxo SIM submission is disabled")
-        if self._approval_verifier is None:
-            raise SubmissionBlocked("trusted approval verifier unavailable")
+        verifier = _require_verify_only(self._approval_verifier)
+        if not request.is_prepared():
+            raise SubmissionBlocked("order request did not pass production preparation checks")
+        self._prepare_db()
         if (authorization.request_sha256 != request.digest()
                 or authorization.broker_payload_sha256 != request.broker_payload_digest()
                 or authorization.risk_evidence_sha256 != request.risk_evidence_sha256
+                or authorization.order_key != request.order_key
+                or authorization.requested_by != request.requested_by
                 or authorization.account_id != request.account_id
                 or authorization.portfolio_id != request.portfolio_id
                 or authorization.ticker != request.ticker
@@ -244,53 +472,123 @@ class SaxoSimSubmitter:
                 or authorization.side != "Buy"
                 or authorization.order_type != "Market"):
             raise SubmissionBlocked("authorization is not bound to this exact order")
-        material = json.dumps({"authorization_id": authorization.authorization_id,
-                               "issued_by": authorization.issued_by,
-                               "request_sha256": request.digest(),
-                               "broker_payload_sha256": request.broker_payload_digest(),
-                               "risk_evidence_sha256": request.risk_evidence_sha256,
-                               "account_id": request.account_id, "portfolio_id": request.portfolio_id,
-                               "order_key": request.order_key, "expires_at": authorization.expires_at.isoformat()},
-                              sort_keys=True, separators=(",", ":"))
-        if not self._approval_verifier.verify(authorization.attestation, material):
+        if authorization.issued_by == request.requested_by:
+            raise SubmissionBlocked("the requesting principal cannot approve its own order")
+        current = _utc(now, "submission time")
+        expiry = _utc(authorization.expires_at, "authorization expiry")
+        material = approval_material(request, authorization_id=authorization.authorization_id,
+                                     approver=authorization.issued_by, expires_at=expiry)
+        if not verifier.verify(authorization.attestation, material, authorization.issued_by):
             raise SubmissionBlocked("authorization attestation is not trusted")
-        current = now.astimezone(timezone.utc) if now.tzinfo else None
-        if current is None or current > authorization.expires_at.astimezone(timezone.utc):
+        if current > expiry:
             raise SubmissionBlocked("approval expired")
-        with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
-            row = db.execute("SELECT request_sha256, status FROM saxo_execution_authorization "
-                             "WHERE order_key=?", (request.order_key,)).fetchone()
-            if row is not None:
-                if row[0] != request.digest():
-                    raise SubmissionBlocked("order key was reused with different payload")
-                raise SubmissionBlocked("submission attempt already claimed")
-            db.execute("INSERT INTO saxo_execution_authorization "
-                       "(authorization_id, order_key, account_id, portfolio_id, request_sha256, "
-                       "broker_payload_sha256, risk_evidence_sha256, attestation, issued_by, "
-                       "expires_at, status, broker_order_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', NULL)",
-                       (authorization.authorization_id, request.order_key,
-                        request.account_id, request.portfolio_id, request.digest(),
-                        request.broker_payload_digest(), request.risk_evidence_sha256,
-                        authorization.attestation, authorization.issued_by,
-                        authorization.expires_at.isoformat()))
+        age = current - _utc(request.prepared_at, "request preparation time")
+        if age < timedelta(0) or age > MAX_REQUEST_AGE:
+            raise SubmissionBlocked("order evidence is stale; prepare and approve again")
+        if lifecycle_state(self._db_path, request.order_key) is not None:
+            raise SubmissionBlocked("order key already has a broker lifecycle")
+        self._require_book_capacity(request)
+        try:
+            with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
+                row = db.execute("SELECT request_sha256, status FROM saxo_execution_authorization "
+                                 "WHERE order_key=?", (request.order_key,)).fetchone()
+                if row is not None:
+                    if row[0] != request.digest():
+                        raise SubmissionBlocked("order key was reused with different payload")
+                    raise SubmissionBlocked("submission attempt already claimed")
+                db.execute("INSERT INTO saxo_execution_authorization "
+                           "(authorization_id, order_key, account_id, portfolio_id, request_sha256, "
+                           "broker_payload_sha256, risk_evidence_sha256, attestation, issued_by, "
+                           "expires_at, status, broker_order_id, quantity, requested_by, "
+                           "book_id, fx_usd_per_eur, fx_provider) "
+                           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', NULL, ?, ?, ?, ?, ?)",
+                           (authorization.authorization_id, request.order_key,
+                            request.account_id, request.portfolio_id, request.digest(),
+                            request.broker_payload_digest(), request.risk_evidence_sha256,
+                            authorization.attestation, authorization.issued_by,
+                            expiry.isoformat(), str(request.quantity), request.requested_by,
+                            request.book_id, str(request.fx_eur_to_usd), request.fx_provider))
+        except sqlite3.IntegrityError as exc:
+            raise SubmissionBlocked("authorization was already consumed") from exc
+        # The claim is durable before the lifecycle and the POST. A crash from
+        # here on leaves ISSUED/SUBMITTING for read-only reconciliation only.
+        if not create_lifecycle(self._db_path, request.order_key):
+            raise SubmissionBlocked("order key already has a broker lifecycle")
+        advance_lifecycle(self._db_path, request.order_key, "SUBMITTING")
         try:
             response = self._transport.submit(request.payload())
         except Exception as exc:
-            with sqlite3.connect(self._db_path) as db:
-                db.execute("UPDATE saxo_execution_authorization SET status='UNKNOWN' WHERE order_key=?",
-                           (request.order_key,))
+            self._set_status(request.order_key, "UNKNOWN")
+            advance_lifecycle(self._db_path, request.order_key, "UNKNOWN")
             raise SubmissionBlocked("submission outcome is uncertain; reconcile before retry") from exc
-        if (not isinstance(response, dict) or response.get("ErrorInfo")
-                or not isinstance(response.get("OrderId"), str)
-                or not response["OrderId"]):
-            with sqlite3.connect(self._db_path) as db:
-                db.execute("UPDATE saxo_execution_authorization SET status='REJECTED' WHERE order_key=?",
-                           (request.order_key,))
-            raise SubmissionBlocked("broker acknowledgement was rejected or malformed")
-        broker_order_id = response.get("OrderId")
-        if not isinstance(broker_order_id, str) or not broker_order_id:
-            raise SubmissionBlocked("broker acknowledgement has no order identity")
-        with sqlite3.connect(self._db_path) as db:
-            db.execute("UPDATE saxo_execution_authorization SET status='CONSUMED', broker_order_id=? "
-                       "WHERE order_key=?", (broker_order_id, request.order_key))
-        return broker_order_id
+        outcome, broker_order_id = _classify_ack(response)
+        if outcome == "ACKNOWLEDGED":
+            self._set_status(request.order_key, "CONSUMED", broker_order_id)
+            advance_lifecycle(self._db_path, request.order_key, "ACKNOWLEDGED",
+                              broker_order_id=broker_order_id, broker_evidence=True)
+            return str(broker_order_id)
+        if outcome == "REJECTED":
+            self._set_status(request.order_key, "REJECTED")
+            advance_lifecycle(self._db_path, request.order_key, "REJECTED")
+            raise SubmissionBlocked("broker rejected the order")
+        self._set_status(request.order_key, "UNKNOWN")
+        advance_lifecycle(self._db_path, request.order_key, "UNKNOWN")
+        raise SubmissionBlocked("broker acknowledgement was malformed; outcome is uncertain")
+
+
+def reconcile_uncertain_submission(
+    db_path: str, order_key: str, *, account_id: str,
+    activity_rows: tuple[dict[str, Any], ...],
+) -> str:
+    """Resolve an UNKNOWN/SUBMITTING order from read-only broker activity.
+
+    Never submits or retries. Absence of evidence is not proof that no order
+    exists, so a not-found result leaves the order UNKNOWN.
+    """
+    with sqlite3.connect(db_path) as db:
+        ensure_authorization_table(db)
+        row = db.execute("SELECT status, account_id FROM saxo_execution_authorization "
+                         "WHERE order_key=?", (order_key,)).fetchone()
+    if row is None:
+        raise ValueError("no durable authorization for this order")
+    status, bound_account = row
+    if bound_account != account_id:
+        raise ValueError("reconciliation account differs from the authorized account")
+    state = lifecycle_state(db_path, order_key)
+    if status not in {"ISSUED", "UNKNOWN"} or state is None:
+        raise ValueError("order is not awaiting reconciliation")
+    if state[0] == "STAGED":
+        return "NOT_SUBMITTED"
+    if state[0] not in {"SUBMITTING", "UNKNOWN"}:
+        raise ValueError("order is not awaiting reconciliation")
+    matches = [item for item in activity_rows
+               if isinstance(item, dict) and item.get("ExternalReference") == order_key]
+    for item in matches:
+        if (item.get("AccountId") != account_id or item.get("Uic") != SOFI_UIC
+                or item.get("BuySell") != "Buy"):
+            raise ValueError("broker activity for this reference has a different identity")
+    order_ids = {item.get("OrderId") for item in matches}
+    if state[0] == "SUBMITTING":
+        advance_lifecycle(db_path, order_key, "UNKNOWN")
+    if not matches:
+        with sqlite3.connect(db_path) as db:
+            db.execute("UPDATE saxo_execution_authorization SET status='UNKNOWN' WHERE order_key=?",
+                       (order_key,))
+        return "NOT_FOUND_REMAINS_UNKNOWN"
+    if len(order_ids) != 1:
+        raise ValueError("multiple broker orders share this external reference")
+    broker_order_id = order_ids.pop()
+    if not isinstance(broker_order_id, str) or not broker_order_id:
+        raise ValueError("broker activity has no order identity")
+    if all(item.get("Status") == "Rejected" for item in matches):
+        advance_lifecycle(db_path, order_key, "REJECTED", broker_evidence=True)
+        with sqlite3.connect(db_path) as db:
+            db.execute("UPDATE saxo_execution_authorization SET status='REJECTED', "
+                       "broker_order_id=? WHERE order_key=?", (broker_order_id, order_key))
+        return "REJECTED"
+    advance_lifecycle(db_path, order_key, "ACKNOWLEDGED", broker_order_id=broker_order_id,
+                      broker_evidence=True)
+    with sqlite3.connect(db_path) as db:
+        db.execute("UPDATE saxo_execution_authorization SET status='CONSUMED', "
+                   "broker_order_id=? WHERE order_key=?", (broker_order_id, order_key))
+    return "ACKNOWLEDGED"

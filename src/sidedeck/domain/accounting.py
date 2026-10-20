@@ -8,6 +8,9 @@ from .contracts import AUTHORIZED_PORTFOLIOS, EventType, IdempotencyConflict, Le
 from .instruments import get_instrument_by_id, validate_quantity
 from .market import validate_snapshot
 
+# Broker-SIM fills use this key prefix; research ledgers must never accept them.
+SIM_EVENT_PREFIX = "saxo:"
+
 
 @dataclass
 class Position:
@@ -53,6 +56,8 @@ class Ledger:
     def append(self, event: LedgerEvent) -> bool:
         if event.portfolio_id not in AUTHORIZED_PORTFOLIOS:
             raise ValueError("portfolio is not authorized for the P1 experiment")
+        if event.idempotency_key.startswith(SIM_EVENT_PREFIX):
+            raise ValueError("Saxo SIM executions belong to the SIM books, not research ledgers")
         key = (event.portfolio_id, event.idempotency_key)
         if key in self._keys:
             if self._keys[key] != event.canonical():

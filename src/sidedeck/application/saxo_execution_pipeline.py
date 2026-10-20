@@ -1,198 +1,232 @@
-"""Connect Saxo execution evidence to the isolated SideDeck ledger.
+"""Post Saxo SIM executions into the separate SIM books (ADR-003).
 
-This is intentionally an injected, offline-capable pipeline. It accepts only
-account-scoped, identity-matched execution records and converts EUR execution
-values to USD using the same validated FX evidence used at order preparation.
+Fills are bound to the durable, operator-signed authorization: the book,
+account, broker order, quantity and the validated EUR/USD rate all come from
+that row, never from the caller. The journal insert is one IMMEDIATE SQLite
+transaction, so a crash leaves either nothing or a complete, hash-verified
+entry. The research ``Ledger`` and Alpaca paper accounts are not reachable
+from this module.
 """
 from __future__ import annotations
 
 import sqlite3
-import json
-import hashlib
-from threading import Lock
-from uuid import NAMESPACE_URL, uuid5
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import datetime
+from decimal import ROUND_HALF_EVEN, Decimal
 
 from sidedeck.application.saxo_execution_history import BrokerExecution
-from sidedeck.application.saxo_market_data import FxSnapshot
-from sidedeck.application.saxo_order_lifecycle import advance_lifecycle, lifecycle_state
-from sidedeck.domain.accounting import Ledger, fill_event
-from sidedeck.domain.contracts import EventType, LedgerEvent
+from sidedeck.application.saxo_order_lifecycle import (
+    LifecycleConflict, advance_lifecycle, lifecycle_state,
+)
+from sidedeck.application.saxo_sim_submission import SOFI_UIC, ensure_authorization_table
+from sidedeck.domain.sim_accounting import (
+    SettlementSource, SimAccountingError, SimEvent, SimEventType, SimLedger, book_for_strategy,
+)
+from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore, connect
+
+EUR_PRECISION = Decimal("0.0001")
+RECOVERY_DDL = (
+    "CREATE TABLE IF NOT EXISTS saxo_execution_recovery ("
+    "execution_id TEXT PRIMARY KEY, order_key TEXT NOT NULL, portfolio_id TEXT NOT NULL, "
+    "event_payload TEXT NOT NULL, event_sha256 TEXT NOT NULL, "
+    "status TEXT NOT NULL CHECK(status IN ('PENDING','RECOVERING','POSTED')), "
+    "broker_order_id TEXT NOT NULL, fill_status TEXT NOT NULL, claimed_at TEXT, "
+    "authorized_quantity TEXT NOT NULL DEFAULT '1', account_id TEXT NOT NULL DEFAULT '')"
+)
 
 
 @dataclass(frozen=True)
 class AppliedExecution:
     execution_id: str
-    portfolio_id: str
+    book_id: str
     quantity: Decimal
     price_usd: Decimal
-    fee_usd: Decimal
+    settlement_eur: Decimal
+    fee_eur: Decimal
     duplicate: bool
 
 
-class SaxoExecutionPipeline:
-    def __init__(self, db_path: str, ledger: Ledger) -> None:
-        self._db_path = db_path
-        self._ledger = ledger
-        self._recover_lock = Lock()
-        with sqlite3.connect(db_path) as db:
-            db.execute("CREATE TABLE IF NOT EXISTS saxo_execution_recovery ("
-                       "execution_id TEXT PRIMARY KEY, order_key TEXT NOT NULL, "
-                       "portfolio_id TEXT NOT NULL, event_payload TEXT NOT NULL, "
-                       "event_sha256 TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('PENDING','RECOVERING','POSTED')), "
-                       "broker_order_id TEXT NOT NULL, fill_status TEXT NOT NULL, claimed_at TEXT, "
-                       "authorized_quantity TEXT NOT NULL DEFAULT '1', account_id TEXT NOT NULL DEFAULT '')")
+@dataclass(frozen=True)
+class _Binding:
+    authorization_id: str
+    book_id: str
+    quantity: Decimal
+    fx_usd_per_eur: Decimal
+    fx_provider: str
 
-    def _advance_lifecycle(self, order_key: str, order_id: str, status: str) -> None:
+
+def _fill_quantity(ledger: SimLedger, order_key: str) -> Decimal:
+    return sum((e.quantity or Decimal("0") for e in ledger.events
+                if e.event_type is SimEventType.SIM_BUY_FILL and e.order_key == order_key),
+               Decimal("0"))
+
+
+class SaxoExecutionPipeline:
+    """SIM-only fill posting; the only ledger it can reach is ``SimLedger``."""
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        self._store = SimJournalStore(db_path)
+        with sqlite3.connect(db_path) as db:
+            db.execute(RECOVERY_DDL)
+            ensure_authorization_table(db)
+            legacy = db.execute("SELECT COUNT(*) FROM saxo_execution_recovery").fetchone()[0]
+        if legacy:
+            raise SimAccountingError("legacy SIM fills were posted to research ledgers; "
+                                     "owner review is required before SIM accounting can run")
+        self.ledger: SimLedger = self._store.load_ledger()
+
+    def _binding(self, db: sqlite3.Connection, order_key: str, *, account_id: str,
+                 broker_order_id: str) -> _Binding:
+        row = db.execute("SELECT authorization_id, portfolio_id, account_id, status, "
+                         "broker_order_id, quantity, book_id, fx_usd_per_eur, fx_provider "
+                         "FROM saxo_execution_authorization WHERE order_key=?",
+                         (order_key,)).fetchone()
+        if row is None or row[3] != "CONSUMED":
+            raise SimAccountingError("execution has no consumed operator authorization")
+        auth_id, strategy, bound_account, _, bound_order, quantity, book_id, fx, provider = row
+        if bound_account != account_id:
+            raise SimAccountingError("execution account differs from the authorization")
+        if bound_order != broker_order_id:
+            raise SimAccountingError("execution broker order ID does not match the authorization")
+        if not book_id or book_id != book_for_strategy(strategy):
+            raise SimAccountingError("authorization has no valid SIM strategy book")
+        if not fx or not provider:
+            raise SimAccountingError("authorization has no validated FX provenance")
+        authorized = Decimal(str(quantity))
+        rate = Decimal(str(fx))
+        if (not authorized.is_finite() or authorized <= 0
+                or authorized != authorized.to_integral_value()):
+            raise SimAccountingError("authorized execution quantity is invalid")
+        if not rate.is_finite() or rate <= 0:
+            raise SimAccountingError("authorized FX rate is invalid")
+        return _Binding(auth_id, book_id, authorized, rate, provider)
+
+    def _advance_lifecycle(self, order_key: str, broker_order_id: str, *, final: bool) -> None:
         state = lifecycle_state(self._db_path, order_key)
-        target = "FILLED" if status == "FinalFill" else "PARTIAL"
+        target = "FILLED" if final else "PARTIAL"
         if state and state[0] in {"ACKNOWLEDGED", "PARTIAL"} and state[0] != target:
-            advance_lifecycle(self._db_path, order_key,
-                              target,
-                              broker_order_id=order_id, broker_evidence=True)
+            try:
+                advance_lifecycle(self._db_path, order_key, target,
+                                  broker_order_id=broker_order_id, broker_evidence=True)
+            except LifecycleConflict:
+                # A concurrent worker may have advanced the same order between our
+                # read and write. Accept only if it reached this target or later.
+                latest = lifecycle_state(self._db_path, order_key)
+                reached = {"PARTIAL": {"PARTIAL", "FILLED"}, "FILLED": {"FILLED"}}[target]
+                if latest is None or latest[0] not in reached or latest[1] != broker_order_id:
+                    raise
 
     def recover(self) -> int:
-        """Replay all durable pending/posted records after a crash."""
-        with self._recover_lock, sqlite3.connect(self._db_path) as db:
-            rows = db.execute("SELECT execution_id, order_key, portfolio_id, event_payload, event_sha256, status, "
-                             "broker_order_id, fill_status "
-                             "FROM saxo_execution_recovery WHERE status IN ('PENDING','RECOVERING','POSTED')").fetchall()
-        prepared = []
-        for execution_id, order_key, portfolio_id, payload, event_sha256, status, broker_order_id, fill_status in rows:
-            if hashlib.sha256(payload.encode("utf-8")).hexdigest() != event_sha256:
-                raise ValueError("persisted execution event hash mismatch")
-            event = LedgerEvent.model_validate(json.loads(payload))
-            prepared.append((event.occurred_at, execution_id, order_key, portfolio_id,
-                             payload, status, broker_order_id, fill_status))
-        prepared.sort(key=lambda item: (item[0], item[1]))
-        recovered = 0
-        for _, execution_id, order_key, portfolio_id, payload, status, broker_order_id, fill_status in prepared:
-            event = LedgerEvent.model_validate(json.loads(payload))
-            if status in {"PENDING", "RECOVERING"}:
-                with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
-                    claimed = db.execute("UPDATE saxo_execution_recovery SET status='RECOVERING', claimed_at=? "
-                                         "WHERE execution_id=? AND status='PENDING'",
-                                         (datetime.now(timezone.utc).isoformat(), execution_id)).rowcount
-                if not claimed and status == "PENDING":
-                    continue
-                appended = self._ledger.append(event)
-                with sqlite3.connect(self._db_path) as db:
-                    db.execute("UPDATE saxo_execution_recovery SET status='POSTED' WHERE execution_id=?",
-                               (execution_id,))
-                recovered += int(appended)
-            else:
-                recovered += int(self._ledger.append(event))
-            authorized = Decimal("1")
-            with sqlite3.connect(self._db_path) as db:
-                quantity_row = db.execute("SELECT authorized_quantity FROM saxo_execution_recovery "
-                                          "WHERE execution_id=?", (execution_id,)).fetchone()
-                if quantity_row and quantity_row[0] is not None:
-                    authorized = Decimal(str(quantity_row[0]))
-                total_row = db.execute("SELECT event_payload FROM saxo_execution_recovery "
-                                       "WHERE order_key=? AND portfolio_id=? AND status='POSTED'",
-                                       (order_key, portfolio_id)).fetchall()
-            total = sum((Decimal(str(LedgerEvent.model_validate(json.loads(item[0])).quantity or 0))
-                         for item in total_row), Decimal("0"))
-            if fill_status != "FinalFill" or total == authorized:
-                self._advance_lifecycle(order_key, broker_order_id, fill_status)
-        return recovered
+        """Rebuild the SIM ledger from the journal and finish lifecycle updates.
 
-    def apply_buy_fill(
-        self,
-        execution: BrokerExecution,
-        *,
-        order_key: str,
-        portfolio_id: str,
-        fx: FxSnapshot,
-        account_id: str,
-        now: datetime,
-        authorized_quantity: Decimal = Decimal("1"),
-    ) -> AppliedExecution:
-        """Atomically deduplicate external fills before mutating the ledger."""
+        Idempotent and deterministic: replays chronologically, verifies every
+        payload hash, and only moves lifecycles forward from journal facts.
+        Returns the number of SIM fills in the rebuilt ledger.
+        """
+        db = connect(self._db_path)
+        try:
+            self.ledger = SimJournalStore.load(db)
+            orders = db.execute("SELECT j.order_key, a.broker_order_id, a.quantity, "
+                                "MAX(j.fill_status = 'FinalFill') FROM saxo_sim_journal j "
+                                "JOIN saxo_execution_authorization a ON a.order_key = j.order_key "
+                                "WHERE j.event_type = 'SIM_BUY_FILL' "
+                                "GROUP BY j.order_key ORDER BY j.order_key").fetchall()
+        finally:
+            db.close()
+        for order_key, broker_order_id, authorized, has_final in orders:
+            total = _fill_quantity(self.ledger, order_key)
+            final = bool(has_final) and total == Decimal(str(authorized))
+            self._advance_lifecycle(order_key, broker_order_id, final=final)
+        return sum(1 for e in self.ledger.events if e.event_type is SimEventType.SIM_BUY_FILL)
+
+    def apply_buy_fill(self, execution: BrokerExecution, *, order_key: str, account_id: str,
+                       now: datetime) -> AppliedExecution:
+        """Atomically validate, deduplicate and journal one broker execution."""
         if execution.account_id != account_id or execution.external_reference != order_key:
-            raise ValueError("execution is not matched to the requested account/order")
+            raise SimAccountingError("execution is not matched to the requested account/order")
         lifecycle = lifecycle_state(self._db_path, order_key)
         if lifecycle is None or lifecycle[0] not in {"ACKNOWLEDGED", "PARTIAL", "FILLED"}:
-            raise ValueError("execution requires an acknowledged broker order")
+            raise SimAccountingError("execution requires an acknowledged broker order")
         if lifecycle[1] != execution.order_id:
-            raise ValueError("execution broker order ID does not match lifecycle")
-        if not authorized_quantity.is_finite() or authorized_quantity <= 0:
-            raise ValueError("authorized execution quantity is invalid")
+            raise SimAccountingError("execution broker order ID does not match lifecycle")
         if (execution.status not in {"Fill", "FinalFill"}
                 or execution.instrument_currency != "USD"
                 or execution.account_currency != "EUR"
                 or execution.price_currency != "USD"):
-            raise ValueError("execution currency metadata is not supported")
-        if fx.pair != "EUR/USD":
-            raise ValueError("EUR/USD conversion is required")
-        price_usd = execution.price
-        if execution.fees_currency == "EUR":
-            fee_usd = execution.fees * fx.usd_per_eur
-        elif execution.fees_currency == "USD":
-            fee_usd = execution.fees
-        else:
-            raise ValueError("fee currency has no approved conversion")
+            raise SimAccountingError("execution currency metadata is not supported")
         event_time = datetime.fromisoformat(execution.occurred_at.replace("Z", "+00:00"))
-        event_time = event_time.astimezone(timezone.utc)
-        event = fill_event(portfolio_id, "saxo:" + execution.execution_id,
-                           EventType.BUY_FILL, "US:SOFI", execution.quantity,
-                           price_usd, event_time, fee_usd)
-        event = event.model_copy(update={
-            "operation_id": uuid5(NAMESPACE_URL, "sidedeck:saxo-operation:" + execution.execution_id),
-            "event_id": uuid5(NAMESPACE_URL, "sidedeck:saxo-execution:" + execution.execution_id)
-        })
-        event_payload = event.model_dump_json()
-        event_sha256 = hashlib.sha256(event_payload.encode("utf-8")).hexdigest()
-        duplicate = False
-        with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
-            prior_rows = db.execute("SELECT event_payload FROM saxo_execution_recovery "
-                                    "WHERE order_key=? AND portfolio_id=? AND status IN ('PENDING','RECOVERING','POSTED')",
-                                    (order_key, portfolio_id)).fetchall()
-            prior_quantity = sum((Decimal(str(LedgerEvent.model_validate(json.loads(row[0])).quantity or 0))
-                                  for row in prior_rows), Decimal("0"))
-            bindings = db.execute("SELECT DISTINCT authorized_quantity, account_id FROM saxo_execution_recovery "
-                                 "WHERE order_key=? AND portfolio_id=?", (order_key, portfolio_id)).fetchall()
-            if any(Decimal(str(item[0])) != authorized_quantity or item[1] != account_id for item in bindings):
-                raise ValueError("authorized order binding cannot change")
-            row = db.execute("SELECT order_key, portfolio_id, event_sha256, event_payload, status, "
-                             "broker_order_id, account_id FROM saxo_execution_recovery "
-                             "WHERE execution_id=?", (execution.execution_id,)).fetchone()
-            if row is not None:
-                if row[0] != order_key or row[1] != portfolio_id:
-                    raise ValueError("execution ID was reused across orders or portfolios")
-                if row[5] != execution.order_id or row[6] != account_id:
-                    raise ValueError("execution broker or account identity changed")
-                if row[2] != event_sha256 or row[3] != event_payload:
-                    raise ValueError("execution ID was reused with different economic payload")
-                status = row[4]
-                if status == "PENDING":
-                    self._ledger.append(event)
-                    db.execute("UPDATE saxo_execution_recovery SET status='POSTED' WHERE execution_id=?",
-                               (execution.execution_id,))
-                duplicate = True
+        if event_time.tzinfo is None or event_time.utcoffset() is None:
+            raise SimAccountingError("execution timestamp must carry a timezone")
+        db = connect(self._db_path)
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            binding = self._binding(db, order_key, account_id=account_id,
+                                    broker_order_id=execution.order_id)
+            gross_usd = execution.quantity * execution.price
+            settlement_eur = (gross_usd / binding.fx_usd_per_eur).quantize(
+                EUR_PRECISION, ROUND_HALF_EVEN)
+            if execution.fees_currency == "EUR":
+                fee_eur = execution.fees
+            elif execution.fees_currency == "USD":
+                fee_eur = (execution.fees / binding.fx_usd_per_eur).quantize(
+                    EUR_PRECISION, ROUND_HALF_EVEN)
             else:
+                raise SimAccountingError("fee currency has no approved conversion")
+            event = SimEvent(
+                book_id=binding.book_id, idempotency_key="saxo:" + execution.execution_id,
+                event_type=SimEventType.SIM_BUY_FILL, occurred_at=event_time,
+                order_key=order_key, broker_execution_id=execution.execution_id,
+                instrument_id="US:SOFI", uic=SOFI_UIC, quantity=execution.quantity,
+                price_usd=execution.price, fx_usd_per_eur=binding.fx_usd_per_eur,
+                fx_provider=binding.fx_provider, settlement_eur=settlement_eur,
+                settlement_source=SettlementSource.DERIVED_FX, fee_amount=execution.fees,
+                fee_currency=execution.fees_currency, fee_eur=fee_eur,
+                approval_ref=binding.authorization_id)
+            existing = db.execute("SELECT payload, book_id, order_key FROM saxo_sim_journal "
+                                  "WHERE broker_execution_id=?",
+                                  (execution.execution_id,)).fetchone()
+            ledger = SimJournalStore.load(db)
+            prior = _fill_quantity(ledger, order_key)
+            if existing is not None:
+                if existing[1] != binding.book_id or existing[2] != order_key:
+                    raise SimAccountingError("execution ID was reused across orders or books")
+                if existing[0] != event.canonical():
+                    raise SimAccountingError("execution ID was reused with different economic payload")
+                db.execute("ROLLBACK")
+                duplicate = True
+                cumulative = prior
+            else:
+                self._store.require_tradable(binding.book_id, db)
                 if lifecycle[0] == "FILLED":
-                    raise ValueError("order is already filled")
-                cumulative = prior_quantity + execution.quantity
-                if cumulative > authorized_quantity:
-                    raise ValueError("execution quantity exceeds authorized order quantity")
-                if execution.status == "FinalFill" and cumulative != authorized_quantity:
-                    raise ValueError("final fill does not reconcile to authorized order quantity")
-                db.execute("INSERT INTO saxo_execution_recovery "
-                           "(execution_id, order_key, portfolio_id, event_payload, event_sha256, status, "
-                           "broker_order_id, fill_status, claimed_at, authorized_quantity, account_id) "
-                           "VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, NULL, ?, ?)",
-                           (execution.execution_id, order_key, portfolio_id, event_payload,
-                            event_sha256, execution.order_id, execution.status, str(authorized_quantity), account_id))
-        if not duplicate:
-            # The PENDING row is durable before the in-memory ledger changes.
-            self._ledger.append(event)
-            with sqlite3.connect(self._db_path) as db:
-                db.execute("UPDATE saxo_execution_recovery SET status='POSTED' WHERE execution_id=?",
-                           (execution.execution_id,))
-        if execution.status != "FinalFill" or prior_quantity + execution.quantity == authorized_quantity:
-            self._advance_lifecycle(order_key, execution.order_id, execution.status)
-        return AppliedExecution(execution.execution_id, portfolio_id,
-                                execution.quantity, price_usd, fee_usd, duplicate)
+                    raise SimAccountingError("order is already filled")
+                cumulative = prior + execution.quantity
+                if cumulative > binding.quantity:
+                    raise SimAccountingError("execution quantity exceeds authorized order quantity")
+                if execution.status == "FinalFill" and cumulative != binding.quantity:
+                    raise SimAccountingError("final fill does not reconcile to authorized order quantity")
+                ledger.check(event)
+                self._store.record_fill(db, event, fill_status=execution.status)
+                db.execute("COMMIT")
+                duplicate = False
+        except BaseException:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
+            raise
+        finally:
+            db.close()
+        self.ledger = self._store.load_ledger()
+        has_final = execution.status == "FinalFill" or self._journal_has_final(order_key)
+        self._advance_lifecycle(order_key, execution.order_id,
+                                final=has_final and cumulative == binding.quantity)
+        return AppliedExecution(execution.execution_id, binding.book_id, execution.quantity,
+                                execution.price, settlement_eur, fee_eur, duplicate)
+
+    def _journal_has_final(self, order_key: str) -> bool:
+        db = connect(self._db_path)
+        try:
+            row = db.execute("SELECT 1 FROM saxo_sim_journal WHERE order_key=? "
+                             "AND fill_status='FinalFill' LIMIT 1", (order_key,)).fetchone()
+        finally:
+            db.close()
+        return row is not None

@@ -6,6 +6,7 @@ quantity/price is deliberately not converted into a fill.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
@@ -28,6 +29,13 @@ def order_history_path(scope: SaxoAccountScope, order_id: str) -> str:
             + quote(order_id, safe=""))
 
 
+def account_activity_path(scope: SaxoAccountScope) -> str:
+    """Account-scoped activity, used to find an order by ExternalReference."""
+    return ("/cs/v1/audit/orderactivities?AccountKey=" + quote(scope.account_key, safe="")
+            + "&ClientKey=" + quote(scope.client_key, safe="")
+            + "&EntryType=All&IncludeSubAccounts=false&%24top=100")
+
+
 class _SaxoHistoryTransport:
     def __init__(self, client: SaxoSimClient) -> None:
         self.client = client
@@ -43,7 +51,14 @@ def read_order_history(client: SaxoSimClient, scope: SaxoAccountScope,
                          continuation_validator=lambda path: validate_continuation(path, scope, order_id))
 
 
-def validate_continuation(path: str, scope: SaxoAccountScope, order_id: str) -> str:
+def read_account_activity(client: SaxoSimClient,
+                          scope: SaxoAccountScope) -> tuple[dict[str, Any], ...]:
+    """Read-only GET chain for uncertain-order reconciliation; never submits."""
+    return fetch_history(_SaxoHistoryTransport(client), account_activity_path(scope),
+                         continuation_validator=lambda path: validate_continuation(path, scope, None))
+
+
+def validate_continuation(path: str, scope: SaxoAccountScope, order_id: str | None) -> str:
     """Ensure broker cursors cannot escape the original account/order query."""
     parsed = urlsplit(path)
     if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path != "/cs/v1/audit/orderactivities":
@@ -52,8 +67,10 @@ def validate_continuation(path: str, scope: SaxoAccountScope, order_id: str) -> 
     expected = {
         "AccountKey": [scope.account_key], "ClientKey": [scope.client_key],
         "EntryType": ["All"], "IncludeSubAccounts": ["false"],
-        "$top": ["100"], "OrderId": [order_id],
+        "$top": ["100"],
     }
+    if order_id is not None:
+        expected["OrderId"] = [order_id]
     if set(query) - set(expected) - {"$skip"} or any(query.get(key) != value for key, value in expected.items()):
         raise ValueError("execution history cursor changed account or order scope")
     if "$skip" in query and (len(query["$skip"]) != 1 or not query["$skip"][0].isdigit()):
@@ -96,6 +113,19 @@ def _nonnegative(value: Any, field: str) -> Decimal:
     if not result.is_finite() or result < 0:
         raise ValueError(f"invalid {field}")
     return result
+
+
+def _utc_timestamp(value: Any) -> str:
+    """Normalise a broker timestamp; naive or unparseable values fail closed."""
+    if not isinstance(value, str) or not value:
+        raise ValueError("execution timestamp missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("execution timestamp invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("execution timestamp must carry a timezone")
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def fetch_history(
@@ -144,6 +174,7 @@ def parse_executions(
     price_currency: str,
     fees_currency: str,
     authorized_quantity: Decimal,
+    expected_uic: int,
 ) -> tuple[BrokerExecution, ...]:
     """Parse only fill-like rows and make execution identity durable."""
     if not account_id or not order_id or not external_reference:
@@ -153,6 +184,8 @@ def parse_executions(
     for currency in (instrument_currency, account_currency, price_currency, fees_currency):
         if not isinstance(currency, str) or len(currency) != 3 or not currency.isalpha():
             raise ValueError("execution currency metadata is invalid")
+    if type(expected_uic) is not int or expected_uic <= 0:
+        raise ValueError("expected instrument identity is required")
     if price_currency != instrument_currency:
         raise ValueError("execution price currency is not instrument currency")
     seen: set[str] = set()
@@ -171,12 +204,12 @@ def parse_executions(
             raise ValueError("unknown execution status")
         if status == "FinalFill" and final_seen:
             raise ValueError("multiple final fill records")
+        if row.get("Uic") != expected_uic or row.get("BuySell") != "Buy":
+            raise ValueError("execution instrument or side mismatch")
         execution_id = row.get("ExecutionId") or row.get("LogId")
         if not isinstance(execution_id, str) or not execution_id or execution_id in seen:
             raise ValueError("missing or duplicate execution identity")
-        occurred_at = row.get("ExecutionTime") or row.get("ActivityTime")
-        if not isinstance(occurred_at, str) or not occurred_at:
-            raise ValueError("execution timestamp missing")
+        occurred_at = _utc_timestamp(row.get("ExecutionTime") or row.get("ActivityTime"))
         quantity = _positive(row.get("FillAmount"), "execution fill quantity")
         cumulative += quantity
         if cumulative > authorized_quantity:
