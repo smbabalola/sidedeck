@@ -43,6 +43,7 @@ def run_backtest(
     trades = 0
     gross_profit = Decimal("0")
     gross_loss = Decimal("0")
+    max_drawdown = Decimal("0")
     previous = prices[ordered[0]]
     daily: list[dict[str, object]] = []
     for day in ordered[1:]:
@@ -61,6 +62,7 @@ def run_backtest(
         else:
             gross_loss += abs(pnl)
         peak = max(peak, equity)
+        max_drawdown = max(max_drawdown, (peak - equity) / peak)
         daily.append(
             {
                 "date": day.isoformat(),
@@ -78,7 +80,7 @@ def run_backtest(
         "assumptions": {"fee_bps": str(config.fee_bps), "slippage_bps": str(config.slippage_bps)},
         "trade_count": trades,
         "ending_equity": str(equity),
-        "max_drawdown": str(max((peak - equity) / peak, Decimal("0"))),
+            "max_drawdown": str(max_drawdown),
         "profit_factor": str(gross_profit / gross_loss) if gross_loss else "UNDEFINED",
         "in_sample_days": len(in_sample),
         "out_of_sample_days": len(oos),

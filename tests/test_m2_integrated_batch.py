@@ -42,6 +42,12 @@ def test_backtest_is_versioned_costed_and_split():
     assert result["status"] == "RESEARCH_ONLY" and result["trade_count"] == 2
     assert result["out_of_sample_days"] == 1 and result["broker_execution"] == "DISABLED"
 
+    drawdown = run_backtest(
+        {date(2026, 1, 1): Decimal("100"), date(2026, 1, 2): Decimal("110"), date(2026, 1, 3): Decimal("90")},
+        {date(2026, 1, 2): "BUY"}, BacktestConfig("EXP-MSFT-002", "v1"),
+    )
+    assert Decimal(str(drawdown["max_drawdown"])) > 0
+
 
 def test_research_run_dry_run_never_authorizes_provider():
     plan = plan_run("RUN-1", "US:MSFT", datetime(2026, 1, 1, tzinfo=timezone.utc), max_cost_usd="0")
