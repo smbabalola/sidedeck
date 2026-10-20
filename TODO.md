@@ -59,7 +59,9 @@
   (https://github.com/smbabalola/sidedeck/actions/runs/39438231148).
 - Bank metrics / valuation evidence batch (2026-10-20): `455 passed,
   1 skipped, 3 warnings`; Ruff passed; mypy passed across 96 source files;
-  Alembic at head (no schema change).
+  Alembic at head (no schema change). Commit `458a76a`; CI run
+  `39443511576` passed
+  (https://github.com/smbabalola/sidedeck/actions/runs/39443511576).
 - Broker execution: disabled; eToro/Saxo/Alpaca untouched.
 - P4: `P4_DECISION=NO-GO`.
 - Local verification: `409 passed, 1 skipped, 3 warnings`; Ruff passed;
