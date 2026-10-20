@@ -35,7 +35,8 @@ The prior one-shot request returned HTTP 403 with Cloudflare error **1010** usin
 - [x] Authenticated eToro v1 market-data search succeeded.
 - [x] Exact Nasdaq AAPL instrument identified, ID 1001.
 - [x] eToro **Demo** portfolio read permission confirmed: one authenticated GET HTTP 200 on 2026-10-20; see `ETORO_DEMO_READ_2026-10-20.md`.
-- [x] Demo P&L response field schema observed, with 4 existing positions and 0 pending orders; no values printed.\n- [ ] eToro Demo cash, positions and open-order **value-level reconciliation** (read-only adapter not built).
+- [x] Demo P&L response field schema observed, with 4 existing positions and 0 pending orders; no values printed.
+- [ ] eToro Demo cash, positions and open-order **value-level reconciliation** (read-only adapter not built).
 - [ ] Demo-only order execution authorization and complete idempotent lifecycle (separate future review).
 - [ ] Real-money execution must remain disabled.
 
