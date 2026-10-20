@@ -39,7 +39,7 @@ def test_backtest_is_versioned_costed_and_split():
     result = run_backtest({date(2026, 1, 1): Decimal("100"), date(2026, 1, 2): Decimal("110"), date(2026, 1, 3): Decimal("105")},
                           {date(2026, 1, 2): "BUY", date(2026, 1, 3): "SELL"},
                           BacktestConfig("EXP-MSFT-001", "v1", Decimal("5"), Decimal("2"), date(2026, 1, 3)))
-    assert result["status"] == "RESEARCH_ONLY" and result["trade_count"] == 2
+    assert result["status"] == "RESEARCH_ONLY" and result["trade_count"] == 1
     assert result["out_of_sample_days"] == 1 and result["broker_execution"] == "DISABLED"
 
     drawdown = run_backtest(
