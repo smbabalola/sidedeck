@@ -64,6 +64,13 @@
   (https://github.com/smbabalola/sidedeck/actions/runs/39443511576).
 - Broker execution: disabled; eToro/Saxo/Alpaca untouched.
 - P4: `P4_DECISION=NO-GO`.
+- MSFT SEC reconstruction: latest 2026-06-30 period has `10/12` validated
+  metrics; `70` historical periods contain at least one validated metric.
+  General-sector coverage gate: `FAIL` (`10/12`; valuation has no evidence).
+  Outputs are local temporary audit/data artifacts and the raw Company Facts
+  file remains ignored; see `docs/M2_MSFT_FINANCIAL_RECONSTRUCTION.md`.
+- MSFT valuation: unresolved until historical price adjustment, filing-date
+  price and share-basis validation are complete. No market cap or P/E emitted.
 - Local verification: `409 passed, 1 skipped, 3 warnings`; Ruff passed;
   mypy passed across 92 source files; frontend build passed; disposable
   SQLite Alembic upgrade/downgrade passed.

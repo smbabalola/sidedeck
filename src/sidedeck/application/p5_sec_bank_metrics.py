@@ -98,7 +98,7 @@ def _earliest_flows(payload: dict[str, Any], cutoff: date, tag: str) -> dict[tup
             accession = item["accn"]
         except (KeyError, TypeError, ValueError):
             continue
-        if isinstance(value, bool) or not isinstance(value, int):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             continue
         if filed > cutoff or filed < end or not 75 <= (end - start).days <= 380:
             continue
