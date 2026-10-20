@@ -7,11 +7,12 @@ import argparse
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 TAGS = ("StockholdersEquity", "CommonStockSharesOutstanding", "CommonStockSharesIssued")
 
 
-def audit_equity_consistency(bridge: dict, joined: dict) -> dict:
+def audit_equity_consistency(bridge: dict[str, Any], joined: dict[str, Any]) -> dict[str, Any]:
     if any(x.get("ticker") != "SOFI" or x.get("buffett_ready") is not False
            or x.get("broker_execution") != "DISABLED" for x in (bridge, joined)):
         raise ValueError("issuer or safety gate mismatch")
@@ -21,7 +22,7 @@ def audit_equity_consistency(bridge: dict, joined: dict) -> dict:
     right = joined.get("observations")
     if not isinstance(left, list) or not isinstance(right, list) or len(left) != len(right) or bridge.get("periods") != len(left) or joined.get("buffett_periods") != len(right):
         raise ValueError("incomplete evidence")
-    def indexed(records: list) -> dict:
+    def indexed(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         result = {}
         for record in records:
             period = record.get("report_period")
@@ -42,7 +43,7 @@ def audit_equity_consistency(bridge: dict, joined: dict) -> dict:
         facts = row.get("matching_capital_facts")
         if not isinstance(facts, list):
             raise ValueError("missing fact collection")
-        values = {t: set() for t in TAGS}
+        values: dict[str, set[int | float]] = {t: set() for t in TAGS}
         for fact in facts:
             tag = fact.get("tag")
             value = fact.get("value")
