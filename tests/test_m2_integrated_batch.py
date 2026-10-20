@@ -23,7 +23,7 @@ def test_market_normalization_and_valuation_gate():
     normalized, report = normalize_daily_bars(bars(), cutoff=datetime(2026, 1, 6, tzinfo=timezone.utc))
     assert report["status"] == "READY" and len(normalized) == 2
     value = admit_valuation(eps=Decimal("5"), shares=Decimal("10"), bar=normalized[-1],
-                            market_report=report, shares_filed=date(2025, 12, 1), cutoff=date(2026, 1, 6))
+                            market_report=report, shares_filed=date(2025, 12, 1), cutoff=date(2026, 1, 6),\n                            independent_close_verified=True, corporate_actions_verified=True,\n                            share_price_basis_verified=True)
     assert value["market_cap_usd"] == "1050" and value["pe"] == "21"
 
 
