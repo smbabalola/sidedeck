@@ -527,14 +527,17 @@ def test_account_activity_cursor_cannot_widen_scope():
         validate_continuation(path.replace("opaque-account-key", "other"), SCOPE, None)
 
 
-def test_offline_acceptance_reports_no_go_with_code_gates_passing(tmp_path, capsys):
+def test_offline_acceptance_reports_no_go_with_code_gates_passing(tmp_path, capsys, monkeypatch):
     from sidedeck.application import saxo_p4_acceptance
+    monkeypatch.setattr(submission_module, "TRUSTED_MARKET_VERIFIER_TYPES", ())  # shipped value
     report = tmp_path / "p4.json"
     assert saxo_p4_acceptance.main(["--offline", "--json", str(report)]) == 0
     out = capsys.readouterr().out
     assert "P4_OFFLINE_CHECK=PASS" in out and "P4_DECISION=NO-GO" in out
     assert "SELF_APPROVAL_REJECTED=PASS" in out and "HAND_BUILT_PRECHECK_REJECTED=PASS" in out
     assert "BROKER_REQUESTS_MADE=0" in out
+    assert "SIM_ACCOUNTING_SEPARATED=MISSING" in out
+    assert "TRUSTED_MARKET_VERIFIER_REGISTRY=MISSING" in out
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["decision"] == "NO-GO" and data["broker_requests_made"] == 0
 

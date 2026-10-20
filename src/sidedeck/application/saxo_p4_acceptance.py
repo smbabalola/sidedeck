@@ -77,6 +77,10 @@ def _code_gates() -> list[Gate]:
                                                  submission.TRUSTED_MARKET_VERIFIER_TYPES)
                       if submission.TRUSTED_MARKET_VERIFIER_TYPES
                       else "no authenticated quote/FX verifier is registered yet (Stage 2)"))
+    # Reporting only: SIM fills still post to the research ledgers until the
+    # separate SIM books in docs/ADR-003-saxo-sim-accounting.md are built.
+    gates.append(Gate("SIM_ACCOUNTING_SEPARATED", "MISSING",
+                      "SIM fills would post to research ledgers; ADR-003 not implemented"))
     gates.append(Gate("SIM_SUBMISSION_RELEASE",
                       "FAIL" if submission.SIM_SUBMISSION_RELEASED else "DISABLED",
                       "no approved release; submission refuses before any POST"))

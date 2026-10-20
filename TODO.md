@@ -54,6 +54,21 @@
   open a draft PR `feat/p4-claude-review` → `feat/p3-readonly-batch` to run
   CI (including the PostgreSQL `0008` round trip).
 
+## PR #4 follow-up — 2026-10-20
+
+- [x] CI #452 (run 39301891078) passed on `7cd2595`.
+- [x] Acceptance evaluator re-verifies evidence: sealed scope and request,
+  sealed precheck bound to request, registered market-verifier type (registry
+  ships empty), operator signature re-checked from `allowed_signers`.
+- [x] Separate SIM accounting designed in `docs/ADR-003-saxo-sim-accounting.md`
+  (schema, reconciliation, migration `0009` plan). **Not implemented**;
+  evaluator reports `SIM_ACCOUNTING_SEPARATED=MISSING`.
+- [ ] **BLOCKED (owner):** ADR-003 decisions (EUR allocation per strategy,
+  freeze scope, one SIM account vs per-strategy accounts, reporting).
+- Local: `234 passed, 1 skipped, 3 warnings`; Ruff and mypy (52 files)
+  passed; disposable SQLite Alembic head→base→head passed; offline
+  acceptance `P4_DECISION=NO-GO`, 0 broker requests.
+
 ## Verification record
 
 - Branch: `feat/p3-readonly-batch`

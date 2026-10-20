@@ -56,3 +56,35 @@ use a separate SIM-only ledger instead, that is a design change.
   explicit construction of an enabled submitter and transport.
 - **Post-submission:** fill reconciliation can only be shown after an approved
   SIM order exists.
+
+## Follow-up on PR #4 (2026-10-20)
+
+**Evaluator independence (fixed).** `evaluate()` previously reported PASS when
+caller-built `SimOrderRequest` / `ExecutionAuthorization` objects held matching
+values. Now:
+
+- `verified_scope()` seals account scopes, and `prepare_sofi_request` refuses
+  unsealed ones.
+- `prepare_sofi_request` seals the request. The submitter and the evaluator
+  refuse unsealed or altered requests, and every external gate reports
+  `MISSING` ("hand-built or altered").
+- Quote and FX gates re-run a verifier whose exact type is in
+  `TRUSTED_MARKET_VERIFIER_TYPES`, on evidence whose digest is bound into the
+  request. The registry ships **empty**, so these gates stay `MISSING` until a
+  Stage 2 provider verifier is reviewed. Duck-typed and subclassed verifiers
+  are refused.
+- The operator gate builds its own `SshSignatureApprovalVerifier` from
+  `allowed_signers` and re-checks the signature. A fixture-signed or forged
+  authorization with matching fields is `MISSING`.
+- Tests: `test_hand_built_or_altered_request_cannot_pass_any_external_gate`,
+  `test_matching_authorization_values_are_not_an_approval`,
+  `test_market_evidence_must_be_reverified_by_a_registered_verifier_type`,
+  `test_precheck_gate_requires_the_sealed_precheck_bound_to_the_request`,
+  `test_hand_built_scope_and_unprepared_request_are_refused`,
+  `test_unregistered_market_verifier_cannot_prepare_an_order`,
+  `test_real_operator_signature_passes_but_release_keeps_no_go` (real throwaway
+  SSH key; all external gates PASS, decision still NO-GO).
+
+**SIM accounting (designed, not implemented).** See
+[`ADR-003-saxo-sim-accounting.md`](ADR-003-saxo-sim-accounting.md). The
+evaluator now reports `SIM_ACCOUNTING_SEPARATED=MISSING` until it is built.
