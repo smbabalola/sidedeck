@@ -9,6 +9,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from sidedeck.application.ai_agents import AgentUnavailable, ExternalJsonAgent
 from sidedeck.application.p5_model_config import load_model_settings
@@ -57,7 +58,7 @@ def main() -> int:
             model_id=settings.portfolios["ai-trading"].default.model,
         ),
     )
-    output: list[dict[str, str]] = []
+    output: list[dict[str, Any]] = []
     failures = 0
     for agent in agents:
         try:
@@ -65,9 +66,17 @@ def main() -> int:
             output.append({"portfolio": result.portfolio_id, "ticker": result.ticker, "upstream": result.upstream,
                            "status": "RESEARCH_ONLY", "decision": result.decision,
                            "rationale": result.rationale,
+                           "strategy_id": "dual-agent-research",
+                           "instrument_id": result.instrument_id or "US:" + result.ticker,
+                           "market_cutoff": result.market_cutoff.isoformat() if result.market_cutoff else "",
+                           "decision_timestamp": result.decision_timestamp.isoformat()
+                           if result.decision_timestamp else "",
+                           "upstream_version": result.upstream_version,
                            "model_config_fingerprint": settings.fingerprint,
                            "model_provider": agent.model_provider or "",
-                           "model_id": agent.model_id or ""})
+                           "model_id": agent.model_id or "",
+                           "evidence_references": list(result.evidence_references),
+                           "abstained": result.abstained, "unavailable": result.unavailable})
         except (AgentUnavailable, ValueError) as exc:
             failures += 1
             output.append({"portfolio": agent.portfolio_id, "upstream": agent.upstream,

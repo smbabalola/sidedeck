@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+from importlib import metadata
 from importlib import import_module
 import json
 import re
@@ -59,7 +60,13 @@ def main() -> int:
             graph = graph_module.TradingAgentsGraph(debug=False, config=config)
             _state, final = graph.propagate(args.ticker, args.as_of)
         action = extract_action(final)
-        print(json.dumps({"ticker": args.ticker, "decision": action,
+        version = metadata.version("tradingagents")
+        print(json.dumps({"ticker": args.ticker, "instrument_id": "US:" + args.ticker,
+                          "market_cutoff": args.as_of + "T00:00:00+00:00",
+                          "decision": action, "status": "RESEARCH_ONLY",
+                          "abstained": False, "unavailable": False,
+                          "upstream_version": version,
+                          "evidence_references": ["TradingAgents upstream runtime"],
                           "rationale": f"TradingAgents returned {action}; see isolated upstream logs."}))
         return 0
     except (ImportError, ValueError, RuntimeError, OSError) as exc:

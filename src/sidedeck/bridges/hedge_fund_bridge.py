@@ -11,7 +11,21 @@ import io
 import json
 import math
 import sys
+from importlib import metadata as package_metadata
 from importlib import import_module
+
+
+def _upstream_version() -> str:
+    for distribution in ("ai-hedge-fund", "ai_hedge_fund"):
+        try:
+            return package_metadata.version(distribution)
+        except package_metadata.PackageNotFoundError:
+            continue
+    package = import_module("hedge_fund")
+    version = getattr(package, "__version__", "")
+    if isinstance(version, str) and version.strip():
+        return version
+    raise ValueError("AI Hedge Fund upstream version is unavailable")
 
 
 def classify_signal(value: object, *, abstained: bool = False) -> str:
@@ -42,6 +56,7 @@ def main() -> int:
         choice = ModelChoice(args.provider, args.model)
         if choice.provider not in ("openai", "anthropic", "google"):
             raise ValueError("provider is not mapped to AI Hedge Fund v2")
+        version = _upstream_version()
         llm_factory = import_module("hedge_fund.llm")
         fd_module = import_module("hedge_fund.data.client")
         buffett_module = import_module("hedge_fund.signals.buffett")
@@ -58,14 +73,19 @@ def main() -> int:
                     signal = buffett_module.BuffettAgent(llm=client).predict(
                         args.ticker, args.as_of, data_client,
                     )
-        metadata = getattr(signal, "metadata", {})
-        if not isinstance(metadata, dict):
+        signal_metadata = getattr(signal, "metadata", {})
+        if not isinstance(signal_metadata, dict):
             raise ValueError("invalid signal metadata")
-        decision = classify_signal(signal.value, abstained=metadata.get("abstained") is True)
+        decision = classify_signal(signal.value, abstained=signal_metadata.get("abstained") is True)
         rationale = getattr(signal, "reasoning", "")
         if not isinstance(rationale, str) or not rationale.strip():
             raise ValueError("empty research thesis")
-        print(json.dumps({"ticker": args.ticker, "decision": decision,
+        print(json.dumps({"ticker": args.ticker, "instrument_id": "US:" + args.ticker,
+                          "market_cutoff": args.as_of + "T00:00:00+00:00",
+                          "decision": decision, "status": "RESEARCH_ONLY",
+                          "abstained": False, "unavailable": False,
+                          "upstream_version": version,
+                          "evidence_references": ["AI Hedge Fund BuffettAgent runtime"],
                           "rationale": rationale[:2000]}))
         return 0
     except (ImportError, ValueError, RuntimeError, OSError) as exc:

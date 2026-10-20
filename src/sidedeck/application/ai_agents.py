@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -31,6 +31,17 @@ class AgentResult:
     decision: str
     rationale: str
     raw_summary: str
+    upstream_version: str = ""
+    instrument_id: str = ""
+    market_cutoff: datetime | None = None
+    decision_timestamp: datetime | None = None
+    model_provider: str = ""
+    model_id: str = ""
+    configuration_fingerprint: str = ""
+    evidence_references: tuple[str, ...] = ()
+    abstained: bool = False
+    unavailable: bool = False
+    status: str = "RESEARCH_ONLY"
 
 
 class AgentRunner(Protocol):
@@ -145,9 +156,47 @@ class ExternalJsonAgent:
         rationale = data.get("rationale")
         if not isinstance(decision, str) or not isinstance(rationale, str):
             raise AgentUnavailable("upstream decision fields missing")
+        status = data.get("status", "RESEARCH_ONLY")
+        if status != "RESEARCH_ONLY":
+            raise AgentUnavailable("upstream result is not research-only")
+        instrument_id = data.get("instrument_id", "US:" + ticker)
+        if instrument_id != "US:" + ticker:
+            raise AgentUnavailable("upstream instrument mismatch")
+        upstream_version = data.get("upstream_version", "")
+        if upstream_version is not None and not isinstance(upstream_version, str):
+            raise AgentUnavailable("invalid upstream version")
+        references = data.get("evidence_references", ())
+        if not isinstance(references, (list, tuple)) or any(
+            not isinstance(item, str) or not item.strip() for item in references
+        ):
+            raise AgentUnavailable("invalid research evidence references")
+        market_cutoff = cutoff
+        raw_cutoff = data.get("market_cutoff")
+        if raw_cutoff is not None:
+            if not isinstance(raw_cutoff, str):
+                raise AgentUnavailable("invalid market cutoff")
+            try:
+                market_cutoff = datetime.fromisoformat(raw_cutoff.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise AgentUnavailable("invalid market cutoff") from exc
+            if market_cutoff.tzinfo is None or market_cutoff.astimezone(timezone.utc) > cutoff:
+                raise AgentUnavailable("market cutoff is incompatible with request")
+        abstained = data.get("abstained", False)
+        unavailable = data.get("unavailable", False)
+        if not isinstance(abstained, bool) or not isinstance(unavailable, bool):
+            raise AgentUnavailable("invalid research availability flags")
         return AgentResult(
             upstream=self.upstream, revision=self.revision,
             portfolio_id=self.portfolio_id, ticker=ticker,
             decision=parse_decision(decision), rationale=rationale[:2000],
             raw_summary="external research returned a parsed decision",
+            upstream_version=upstream_version or self.revision,
+            instrument_id=instrument_id,
+            market_cutoff=market_cutoff.astimezone(timezone.utc),
+            decision_timestamp=cutoff.astimezone(timezone.utc),
+            model_provider=self.model_provider or "",
+            model_id=self.model_id or "",
+            configuration_fingerprint=str(data.get("configuration_fingerprint", "")),
+            evidence_references=tuple(references), abstained=abstained,
+            unavailable=unavailable, status=status,
         )

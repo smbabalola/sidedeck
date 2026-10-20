@@ -56,7 +56,7 @@ def save_snapshot(path: str, result: dict[str, Any]) -> None:
     fd, tmp = tempfile.mkstemp(prefix=".sidedeck-refresh-", dir=str(destination.parent))
     try:
         if os.name != "nt":
-            os.fchmod(fd, 0o600)
+            os.chmod(tmp, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(result, stream, sort_keys=True)
             stream.flush()
