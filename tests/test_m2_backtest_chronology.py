@@ -23,4 +23,4 @@ def test_last_day_signal_never_receives_same_bar_return():
         {days[-1]: "BUY"}, BacktestConfig("last-day", "v1"),
     )
     assert report["trade_count"] == 0
-    assert report["ending_equity"] == "1"
+    assert Decimal(str(report["ending_equity"])) == Decimal("1")
