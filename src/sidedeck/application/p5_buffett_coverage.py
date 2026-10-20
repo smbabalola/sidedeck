@@ -62,6 +62,19 @@ CANDIDATE_CONCEPTS: dict[str, tuple[str, ...]] = {
 }
 _PRICE_FIELDS = frozenset({"market_cap", "price_to_earnings_ratio"})
 
+# Fields that are not relevant evidence for a sector. They are excluded from the
+# gate, and populating one anyway fails the gate rather than raising coverage.
+PROFILES: dict[str, dict[str, str]] = {
+    "general": {},
+    "bank": {
+        "gross_margin": "NOT_APPLICABLE",
+        "operating_margin": "NOT_APPLICABLE",
+        "current_ratio": "NOT_APPLICABLE",
+        "free_cash_flow_per_share": "NOT_MEANINGFUL",
+        "book_value_per_share": "EXCLUDED_PENDING_APPROVAL",
+    },
+}
+
 # make_llm() defaults at the pinned upstream revision: Anthropic passes
 # max_tokens=4096; OpenAI and Google pass no cap (provider default applies).
 OUTPUT_TOKEN_CAP: dict[str, int | None] = {"anthropic": 4096, "openai": None,
@@ -92,25 +105,40 @@ def _aggregates(rows: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def coverage_report(path: str | Path, ticker: str, as_of: str,
-                    periods: int = 20) -> dict[str, Any]:
-    """Count populated upstream fields over the periods build_snapshot would see."""
+                    periods: int = 20, profile: str = "general") -> dict[str, Any]:
+    """Judge the periods build_snapshot would see on relevant evidence only."""
+    if profile not in PROFILES:
+        raise ValueError("unknown sector profile")
+    excluded = PROFILES[profile]
     rows = verified_fundamentals(path, ticker, as_of)[:periods]
     fields = {
         name: {"populated": sum(row.get(name) is not None for row in rows),
                "eligible_periods": len(rows),
-               "newest_period": rows[0].get(name) is not None}
+               "newest_period": rows[0].get(name) is not None,
+               "applicability": excluded.get(name, "RELEVANT")}
         for name in SNAPSHOT_FIELDS
     }
     checklist: dict[str, Any] = {}
     for item, names in CHECKLIST.items():
-        present = [n for n in names if fields[n]["newest_period"]]
-        status = ("FULL" if len(present) == len(names)
-                  else "PARTIAL" if present else "NO_EVIDENCE")
+        relevant = [n for n in names if n not in excluded]
+        present = [n for n in relevant if fields[n]["newest_period"]]
+        if not relevant:
+            status = "NOT_ASSESSABLE"
+        else:
+            status = ("FULL" if len(present) == len(relevant)
+                      else "PARTIAL" if present else "NO_EVIDENCE")
         checklist[item] = {"status": status, "fields_present": present,
-                           "fields_missing": [n for n in names if n not in present]}
-    gate = all(entry["status"] != "NO_EVIDENCE" for entry in checklist.values())
+                           "fields_missing": [n for n in relevant if n not in present],
+                           "fields_not_relevant": [n for n in names if n in excluded]}
+    forced = sorted(n for n in excluded if fields[n]["populated"])
+    relevant_names = [n for n in SNAPSHOT_FIELDS if n not in excluded]
+    relevant_newest = sum(1 for n in relevant_names if fields[n]["newest_period"])
+    gate = (not forced and all(entry["status"] in ("FULL", "PARTIAL")
+                               for entry in checklist.values()))
     return {
-        "ticker": ticker, "as_of": as_of,
+        "ticker": ticker, "as_of": as_of, "profile": profile,
+        "relevant_fields_in_newest": f"{relevant_newest}/{len(relevant_names)}",
+        "not_relevant_fields_populated": forced,
         "eligible_periods": len(rows),
         "newest_report_period": rows[0]["report_period"],
         "newest_filing_date": rows[0]["filing_date"],
@@ -197,7 +225,8 @@ def prompt_size(path: str | Path, ticker: str, as_of: str) -> dict[str, Any] | s
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
-    report = coverage_report(args.fundamentals_json, args.ticker, args.as_of)
+    report = coverage_report(args.fundamentals_json, args.ticker, args.as_of,
+                             profile=args.sector_profile)
     if args.companyfacts:
         facts = json.loads(Path(args.companyfacts).read_text(encoding="utf-8"))
         report["missing_field_sources"] = {
@@ -217,9 +246,11 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "price_source": "OPERATOR_SUPPLIED" if price_in is not None else "NONE",
     }
     report["blockers"] = [
-        *(f"no evidence for checklist item: {name}"
+        *(f"{entry['status'].lower().replace('_', ' ')} for checklist item: {name}"
           for name, entry in report["checklist"].items()
-          if entry["status"] == "NO_EVIDENCE"),
+          if entry["status"] not in ("FULL", "PARTIAL")),
+        *(f"not-relevant field populated: {name}"
+          for name in report["not_relevant_fields_populated"]),
         "owner authorization for a provider call has not been given",
     ]
     return report
@@ -231,6 +262,7 @@ def main() -> int:
     parser.add_argument("--ticker", required=True)
     parser.add_argument("--as-of", required=True)
     parser.add_argument("--companyfacts", default="")
+    parser.add_argument("--sector-profile", default="general", choices=sorted(PROFILES))
     parser.add_argument("--provider", default="anthropic", choices=sorted(OUTPUT_TOKEN_CAP))
     parser.add_argument("--input-usd-per-mtok", default="")
     parser.add_argument("--output-usd-per-mtok", default="")

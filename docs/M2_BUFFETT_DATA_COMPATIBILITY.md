@@ -93,13 +93,9 @@ $env:PYTHONPATH = (Resolve-Path ".\src").Path
   --input-usd-per-mtok <price> --output-usd-per-mtok <price> --output data/<new-file>.json
 ```
 
-## Next actions (offline)
+## Next actions
 
-1. Map net margin, revenue growth, debt/equity, BVPS and FCF/share from the
-   existing SEC files into the TTM input, with component lineage. This would
-   bring management and financial strength to `PARTIAL` or better.
-2. Resolve valuation (market cap / P/E) through the filing-date price
-   validation already scoped in `P5_VALUATION_EVIDENCE.md`.
-3. Re-run the coverage report. Request owner authorisation for exactly one
-   SOFI BuffettAgent call only when the gate passes, with the chosen model,
-   prices and cost bound stated.
+Superseded by the bank-aware reconstruction in `M2_SOFI_BANK_METRICS.md`,
+which also lists the owner decisions now blocking the gate. Request owner
+authorisation for exactly one BuffettAgent call only after the gate passes,
+with the chosen model, prices and cost bound stated.

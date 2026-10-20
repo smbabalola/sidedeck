@@ -19,9 +19,20 @@
   (`p5_buffett_coverage`): ROE 20/20, EPS 5/20 (not newest), other 10 fields
   0/20; coverage gate FAIL; prompt ~905 input tokens, one call, Anthropic
   output cap 4096. See `docs/M2_BUFFETT_DATA_COMPATIBILITY.md`.
-- [ ] Map net margin, revenue growth, D/E, BVPS and FCF/share from existing
-  SEC files into the TTM input with lineage; resolve valuation via filing-date
-  price validation; re-run coverage gate.
+- [x] Bank-aware SEC reconstruction (`p5_sec_bank_metrics`): net margin
+  17/20 and revenue growth 14/20 included after reconciliation against
+  independent 3-month facts; 2021-Q1 2022 excluded (SPAC predecessor
+  discontinuity); D/E `borrowings_excluding_deposits` calculated but excluded
+  pending owner approval; FCF NOT_MEANINGFUL (loan originations in OCF); BVPS
+  refused; gross/operating margin and current ratio NOT_APPLICABLE.
+- [x] Bank coverage profile: SOFI moat FULL; management, financial strength,
+  valuation NO_EVIDENCE; relevant fields 3/7; gate FAIL. Prompt ~931 tokens.
+- [x] Market-cap candidate audit (`p5_market_cap_evidence`): 11 candidates
+  (cover shares × first close after filing), unvalidated, audit only; no
+  numeric P/E. See `docs/M2_SOFI_BANK_METRICS.md`.
+- [ ] Owner decisions: D/E definition; management EPS basis; consolidated
+  price corroboration; first acceptance instrument (recommend a non-financial
+  company first, SOFI second).
 - [ ] BLOCKED (owner): PostgreSQL disposable test environment; independent of
   offline research work.
 - [ ] Obtain explicit owner authorization for a bounded real SOFI research run
@@ -46,6 +57,9 @@
   `0005_etoro_demo_books` (no schema change). Commit `1380794`; CI run
   `39438231148` passed
   (https://github.com/smbabalola/sidedeck/actions/runs/39438231148).
+- Bank metrics / valuation evidence batch (2026-10-20): `455 passed,
+  1 skipped, 3 warnings`; Ruff passed; mypy passed across 96 source files;
+  Alembic at head (no schema change).
 - Broker execution: disabled; eToro/Saxo/Alpaca untouched.
 - P4: `P4_DECISION=NO-GO`.
 - Local verification: `409 passed, 1 skipped, 3 warnings`; Ruff passed;

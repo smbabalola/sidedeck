@@ -11,14 +11,14 @@ from typing import Any
 from sidedeck.application.p5_historical_prices import PriceEvidenceError
 
 
-def valuation_evidence_report(fundamentals: dict[str, Any], prices: dict[str, Any]) -> dict[str, Any]:
-    if fundamentals.get("ticker") != prices.get("ticker"):
+def load_price_bars(prices: dict[str, Any], ticker: Any, cutoff: date) -> dict[date, dict[str, Any]]:
+    """Validated daily closes by date; fails closed on any malformed or future bar."""
+    if ticker != prices.get("ticker"):
         raise PriceEvidenceError("ticker mismatch")
     if prices.get("currency") != "USD" or prices.get("price_basis") != "split_adjusted_close":
         raise PriceEvidenceError("incorrect price currency/basis")
     if not isinstance(prices.get("source"), str) or not prices["source"].startswith("https://"):
         raise PriceEvidenceError("price source missing")
-    cutoff = date.fromisoformat(fundamentals["as_of"])
     raw_bars = prices.get("records")
     if not isinstance(raw_bars, list):
         raise PriceEvidenceError("invalid price records")
@@ -37,6 +37,12 @@ def valuation_evidence_report(fundamentals: dict[str, Any], prices: dict[str, An
                 or close <= 0 or not isinstance(identifier, str) or not identifier):
             raise PriceEvidenceError("invalid or duplicate market-price evidence")
         bars[day] = bar
+    return bars
+
+
+def valuation_evidence_report(fundamentals: dict[str, Any], prices: dict[str, Any]) -> dict[str, Any]:
+    cutoff = date.fromisoformat(fundamentals["as_of"])
+    bars = load_price_bars(prices, fundamentals.get("ticker"), cutoff)
     rows = fundamentals.get("metrics", {}).get("annual_diluted_eps_ttm")
     if not isinstance(rows, list):
         raise PriceEvidenceError("missing annual SEC diluted EPS records")

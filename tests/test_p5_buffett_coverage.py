@@ -41,7 +41,7 @@ def test_roe_only_file_is_counted_honestly_and_fails_coverage_gate(tmp_path):
     report = coverage_report(_write(tmp_path), "TEST", "2026-10-19")
     fields = report["fields"]
     assert fields["return_on_equity"] == {"populated": 5, "eligible_periods": 5,
-                                          "newest_period": True}
+                                          "newest_period": True, "applicability": "RELEVANT"}
     assert fields["net_margin"]["populated"] == 0
     assert report["aggregates"]["roe_avg"] == "COMPUTABLE"
     assert report["aggregates"]["market_cap_latest"] == "UNAVAILABLE"
@@ -86,6 +86,45 @@ def test_gate_passes_only_when_every_checklist_item_has_newest_evidence(tmp_path
     assert report["coverage_gate"] == "PASS"
     # Passing coverage never approves research or execution by itself.
     assert report["assessment"] == "NO_GO"
+
+
+def test_bank_profile_judges_relevant_fields_only(tmp_path):
+    newest = {"net_margin": 0.15, "revenue_growth": 0.4, "earnings_per_share": 0.4}
+    report = coverage_report(_write(tmp_path, {0: newest}), "TEST", "2026-10-19",
+                             profile="bank")
+    checklist = report["checklist"]
+    assert checklist["moat"]["status"] == "FULL"  # ROE + net margin; others not relevant
+    assert checklist["moat"]["fields_not_relevant"] == ["gross_margin", "operating_margin"]
+    assert checklist["management"]["status"] == "FULL"  # EPS; BVPS/FCF excluded
+    assert checklist["financial_strength"]["status"] == "NO_EVIDENCE"  # D/E not approved
+    assert checklist["valuation"]["status"] == "NO_EVIDENCE"
+    assert report["fields"]["current_ratio"]["applicability"] == "NOT_APPLICABLE"
+    assert report["relevant_fields_in_newest"] == "4/7"
+    assert report["coverage_gate"] == "FAIL"
+
+
+def test_bank_profile_fails_when_not_applicable_field_is_forced(tmp_path):
+    newest = {"net_margin": 0.15, "earnings_per_share": 0.4, "debt_to_equity": 0.3,
+              "market_cap": 1e10, "price_to_earnings_ratio": 20.0, "gross_margin": 0.9}
+    report = coverage_report(_write(tmp_path, {0: newest}), "TEST", "2026-10-19",
+                             profile="bank")
+    assert all(e["status"] in ("FULL", "PARTIAL") for e in report["checklist"].values())
+    assert report["not_relevant_fields_populated"] == ["gross_margin"]
+    assert report["coverage_gate"] == "FAIL"
+
+
+def test_bank_profile_passes_with_relevant_evidence_but_stays_no_go(tmp_path):
+    newest = {"net_margin": 0.15, "earnings_per_share": 0.4, "debt_to_equity": 0.3,
+              "market_cap": 1e10}
+    report = coverage_report(_write(tmp_path, {0: newest}), "TEST", "2026-10-19",
+                             profile="bank")
+    assert report["coverage_gate"] == "PASS"
+    assert report["assessment"] == "NO_GO"
+
+
+def test_unknown_profile_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="profile"):
+        coverage_report(_write(tmp_path), "TEST", "2026-10-19", profile="insurer")
 
 
 def test_concept_inventory_reports_presence_without_asserting_validity():
