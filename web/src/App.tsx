@@ -16,6 +16,8 @@ function Stat({ title, value, detail, icon: Icon }: { title: string; value: stri
 }
 export default function App() {
   const [activeBook, setActiveBook] = useState("all");
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => { const timer = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const [summary, setSummary] = useState<{ protected_positions: number | null; captured_at: string | null; books: {id: string; positions: number | null}[]; fresh_snapshot?: { observed_at: string; reconciliation_status: string; discrepancy_count: number | null; available_cash_usd_status: string; books: {id: string; positions: number | null}[] } | null } | null>(null);
   const [apiError, setApiError] = useState(false);
   useEffect(() => {
@@ -29,7 +31,8 @@ export default function App() {
       .catch(() => { if (!controller.signal.aborted) setApiError(true); });
     return () => controller.abort();
   }, []);
-  const fresh = summary?.fresh_snapshot;
+  const observed = summary?.fresh_snapshot ? Date.parse(summary.fresh_snapshot.observed_at) : NaN;
+  const fresh = Number.isFinite(observed) && clock >= observed && clock - observed <= 300000 ? summary?.fresh_snapshot : null;
   const books = initialBooks.map(b => ({...b, positions: (fresh?.books ?? summary?.books)?.find(x => x.id === "etoro-demo:" + b.id)?.positions ?? null, pnlStatus: "UNAVAILABLE" }));
 
   const shown = activeBook === "all" ? books : books.filter(b => b.id === activeBook);
@@ -47,7 +50,7 @@ export default function App() {
       <main className="mx-auto w-full max-w-[1520px] px-5 py-7 sm:px-8 lg:px-12">
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.16em] text-accent"><Moon size={13}/> Trading workspace <span className="text-slate-600">/</span> eToro Demo</div><h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Portfolio overview</h1><p className="mt-2 max-w-2xl text-sm text-slate-400">A protected baseline and three isolated books. No live connection or monetary balances are displayed in this preview.</p></div>
-          <div className="flex flex-wrap gap-2"><StatusPill positive><CircleCheck size={13}/> Saved baseline only</StatusPill><StatusPill><LockKeyhole size={13}/> Read-only</StatusPill></div>
+          <div className="flex flex-wrap gap-2"><StatusPill positive><CircleCheck size={13}/> {fresh ? "Fresh Demo snapshot" : "Saved baseline only"}</StatusPill><StatusPill><LockKeyhole size={13}/> Read-only</StatusPill></div>
         </header>
         <div className="mt-7 flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-sm text-amber-100"><CircleAlert size={18} className="mt-0.5 shrink-0 text-amber-300"/><p><strong>Local baseline, not live.</strong> {apiError ? "Backend unavailable. Start the local SideDeck service." : summary ? `Baseline captured ${summary.captured_at ?? "at an unknown time"}.` : "Loading baseline metadata."} {fresh ? `Fresh owner-authorized snapshot ${fresh.observed_at}. Reconciliation: ${fresh.reconciliation_status}.` : "No recent authorized snapshot. Current portfolio reconciliation, cash and P&L are unavailable."}</p></div>
         <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
