@@ -46,8 +46,10 @@ def run_backtest(
     max_drawdown = Decimal("0")
     previous = prices[ordered[0]]
     daily: list[dict[str, object]] = []
-    for day in ordered[1:]:
-        signal = signals.get(day, "HOLD")
+    for index, day in enumerate(ordered[1:], start=1):
+        # Close-of-day signals cannot earn the return ending at that same close.
+        # Apply the prior observation's signal to the following price interval.
+        signal = signals.get(ordered[index - 1], "HOLD")
         target = Decimal("1") if signal == "BUY" else Decimal("0") if signal == "SELL" else position
         if target != position:
             trades += 1
@@ -78,9 +80,10 @@ def run_backtest(
         "experiment_id": config.experiment_id,
         "version": config.version,
         "assumptions": {"fee_bps": str(config.fee_bps), "slippage_bps": str(config.slippage_bps)},
+        "signal_execution_lag": "NEXT_OBSERVED_PRICE_INTERVAL",
         "trade_count": trades,
         "ending_equity": str(equity),
-            "max_drawdown": str(max_drawdown),
+        "max_drawdown": str(max_drawdown),
         "profit_factor": str(gross_profit / gross_loss) if gross_loss else "UNDEFINED",
         "in_sample_days": len(in_sample),
         "out_of_sample_days": len(oos),
