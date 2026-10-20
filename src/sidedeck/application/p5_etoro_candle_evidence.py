@@ -61,8 +61,8 @@ def parse_candle_history(payload: object, *, instrument_id: int,
             raise ValueError("naive or repeated candle time")
         seen.add(date)
         prices = [_positive_price(bar.get(key)) for key in ("open", "high", "low", "close")]
-        o, h, l, c = prices
-        if l > min(o, c) or h < max(o, c) or l > h:
+        open_price, high_price, low_price, close_price = prices
+        if low_price > min(open_price, close_price) or high_price < max(open_price, close_price) or low_price > high_price:
             raise ValueError("inconsistent candle OHLC")
         volume = bar.get("volume")
         if isinstance(volume, bool) or not isinstance(volume, (int, float, str, Decimal)):
@@ -73,7 +73,7 @@ def parse_candle_history(payload: object, *, instrument_id: int,
             raise ValueError("invalid candle volume") from exc
         if not v.is_finite() or v < 0:
             raise ValueError("negative or invalid candle volume")
-        output.append(CandleEvidence(instrument_id, interval, date, o, h, l, c, v))
+        output.append(CandleEvidence(instrument_id, interval, date, open_price, high_price, low_price, close_price, v))
     if any(a.from_date >= b.from_date for a, b in zip(output, output[1:])):
         raise ValueError("candles must be strictly chronological")
     return output
