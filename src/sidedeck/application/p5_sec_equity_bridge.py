@@ -8,6 +8,7 @@ import json
 import math
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 EQUITY_TAGS = ("StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
                "PreferredStockValue", "RedeemablePreferredStockCarryingAmount",
@@ -16,7 +17,7 @@ EQUITY_TAGS = ("StockholdersEquity", "StockholdersEquityIncludingPortionAttribut
 SHARE_TAGS = ("CommonStockSharesOutstanding", "CommonStockSharesIssued")
 
 
-def equity_bridge(joined: dict, raw: dict) -> dict:
+def equity_bridge(joined: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
     if (joined.get("ticker") != "SOFI" or raw.get("cik") != 1818874
             or joined.get("buffett_ready") is not False
             or joined.get("broker_execution") != "DISABLED"):
