@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -38,10 +38,49 @@ def baseline_summary(db_path: str) -> dict[str, Any]:
         db.close()
 
 
-def dashboard_summary(db_path: str) -> dict[str, Any]:
+def read_refresh(path: str | None, *, now: datetime | None = None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    target = Path(path)
+    if not target.is_file() or target.is_symlink():
+        return None
+    try:
+        if target.stat().st_size > 8192:
+            return None
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if (data.get("schema_version") != 1
+                or data.get("source") != "OWNER_AUTHORIZED_DEMO_READ"
+                or data.get("execution_enabled") is not False
+                or data.get("reconciliation_status") not in ("MATCHED", "DISCREPANCY")
+                or not isinstance(data.get("books"), list)
+                or len(data["books"]) != 3):
+            return None
+        observed = datetime.fromisoformat(data["observed_at"])
+        current = now or datetime.now(timezone.utc)
+        if observed.tzinfo is None or not timedelta(0) <= current - observed <= timedelta(minutes=5):
+            return None
+        # Strict field allowlist: never emit arbitrary persisted values into browser JSON.
+        return {
+            "observed_at": observed.isoformat(),
+            "reconciliation_status": data["reconciliation_status"],
+            "discrepancy_count": data["discrepancy_count"] if type(data.get("discrepancy_count")) is int and data["discrepancy_count"] >= 0 else None,
+            "available_cash_usd_status": data["available_cash_usd_status"] if data.get("available_cash_usd_status") in ("AVAILABLE", "UNAVAILABLE") else "UNAVAILABLE",
+            "unrealized_pnl_status": data["unrealized_pnl_status"] if data.get("unrealized_pnl_status") in ("AVAILABLE", "UNAVAILABLE") else "UNAVAILABLE",
+            "books": [
+                {"id": book, "positions": next((v["positions"] for v in data["books"] if isinstance(v, dict) and v.get("id") == book and type(v.get("positions")) is int and v["positions"] >= 0), None),
+                 "allocation_status": "NOT_ALLOCATED"}
+                for book in ("etoro-demo:tradingagents", "etoro-demo:ai-trading", "etoro-demo:unattributed")
+            ],
+        }
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def dashboard_summary(db_path: str, snapshot_path: str | None = None, *, now: datetime | None = None) -> dict[str, Any]:
     baseline = baseline_summary(db_path)
+    fresh = read_refresh(snapshot_path, now=now)
     return {"schema_version": 1, "source": "LOCAL_BASELINE_ONLY",
-            **baseline, "reconciliation_status": "NOT_CURRENT",
+            **baseline, "fresh_snapshot": fresh, "reconciliation_status": "NOT_CURRENT",
             "discrepancy_count": None, "available_cash_usd_status": "UNAVAILABLE",
             "unrealized_pnl_status": "UNAVAILABLE", "execution_enabled": False,
             "books": [
@@ -52,7 +91,7 @@ def dashboard_summary(db_path: str) -> dict[str, Any]:
             ]}
 
 
-def make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
+def make_handler(db_path: str, snapshot_path: str | None = None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if (self.headers.get("Host") not in ("127.0.0.1:8765", "localhost:8765")
@@ -61,7 +100,7 @@ def make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
                 self.send_error(404)
                 return
             try:
-                data = dashboard_summary(db_path)
+                data = dashboard_summary(db_path, snapshot_path)
                 payload = json.dumps(data).encode("utf-8")
                 status = 200
             except (OSError, sqlite3.Error, ValueError):
@@ -88,8 +127,9 @@ def make_handler(db_path: str) -> type[BaseHTTPRequestHandler]:
 def main() -> int:
     p = argparse.ArgumentParser(description="Local-only read-only eToro baseline summary")
     p.add_argument("--db", required=True)
+    p.add_argument("--snapshot", default=None)
     a = p.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db))
+    server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()
