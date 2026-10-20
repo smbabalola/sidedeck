@@ -91,3 +91,32 @@ New tests: `tests/test_saxo_execution_pipeline.py` (rewritten, 20 tests),
 `tests/test_saxo_sim_accounting.py` (14), `tests/test_saxo_migration_0009.py` (4),
 and two submission-gating tests in `tests/test_saxo_p4_execution.py`.
 The evaluator reports `SIM_ACCOUNTING_SEPARATED=PASS`; decision `NO-GO`.
+
+## Reconciliation trust-boundary hardening (2026-10-20)
+
+Review finding: `reconcile_sim_account()` sealed reports built from
+caller-supplied evidence and ledgers, so a fabricated clean report could
+release a freeze. Details in ADR-003 §10. Tests are in
+`tests/test_saxo_sim_accounting.py` unless noted.
+
+| Finding | Fix | Regression tests |
+|---|---|---|
+| Caller-built evidence or a substitute ledger could produce a sealed MATCHED report | Only sealed `SimAccountEvidence` from the GET-only SIM collector is accepted, and reconciliation loads the stored journal itself | `test_hand_built_or_tampered_evidence_cannot_reconcile`, `test_reconciliation_uses_the_persisted_journal_not_a_caller_ledger` |
+| Evidence was not tied to an account, journal, source or time | Each run records the account and login fingerprint, source, observation time, journal digest and evidence digest; evidence IDs are unique | `test_evidence_from_another_account_or_login_is_refused`, `test_stale_replayed_or_out_of_order_evidence_is_refused` |
+| Missing cash evidence counted as a match | Missing cash makes the run `INCOMPLETE` and freezes the account; the collector refuses missing or non-EUR cash | `test_missing_cash_evidence_is_incomplete_never_matched` |
+| Books and baseline positions could be created from unverified input | `open_sim_books` accepts only sealed, fresh evidence; the store's public open, baseline, freeze and release methods are removed | `test_opening_needs_sealed_fresh_evidence`, `test_store_has_no_unverified_open_baseline_freeze_or_release_path`, `test_preexisting_exposure_is_a_verified_baseline_not_strategy_capital` |
+| Recording a run and freezing were separate commits | Comparison, recording and freezing run in one `BEGIN IMMEDIATE` transaction | `test_crash_during_reconciliation_leaves_no_partial_decision` (3 crash points) |
+| Release needed only a sealed report and a name | Release needs the latest recorded MATCHED run, evidence read after the freeze and ≤ 5 min old, an unchanged journal, and an OpenSSH operator signature | `test_release_needs_a_fresh_latest_matched_run_and_an_operator_signature`, `test_release_refuses_evidence_read_before_the_freeze`, `test_release_refuses_when_the_journal_changed_after_reconciliation` |
+| An older database could be left half-upgraded | The runtime checks the schema before creating tables; `0010` refuses books opened under `0009` and refuses to roll back while evidence-backed history exists | `tests/test_saxo_migration_0010.py` |
+
+Stage 2 read-only infrastructure is tested offline in
+`tests/test_saxo_sim_evidence.py`. The tests cover:
+- that SIM quote and EUR/USD readings come from the SIM gateway;
+- that prices are tradable, undelayed and fresh;
+- that verification accepts only snapshots the same reader took;
+- the exact client type and the sealed account scope;
+- the account binding in `prepare_sofi_request`;
+- the evaluator's `STAGE2_SIM_ACCOUNT_EVIDENCE` gate.
+
+The shipped market-verifier registry stays empty, and the decision is still
+`P4_DECISION=NO-GO`.

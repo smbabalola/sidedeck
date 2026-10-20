@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
-from sidedeck.infrastructure.saxo_sim import SaxoSimClient
+from sidedeck.infrastructure.saxo_sim import SIM_BASE, SaxoSimClient
 
 # Process-local key: only verified_scope() in this process can mark a scope as
 # derived from authenticated SIM user/account responses.
@@ -47,6 +47,8 @@ def verified_scope(client: SaxoSimClient, expected_account_id: str) -> SaxoAccou
     """Derive opaque identifiers from authenticated SIM account and user responses."""
     if not expected_account_id.strip():
         raise ValueError("expected account identity missing")
+    if type(client) is not SaxoSimClient or client.base_url != SIM_BASE:
+        raise ValueError("account identity must come from the Saxo SIM gateway client")
     user = client.user()
     client_key = user.get("ClientKey")
     accounts = client.accounts()
@@ -60,6 +62,12 @@ def verified_scope(client: SaxoSimClient, expected_account_id: str) -> SaxoAccou
     account_key = matches[0]["AccountKey"]
     return SaxoAccountScope(expected_account_id, account_key, client_key,
                             verification_seal=_scope_mac(expected_account_id, account_key, client_key))
+
+
+def scope_digest(scope: SaxoAccountScope) -> str:
+    """Stable fingerprint of the verified account/client keys (never the keys themselves)."""
+    material = "|".join((scope.account_id, scope.account_key, scope.client_key)).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
 
 
 def _path(kind: str, scope: SaxoAccountScope) -> str:

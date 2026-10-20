@@ -93,6 +93,44 @@
 - [ ] Not implemented by design: sells, fee-only events, signed SIM adjustments,
   audited allocation top-ups.
 
+## Reconciliation hardening and Stage 2 preparation — 2026-10-20
+
+- [x] Reconciliation trust boundary closed (ADR-003 §10, migration `0010`):
+  - only sealed, GET-only SIM account evidence can open books, reconcile, or
+    lead to a release;
+  - reconciliation reads the stored journal itself;
+  - evidence is tied to the account, login, source, time and journal digest,
+    and each evidence ID can be used once.
+- [x] Missing cash evidence → `INCOMPLETE` (account freeze). Broker fills for
+  approved orders that never reached the journal are flagged. `ACCOUNT` freezes
+  are never downgraded.
+- [x] Comparison, recording and freezing run in one IMMEDIATE transaction.
+  Crash tests at three points leave no partial decision.
+- [x] A release requires:
+  - the latest MATCHED run;
+  - evidence read after the freeze and no more than 5 minutes old;
+  - an unchanged journal;
+  - an OpenSSH operator signature.
+
+  Releases are logged in `saxo_sim_freeze_releases`.
+- [x] Stage 2 read-only infrastructure, offline only:
+  - a sealed account-evidence collector;
+  - a SIM reader and verifier for the SOFI quote and EUR/USD (Uic 21), bound to
+    one account;
+  - `verified_scope` now accepts only the exact SIM client.
+
+  The verifier is **not** registered.
+- [x] Acceptance: `SIM_RECONCILIATION_EVIDENCE_BOUND=PASS`,
+  `STAGE2_SIM_ACCOUNT_EVIDENCE=MISSING`, `P4_DECISION=NO-GO`, 0 broker requests.
+- [x] Local: `312 passed, 1 skipped` (the skip is PostgreSQL, CI only). Ruff
+  and mypy (57 files) clean. A throwaway SQLite Alembic head→base→head round
+  trip at `0010` passed.
+- [ ] **BLOCKED (owner permission):** one live, read-only Stage 2 run (account
+  evidence, SOFI quote, EUR/USD, precheck). After review, register
+  `SaxoSimMarketEvidence` in `TRUSTED_MARKET_VERIFIER_TYPES`.
+- [ ] **BLOCKED (owner):** operator key and `allowed_signers`, and a
+  separately approved change to `SIM_SUBMISSION_RELEASED` (still `False`).
+
 ## Verification record
 
 - Branch: `feat/p3-readonly-batch`

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from sidedeck.application import saxo_sim_submission as submission
 from sidedeck.application.saxo_market_data import ExecutionEvidence, MarketEvidenceVerifier
+from sidedeck.application.saxo_sim_evidence import MAX_EVIDENCE_AGE, SimAccountEvidence
 from sidedeck.application.saxo_sim_submission import evidence_digest
 from sidedeck.infrastructure import saxo_precheck, saxo_sim
 from sidedeck.infrastructure.saxo_operator_approval import SshSignatureApprovalVerifier
@@ -44,7 +45,7 @@ def _accounting_separation_probe() -> str | None:
     from sidedeck.domain.contracts import EventType
     from sidedeck.domain.sim_accounting import (
         INITIAL_ALLOCATION_EUR, STRATEGY_BOOKS, UNATTRIBUTED_BOOK, SimAccountingError, SimEvent,
-        SimEventType,
+        SimEventType, SimLedger,
     )
     from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
 
@@ -67,15 +68,59 @@ def _accounting_separation_probe() -> str | None:
         return "execution pipeline accepts an external ledger"
     if hasattr(pipeline, "Ledger") or hasattr(pipeline, "fill_event"):
         return "execution pipeline can reach the research ledger"
+    ledger = SimLedger()
+    for book in STRATEGY_BOOKS.values():
+        ledger.append(SimEvent(book_id=book, idempotency_key="allocation:initial",
+                               event_type=SimEventType.SIM_ALLOCATION, occurred_at=now,
+                               allocation_eur=INITIAL_ALLOCATION_EUR, approval_ref="probe"))
+    allocations = [ledger.replay(b).allocation_eur for b in STRATEGY_BOOKS.values()]
+    if INITIAL_ALLOCATION_EUR != Decimal("1000") or allocations != [Decimal("1000")] * 2:
+        return "strategy books are not opened with EUR 1,000 each"
+    if ledger.replay(UNATTRIBUTED_BOOK).allocation_eur:
+        return "unattributed book received capital"
     with tempfile.TemporaryDirectory(prefix="sidedeck-sim-probe-") as work:
         store = SimJournalStore(str(Path(work) / "probe.sqlite3"))
-        store.open_books(account_id="probe-account", opened_at=now, approval_ref="probe")
-        ledger = store.load_ledger()
-        allocations = [ledger.replay(b).allocation_eur for b in STRATEGY_BOOKS.values()]
-        if allocations != [INITIAL_ALLOCATION_EUR] * len(STRATEGY_BOOKS):
-            return "strategy books are not opened with EUR 1,000 each"
-        if ledger.replay(UNATTRIBUTED_BOOK).allocation_eur:
-            return "unattributed book received capital"
+        if any(callable(getattr(store, name, None)) for name in
+               ("open_books", "record_baseline", "freeze", "release")):
+            return "SIM store exposes an unverified open/baseline/freeze/release path"
+    return None
+
+
+def _reconciliation_trust_probe() -> str | None:
+    """Hand-built evidence or reports must not open, reconcile or release anything."""
+    import tempfile
+
+    from sidedeck.application.saxo_sim_evidence import SOURCE, SimAccountEvidence
+    from sidedeck.application.saxo_sim_reconciliation import (
+        SimBrokerEvidence, SimReconciliationReport, compare_sim_books, open_sim_books,
+        reconcile_sim_account, release_freeze,
+    )
+    from sidedeck.domain.sim_accounting import SimAccountingError, SimLedger
+    from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
+
+    now = datetime.now(timezone.utc)
+    forged = SimAccountEvidence("probe", SOURCE, "probe-account", "0" * 64, now, (),
+                                Decimal("10000"), (), "0" * 64, seal="forged")
+    report = SimReconciliationReport("probe", "probe-account", "MATCHED", "NONE", (), now, now,
+                                     "0" * 64, "0" * 64, seal="forged")
+    with tempfile.TemporaryDirectory(prefix="sidedeck-sim-trust-") as work:
+        store = SimJournalStore(str(Path(work) / "probe.sqlite3"))
+        for attempt, label in (
+                (lambda: open_sim_books(store, forged, approval_ref="probe"), "open"),
+                (lambda: reconcile_sim_account(store, forged), "reconcile"),
+                (lambda: release_freeze(store, report, released_by="probe", attestation="x",
+                                        verifier=None),  # type: ignore[arg-type]
+                 "release")):
+            try:
+                attempt()
+                return f"hand-built evidence was accepted by {label}"
+            except SimAccountingError:
+                pass
+        if store.statuses() or store.last_reconciliation() is not None:
+            return "a rejected attempt changed SIM state"
+    decision = compare_sim_books(SimLedger(), SimBrokerEvidence("probe-account", {}, {}, None))
+    if decision.status != "INCOMPLETE" or decision.freeze_scope != "ACCOUNT":
+        return "missing broker cash evidence did not fail closed"
     return None
 
 
@@ -125,6 +170,10 @@ def _code_gates() -> list[Gate]:
     separation_problem = _accounting_separation_probe()
     gates.append(Gate("SIM_ACCOUNTING_SEPARATED", "FAIL" if separation_problem else "PASS",
                       separation_problem or "SIM books isolated from research ledgers (ADR-003)"))
+    trust_problem = _reconciliation_trust_probe()
+    gates.append(Gate("SIM_RECONCILIATION_EVIDENCE_BOUND", "FAIL" if trust_problem else "PASS",
+                      trust_problem or "only sealed read-only SIM evidence can open, reconcile "
+                      "or release; missing cash fails closed"))
     gates.append(Gate("SIM_SUBMISSION_RELEASE",
                       "FAIL" if submission.SIM_SUBMISSION_RELEASED else "DISABLED",
                       "no approved release; submission refuses before any POST"))
@@ -175,6 +224,7 @@ def evaluate(*, request: submission.SimOrderRequest | None = None,
              market_verifier: MarketEvidenceVerifier | None = None,
              authorization: submission.ExecutionAuthorization | None = None,
              allowed_signers: Path | None = None, ssh_keygen: str | None = None,
+             account_evidence: SimAccountEvidence | None = None,
              now: datetime | None = None) -> tuple[list[Gate], str]:
     """Each external gate re-verifies evidence; matching dataclass values are not enough."""
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -198,6 +248,18 @@ def evaluate(*, request: submission.SimOrderRequest | None = None,
                    and precheck.uic == request.uic == submission.SOFI_UIC)
     precheck_reason = request_reason or ("" if precheck_ok else
                                          "no sealed SIM precheck matching this request")
+    if account_evidence is None:
+        account_reason = "needs a separately approved authenticated read-only run (Stage 2)"
+    elif not account_evidence.is_verified():
+        account_reason = "account evidence was not collected by the read-only SIM gateway"
+    elif not timedelta(0) <= current - account_evidence.observed_at <= MAX_EVIDENCE_AGE:
+        account_reason = "account evidence is stale or future-dated"
+    elif request is not None and account_evidence.account_id != request.account_id:
+        account_reason = "account evidence is for a different account than the request"
+    else:
+        account_reason = ""
+    gates.append(Gate("STAGE2_SIM_ACCOUNT_EVIDENCE", "MISSING" if account_reason else "PASS",
+                      account_reason or "sealed positions, EUR cash and order activity"))
     gates.append(Gate("AUTHENTICATED_SIM_ACCOUNT_AND_INSTRUMENT",
                       "PASS" if precheck_ok else "MISSING",
                       "authenticated scope and sealed SOFI precheck bound to the request"

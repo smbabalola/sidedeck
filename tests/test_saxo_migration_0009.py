@@ -9,7 +9,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
 from sidedeck.application.saxo_execution_pipeline import SaxoExecutionPipeline
-from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
+from sim_gateway_fake import open_books as open_verified_books
 
 AT = datetime(2026, 10, 20, 9, tzinfo=timezone.utc)
 
@@ -38,7 +38,7 @@ def test_0009_round_trip_and_runtime_parity(tmp_path: Path) -> None:
     assert "saxo_sim_journal" not in _tables(url)
     command.upgrade(config, "head")
     # Runtime code works on the Alembic-managed schema.
-    SimJournalStore(str(path)).open_books(account_id="acct", opened_at=AT, approval_ref="owner")
+    open_verified_books(str(path), AT)
     assert SaxoExecutionPipeline(str(path)).ledger.replay("saxo-sim:tradingagents").cash_eur == 1000
 
 
@@ -47,10 +47,11 @@ def test_0009_downgrade_refuses_while_sim_history_exists(tmp_path: Path) -> None
     url = f"sqlite:///{path}"
     config = _config(url)
     command.upgrade(config, "head")
-    SimJournalStore(str(path)).open_books(account_id="acct", opened_at=AT, approval_ref="owner")
+    open_verified_books(str(path), AT)
     with pytest.raises(Exception, match="refusing to drop history"):
         command.downgrade(config, "0008_operator_approval_binding")
     assert "saxo_sim_journal" in _tables(url)
+    assert "saxo_sim_account_openings" in _tables(url)
 
 
 @pytest.mark.parametrize("seed, message", [

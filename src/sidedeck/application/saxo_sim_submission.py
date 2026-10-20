@@ -24,7 +24,7 @@ from sidedeck.application.saxo_order_lifecycle import advance_lifecycle, create_
 from sidedeck.domain.sim_accounting import (
     MAX_POSITION_COST_USD, STRATEGY_BOOKS, SimAccountingError, book_for_strategy,
 )
-from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
+from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope, scope_digest
 from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
 from sidedeck.infrastructure.saxo_operator_approval import APPROVAL_NAMESPACE, valid_principal
 from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence, precheck_payload
@@ -275,6 +275,8 @@ def prepare_sofi_request(
     if market_verifier is None or not trusted_market_verifier(market_verifier):
         raise SubmissionBlocked("trusted market-data attestation is required: "
                                 "no registered market-data verifier")
+    if getattr(market_verifier, "bound_scope_sha256", None) != scope_digest(account_scope):
+        raise SubmissionBlocked("market evidence verifier is bound to a different Saxo account")
     if not market_verifier.verify(evidence):
         raise SubmissionBlocked("trusted market-data attestation is required")
     # Check each observation against the submission time directly; the

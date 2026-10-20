@@ -18,6 +18,8 @@ from sidedeck.domain.accounting import Ledger, fill_event
 from sidedeck.domain.contracts import EventType, ExperimentManifest
 from sidedeck.domain.sim_accounting import SimAccountingError
 from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
+from sim_gateway_fake import open_books as open_verified_books
+from sim_gateway_fake import set_frozen
 
 AT = datetime(2026, 10, 19, 14, tzinfo=timezone.utc)
 TA, AI = "saxo-sim:tradingagents", "saxo-sim:ai-trading"
@@ -34,8 +36,7 @@ def execution(status="FinalFill", quantity="1", execution_id="fill-1", price="40
 def sim_db(tmp_path, name="p4.sqlite", *, open_books=True):
     db = str(tmp_path / name)
     if open_books:
-        SimJournalStore(db).open_books(account_id="22866064", opened_at=AT - timedelta(hours=1),
-                                       approval_ref="owner-decision-2026-10-20")
+        open_verified_books(db, AT - timedelta(hours=1))
     return db
 
 
@@ -184,13 +185,13 @@ def test_frozen_book_or_account_blocks_new_fills_only_where_frozen(tmp_path):
     authorize(db)
     authorize(db, order_key="sofi-2", strategy="ai-trading", broker_order_id="broker-2")
     store = SimJournalStore(db)
-    store.freeze((TA,), scope="BOOK", reason="test mismatch", at=AT)
+    set_frozen(store, (TA,), scope="BOOK", at=AT)
     pipeline = SaxoExecutionPipeline(db)
     with pytest.raises(SimAccountingError, match="book is frozen"):
         pipeline.apply_buy_fill(execution(), order_key="sofi-1", account_id="22866064", now=AT)
     pipeline.apply_buy_fill(execution(execution_id="fill-2", order_id="broker-2", order_key="sofi-2"),
                             order_key="sofi-2", account_id="22866064", now=AT)
-    store.freeze((TA, AI, "saxo-sim:unattributed"), scope="ACCOUNT", reason="unexplained", at=AT)
+    set_frozen(store, (TA, AI, "saxo-sim:unattributed"), scope="ACCOUNT", at=AT)
     authorize(db, order_key="sofi-3", strategy="ai-trading", broker_order_id="broker-3")
     with pytest.raises(SimAccountingError, match="account-wide"):
         pipeline.apply_buy_fill(execution(execution_id="fill-3", order_id="broker-3",

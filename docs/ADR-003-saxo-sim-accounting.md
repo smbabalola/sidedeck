@@ -227,3 +227,87 @@ unchanged.
   the real guards (research ledger rejects `saxo:` events, `SimLedger` rejects
   research portfolio IDs, pipeline cannot take a ledger, books open with
   EUR 1,000 / 1,000 / 0). It reports `PASS`; the decision remains `NO-GO`.
+
+## 10. Reconciliation trust boundary (review follow-up, 2026-10-20)
+
+The PR #4 review found that `reconcile_sim_account()` sealed a report built from
+caller-supplied broker evidence and a caller-supplied ledger, so a fabricated
+"clean" report could lift a freeze. Fixed as follows (migration
+`0010_sim_reconciliation_evidence`):
+
+- **Sealed broker evidence.** `application/saxo_sim_evidence.collect_account_evidence`
+  is the only producer of `SimAccountEvidence`. It requires the exact
+  `SaxoSimClient` type (SIM base URL, path allowlist, GET only, no redirects)
+  and an account scope sealed by `verified_scope()`, which now also refuses any
+  client that is not that exact type. It reads complete positions, the EUR cash
+  balance and order activity (per-order fill totals by `ExternalReference`). It
+  fails closed on pagination gaps, rows for another account, duplicate
+  execution IDs, sells, and missing or non-EUR cash. The result carries the
+  source, observation time, account ID, a fingerprint of the verified
+  account/client keys and a response digest, all under a process-local HMAC seal.
+- **Opening from evidence.** `open_sim_books(store, evidence, approval_ref)`
+  needs sealed, fresh (≤ 5 min) evidence. It records the opening EUR cash and
+  every pre-existing position (as unattributed baselines) in
+  `saxo_sim_account_openings`. There is no other way to open books or add
+  baselines. The store's public `open_books`, `record_baseline`, `freeze` and
+  `release` were removed; the private primitives that replace them refuse to
+  run outside a transaction.
+- **Persisted journal, not a caller ledger.** `reconcile_sim_account(store,
+  evidence)` has no ledger parameter. Inside one `BEGIN IMMEDIATE` transaction it:
+  - checks the evidence is for the opened account and login, and newer than
+    both the opening and the latest run;
+  - loads the hash-verified journal and compares;
+  - records the run with the evidence ID, observation time, journal digest and
+    evidence digest (evidence IDs are unique);
+  - applies any freeze.
+
+  A crash leaves either the complete decision or nothing; unconsumed evidence
+  can be retried while still fresh.
+- **Completeness.** Missing cash evidence makes the run `INCOMPLETE` (account
+  freeze), never `MATCHED`. Broker fills for an operator-approved order that
+  never reached the journal are attributed to that order's book and flagged.
+  A single-book freeze still requires all three: the other book verified, the
+  position difference fully explained, and cash agreeing. Otherwise the whole
+  account freezes. An `ACCOUNT` freeze is never downgraded to `BOOK`.
+- **Release.** `release_freeze(store, report, released_by, attestation,
+  verifier)` requires:
+  - a sealed `MATCHED` report that is still the latest recorded run;
+  - evidence read after every freeze and no more than 5 minutes old;
+  - an unchanged journal digest;
+  - an OpenSSH signature over `release_material(report, released_by)` (purpose
+    `saxo-sim-freeze-release`), verified by `SshSignatureApprovalVerifier`
+    against `allowed_signers`.
+
+  Each release is appended to `saxo_sim_freeze_releases` with the SHA-256 of
+  the signature.
+- **Migration `0010`.** Adds the evidence columns to
+  `saxo_sim_reconciliation_runs`, plus the `saxo_sim_account_openings` and
+  `saxo_sim_freeze_releases` tables.
+  - Upgrade refuses if books already exist: they were opened under `0009`
+    without verified evidence and need owner review.
+  - Downgrade refuses while any evidence-backed record exists.
+  - The runtime refuses a pre-`0010` schema without changing it.
+
+**Stage 2 read-only infrastructure (offline only).** `SaxoSimMarketEvidence`
+reads SOFI and EUR/USD from SIM `/trade/v1/infoprices`. EUR/USD is FxSpot Uic 21,
+newly allowlisted.
+- **Price checks:** each price must be for the requested instrument, tradable,
+  undelayed, error-free and no more than 2 minutes old. SOFI must also be in
+  USD with the market open. The quote used is the Ask.
+- **Verification:** `verify()` accepts only snapshots that the same instance
+  read itself.
+- **Account binding:** the instance is bound to one verified account
+  (`bound_scope_sha256`). `prepare_sofi_request` refuses a verifier bound to a
+  different account or login.
+- **Registration:** the type is **not** in `TRUSTED_MARKET_VERIFIER_TYPES`. It
+  is registered only after a separately approved live Stage 2 run.
+- **Evaluator:** two new gates. `SIM_RECONCILIATION_EVIDENCE_BOUND` is a code
+  gate and passes; `STAGE2_SIM_ACCOUNT_EVIDENCE` reports MISSING offline.
+
+**Known limits.**
+- A real fill error in one book normally also moves account cash, so it will
+  usually escalate to an account-wide freeze. That is fail-closed. Pricing the
+  unexplained cash per fill is a later refinement.
+- Saxo's order-activity retention window is not yet confirmed. If journaled
+  fills fall outside it, reconciliation reports `UNVERIFIED` and freezes the
+  account.

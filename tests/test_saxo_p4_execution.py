@@ -17,8 +17,11 @@ from sidedeck.application.saxo_sim_submission import (
     approval_material, prepare_sofi_request, reconcile_uncertain_submission,
 )
 from sidedeck.domain.contracts import MarketSnapshot, PriceType, Session
-from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
+from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope, scope_digest
 from sidedeck.infrastructure.saxo_submit_transport import SaxoSimSubmitTransport
+
+from sim_gateway_fake import SyntheticGateway, authenticated, set_frozen, set_open, synthetic_gateway
+from sim_gateway_fake import open_books as open_verified_books
 
 NOW = datetime(2026, 10, 19, 14, 0, tzinfo=timezone.utc)
 
@@ -46,20 +49,10 @@ PRECHECK_BODY = {"PreCheckResult": "Ok", "EstimatedCashRequired": "37.55",
 SCOPE = SaxoAccountScope("approved", "opaque-account-key", "client")
 
 
-class FakeReadOnlySimClient:
-    """Synthetic /port/v1/users/me and /port/v1/accounts/me responses (no network)."""
-
-    def user(self):
-        return {"ClientKey": "client"}
-
-    def accounts(self):
-        return {"Data": [{"AccountId": "approved", "AccountKey": "opaque-account-key",
-                          "Active": True}]}
-
-
 def authenticated_scope() -> SaxoAccountScope:
-    from sidedeck.infrastructure.saxo_account_scope import verified_scope
-    return verified_scope(FakeReadOnlySimClient(), "approved")  # type: ignore[arg-type]
+    gateway = SyntheticGateway("approved", client_key="client", account_key="opaque-account-key")
+    with synthetic_gateway(gateway):
+        return authenticated(gateway)[1]
 
 
 def precheck(body=None) -> PrecheckEvidence:
@@ -104,6 +97,8 @@ class TrustedVerifier:
 
 
 class TrustedMarketVerifier:
+    bound_scope_sha256 = scope_digest(SCOPE)
+
     def verify(self, market_evidence):
         return market_evidence.quote_origin is EvidenceOrigin.AUTHENTICATED_PROVIDER
 
@@ -270,10 +265,8 @@ class Timeout:
 
 def sim_db(tmp_path, name):
     """Disposable database with the three SIM books opened (EUR 1,000 per strategy)."""
-    from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
     path = str(tmp_path / name)
-    SimJournalStore(path).open_books(account_id="approved", opened_at=NOW - timedelta(hours=1),
-                                     approval_ref="owner-decision-2026-10-20")
+    open_verified_books(path, NOW - timedelta(hours=1), SyntheticGateway("approved"))
     return path
 
 
@@ -726,14 +719,14 @@ def test_submission_is_blocked_by_frozen_busy_or_underfunded_sim_books(tmp_path,
     store = SimJournalStore(db)
     submitter = SaxoSimSubmitter(db, network_enabled=True, transport=transport,
                                  approval_verifier=TrustedVerifier())
-    store.freeze(("saxo-sim:tradingagents",), scope="BOOK", reason="proven mismatch", at=NOW)
+    set_frozen(store, ("saxo-sim:tradingagents",), scope="BOOK", at=NOW)
     with pytest.raises(SubmissionBlocked, match="book is frozen"):
         submitter.submit(request, approve(request), now=NOW)
-    store.release(("saxo-sim:tradingagents",), released_by="operator")
-    store.freeze(("saxo-sim:ai-trading",), scope="ACCOUNT", reason="unexplained", at=NOW)
+    set_open(store, ("saxo-sim:tradingagents",), NOW)
+    set_frozen(store, ("saxo-sim:ai-trading",), scope="ACCOUNT", at=NOW)
     with pytest.raises(SubmissionBlocked, match="account-wide"):
         submitter.submit(request, approve(request), now=NOW)
-    store.release(("saxo-sim:ai-trading",), released_by="operator")
+    set_open(store, ("saxo-sim:ai-trading",), NOW)
     assert transport.calls == 0
     assert submitter.submit(request, approve(request), now=NOW) == "broker-1"
     second = prepared(monkeypatch, order_key="sofi-3")

@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SIM_BASE = "https://gateway.saxobank.com/sim/openapi"
+EURUSD_UIC = 21  # Saxo FxSpot EURUSD; the only FX read allowed
 _ALLOWED = frozenset(("/port/v1/users/me", "/port/v1/accounts/me", "/port/v1/balances/me", "/port/v1/positions/me", "/port/v1/orders/me"))
 
 
@@ -70,8 +71,9 @@ class SaxoSimClient:
         lookup = re.fullmatch(r"/ref/v1/instruments[?]AccountKey=[A-Za-z0-9%_-]+&AssetTypes=Stock&Keywords=[A-Z]{1,6}&%24top=20", path)
         detail = re.fullmatch(r"/ref/v1/instruments/details/[1-9][0-9]*/Stock[?]AccountKey=[A-Za-z0-9%_-]+&ClientKey=[A-Za-z0-9%_-]+", path)
         price = re.fullmatch(r"/trade/v1/infoprices[?]AccountKey=[A-Za-z0-9%_-]+&AssetType=Stock&Uic=[1-9][0-9]*", path)
+        fx_price = re.fullmatch(r"/trade/v1/infoprices[?]AccountKey=[A-Za-z0-9%_-]+&AssetType=FxSpot&Uic=" + str(EURUSD_UIC), path)
         audit = _is_audit_path(path)
-        if path not in _ALLOWED and all(item is None or item is False for item in (scoped, lookup, detail, price, audit)):
+        if path not in _ALLOWED and all(item is None or item is False for item in (scoped, lookup, detail, price, fx_price, audit)):
             raise PermissionError("Saxo endpoint is not approved for read-only access")
         token = os.environ.get(self.token_env, "")
         if not token:
