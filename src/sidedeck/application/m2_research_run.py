@@ -26,8 +26,15 @@ def plan_run(run_id: str, instrument_id: str, cutoff: datetime, *, max_provider_
         raise ResearchRunBlocked("run identity is invalid")
     if cutoff.tzinfo is None or cutoff.utcoffset() is None:
         raise ResearchRunBlocked("cutoff must be timezone-aware")
-    if max_provider_calls < 0:
-        raise ResearchRunBlocked("provider-call budget cannot be negative")
+    if (isinstance(max_provider_calls, bool) or not isinstance(max_provider_calls, int)
+            or max_provider_calls < 0):
+        raise ResearchRunBlocked("provider-call budget must be a nonnegative integer")
+    try:
+        cost = Decimal(max_cost_usd)
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ResearchRunBlocked("invalid USD budget") from exc
+    if not cost.is_finite() or cost < 0:
+        raise ResearchRunBlocked("USD budget must be finite and nonnegative")
     return ResearchRunPlan(run_id, instrument_id, cutoff, max_provider_calls, max_cost_usd)
 
 
@@ -41,3 +48,5 @@ def dry_run(plan: ResearchRunPlan) -> dict[str, object]:
 def require_owner_authorization(plan: ResearchRunPlan, authorized: bool) -> None:
     if not authorized:
         raise ResearchRunBlocked("owner authorization required before provider calls")
+    if plan.max_provider_calls == 0 or Decimal(plan.max_cost_usd) <= 0:
+        raise ResearchRunBlocked("positive explicit provider-call and USD budgets required")
