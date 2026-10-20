@@ -82,6 +82,12 @@
 - [x] Read-only reconciliation with fail-closed freezing and sealed-report
   release; baseline recording; per-strategy SIM performance report.
 - [x] Acceptance: `SIM_ACCOUNTING_SEPARATED=PASS`; `P4_DECISION=NO-GO`.
+- [x] Evidence: code `3494e8b`. Local `263 passed, 1 skipped` (skip = PostgreSQL);
+  CI #457 (run 39378358142) **passed, 264 tests, 0 skipped**, including the
+  disposable PostgreSQL upgrade through `0009` and downgrade. CI #456 failed on
+  a real lifecycle race in concurrent duplicate delivery; fixed in `3494e8b`
+  with a deterministic regression test. Ruff and mypy (56 files) clean;
+  SQLite Alembic head→base→head passed.
 - [ ] **BLOCKED (permission):** Stage 2 authenticated read-only evidence and a
   registered market-data verifier; real positions/order-activity reconciliation.
 - [ ] Not implemented by design: sells, fee-only events, signed SIM adjustments,
