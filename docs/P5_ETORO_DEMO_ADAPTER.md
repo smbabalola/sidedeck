@@ -85,7 +85,7 @@ Builds on [`ETORO_DEMO_READ_2026-10-20.md`](ETORO_DEMO_READ_2026-10-20.md): one 
 ## Remaining gaps and gates
 
 - [x] USD mapping set to `accountCurrencyId = 1` and checked against each live response.
-- [ ] **Owner-run, one authenticated Demo GET:** capture the baseline. Load `ETORO_API_KEY` and `ETORO_USER_KEY` into the PowerShell session yourself first, without printing them. Then, from the `sidedeck\` checkout:
+- [x] **Owner-run, one authenticated Demo GET:** baseline capture completed and matched on 2026-10-20 (4 protected positions, 0 discrepancies, cash status AVAILABLE; no orders). Evidence: [`P5_ETORO_DEMO_BASELINE_ACCEPTANCE_2026-10-20.md`](P5_ETORO_DEMO_BASELINE_ACCEPTANCE_2026-10-20.md). The command below is the historical capture command, **not an instruction to capture again**. Load `ETORO_API_KEY` and `ETORO_USER_KEY` into the PowerShell session yourself first, without printing them. Then, from the `sidedeck\` checkout:
 
   ```powershell
   .venv\Scripts\python.exe -m sidedeck.application.etoro_demo_portfolio --confirm-owner-demo-read --db data\etoro_demo.sqlite3 --capture-baseline --expected-positions 4
@@ -97,7 +97,7 @@ Builds on [`ETORO_DEMO_READ_2026-10-20.md`](ETORO_DEMO_READ_2026-10-20.md): one 
   - `3`: `FIELD_TYPE_VALIDATION_FAILED`, which lists field paths and types only. Nothing is written;
   - `4`: `BASELINE_REFUSED`, for example a count mismatch. Nothing is written;
   - `1`: an access error, reported as a classification, the CF-Ray ID and the request ID.
-- [ ] Value-level validation against the real snapshot, kept locally. The strict field-type check runs on the first real response; if eToro sends numbers as strings, capture is refused with the paths listed, and the adapter is adjusted only after review.
+- [x] Live snapshot field-type and numeric/currency checks passed during the owner-run baseline capture; reported cash and P&L statuses were AVAILABLE. The values remain private in the owner's local environment.
 - [ ] Mirror/copy positions are rejected, not modelled.
 - [ ] An owner decision on virtual capital per strategy book (none allocated).
 - [ ] A dashboard view built on `DemoReconciliation`, showing each book separately.
