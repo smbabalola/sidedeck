@@ -69,6 +69,24 @@
   passed; disposable SQLite Alembic head→base→head passed; offline
   acceptance `P4_DECISION=NO-GO`, 0 broker requests.
 
+## SIM accounting implementation — 2026-10-20 (ADR-003 accepted)
+
+- [x] Owner decisions applied: EUR 1,000 per strategy book, no top-ups, USD 200
+  per-position cap, one SIM account with three logical books, account-wide vs
+  proven book-specific freezing, separate reporting, kill switch unchanged.
+- [x] `SimLedger` + durable SIM journal (migration `0009`) with legacy/research
+  refusal checks and downgrade protection; research `Ledger` and journal reject
+  `saxo:` events; Alpaca modules and `reconciliation.py` unchanged.
+- [x] Fills bound to the signed authorization's book, quantity and FX; atomic
+  journal writes; deterministic, hash-verified recovery; concurrency tested.
+- [x] Read-only reconciliation with fail-closed freezing and sealed-report
+  release; baseline recording; per-strategy SIM performance report.
+- [x] Acceptance: `SIM_ACCOUNTING_SEPARATED=PASS`; `P4_DECISION=NO-GO`.
+- [ ] **BLOCKED (permission):** Stage 2 authenticated read-only evidence and a
+  registered market-data verifier; real positions/order-activity reconciliation.
+- [ ] Not implemented by design: sells, fee-only events, signed SIM adjustments,
+  audited allocation top-ups.
+
 ## Verification record
 
 - Branch: `feat/p3-readonly-batch`

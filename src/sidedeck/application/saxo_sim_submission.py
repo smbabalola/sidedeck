@@ -21,7 +21,11 @@ from typing import Any, Protocol
 
 from sidedeck.application.saxo_market_data import EvidenceOrigin, ExecutionEvidence, MarketEvidenceVerifier
 from sidedeck.application.saxo_order_lifecycle import advance_lifecycle, create_lifecycle, lifecycle_state
+from sidedeck.domain.sim_accounting import (
+    MAX_POSITION_COST_USD, STRATEGY_BOOKS, SimAccountingError, book_for_strategy,
+)
 from sidedeck.infrastructure.saxo_account_scope import SaxoAccountScope
+from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
 from sidedeck.infrastructure.saxo_operator_approval import APPROVAL_NAMESPACE, valid_principal
 from sidedeck.infrastructure.saxo_precheck import PrecheckEvidence, precheck_payload
 
@@ -57,7 +61,7 @@ AUTHORIZATION_DDL = (
     "issued_by TEXT NOT NULL, expires_at TEXT NOT NULL, "
     "status TEXT NOT NULL CHECK(status IN ('ISSUED','CONSUMED','REJECTED','UNKNOWN')), "
     "broker_order_id TEXT, quantity TEXT NOT NULL DEFAULT '1', "
-    "requested_by TEXT NOT NULL DEFAULT '')"
+    "requested_by TEXT NOT NULL DEFAULT '', book_id TEXT, fx_usd_per_eur TEXT, fx_provider TEXT)"
 )
 
 
@@ -120,6 +124,8 @@ class SimOrderRequest:
     prepared_at: datetime
     requested_by: str
     evidence_sha256: str
+    book_id: str
+    fx_provider: str
     preparation_seal: str = field(default="", repr=False, compare=False)
 
     def is_prepared(self) -> bool:
@@ -153,6 +159,7 @@ class SimOrderRequest:
             "prepared_at": self.prepared_at.isoformat(),
             "requested_by": self.requested_by,
             "evidence_sha256": self.evidence_sha256,
+            "book_id": self.book_id, "fx_provider": self.fx_provider,
         }, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
@@ -228,7 +235,7 @@ def prepare_sofi_request(
     precheck: PrecheckEvidence,
     account_scope: SaxoAccountScope,
     expected_account_id: str,
-    portfolio_cash_usd: Decimal,
+    book_cash_eur: Decimal,
     now: datetime,
     market_verifier: MarketEvidenceVerifier | None = None,
     quote_max_age: timedelta = timedelta(minutes=2),
@@ -237,8 +244,9 @@ def prepare_sofi_request(
     """Build the only currently supported request after all local checks."""
     if not isinstance(order_key, str) or not _ORDER_KEY.fullmatch(order_key):
         raise ValueError("invalid order identity")
-    if not portfolio_id or not portfolio_id.isascii():
-        raise ValueError("invalid portfolio identity")
+    if portfolio_id not in STRATEGY_BOOKS:
+        raise ValueError("SIM orders must belong to a SideDeck strategy book")
+    book_id = book_for_strategy(portfolio_id)
     if not valid_principal(requested_by):
         raise ValueError("invalid requesting principal")
     cutoff = _utc(now, "submission time")
@@ -277,13 +285,13 @@ def prepare_sofi_request(
         observed = _utc(stamp, "market evidence time")
         if observed > cutoff or cutoff - observed > quote_max_age:
             raise SubmissionBlocked("market evidence is stale or future-dated")
-    if not portfolio_cash_usd.is_finite() or portfolio_cash_usd < 0:
-        raise ValueError("invalid portfolio cash")
+    if not book_cash_eur.is_finite() or book_cash_eur < 0:
+        raise ValueError("invalid SIM book cash")
     total = evidence.quote.price + evidence.total_cost_usd
-    if total > Decimal("200") or total > portfolio_cash_usd:
+    if total > MAX_POSITION_COST_USD:
         raise SubmissionBlocked("USD position risk limit exceeded")
-    if precheck.estimated_cash_required > Decimal("200"):
-        raise SubmissionBlocked("EUR broker cash limit exceeded")
+    if precheck.estimated_cash_required > book_cash_eur:
+        raise SubmissionBlocked("SIM book EUR allocation exceeded")
     _check_precheck_economics(precheck, evidence)
     risk_material = json.dumps({
         "quote_snapshot": str(evidence.quote.snapshot_id),
@@ -292,7 +300,8 @@ def prepare_sofi_request(
         "fx_provider": evidence.fx.provider,
         "fx_usd_per_eur": str(evidence.fx.usd_per_eur),
         "costs": str(evidence.total_cost_usd),
-        "cash": str(portfolio_cash_usd),
+        "book_id": book_id,
+        "book_cash_eur": str(book_cash_eur),
         "precheck_sha256": precheck.response_sha256,
         "precheck_cash_eur": str(precheck.estimated_cash_required),
     }, sort_keys=True, separators=(",", ":"))
@@ -307,6 +316,7 @@ def prepare_sofi_request(
         risk_evidence_sha256=hashlib.sha256(risk_material.encode()).hexdigest(),
         prepared_at=cutoff, requested_by=requested_by,
         evidence_sha256=evidence_digest(evidence),
+        book_id=book_id, fx_provider=evidence.fx.provider,
     )
     return replace(request, preparation_seal=_preparation_mac(request))
 
@@ -327,6 +337,8 @@ def approval_material(request: SimOrderRequest, *, authorization_id: str,
         "risk_evidence_sha256": request.risk_evidence_sha256,
         "precheck_sha256": request.precheck_sha256,
         "evidence_sha256": request.evidence_sha256,
+        "book_id": request.book_id, "fx_provider": request.fx_provider,
+        "fx_usd_per_eur": str(request.fx_eur_to_usd),
         "expected_price_usd": str(request.expected_price_usd),
         "expected_cost_usd": str(request.expected_cost_usd),
         "precheck_cash_eur": str(request.precheck_cash_eur),
@@ -413,6 +425,26 @@ class SaxoSimSubmitter:
                        "broker_order_id=COALESCE(?, broker_order_id) WHERE order_key=?",
                        (status, broker_order_id, order_key))
 
+    def _require_book_capacity(self, request: SimOrderRequest) -> None:
+        """Book must be open, unfrozen, idle, and hold enough EUR allocation."""
+        store = SimJournalStore(self._db_path)
+        try:
+            store.require_tradable(request.book_id)
+        except SimAccountingError as exc:
+            raise SubmissionBlocked(str(exc)) from exc
+        with sqlite3.connect(self._db_path) as db:
+            busy = db.execute(
+                "SELECT COUNT(*) FROM saxo_execution_authorization a "
+                "LEFT JOIN broker_lifecycle l ON l.order_key = a.order_key "
+                "WHERE a.book_id = ? AND (a.status IN ('ISSUED','UNKNOWN') OR "
+                "l.status IN ('STAGED','SUBMITTING','UNKNOWN','ACKNOWLEDGED','PARTIAL'))",
+                (request.book_id,)).fetchone()[0]
+        if busy:
+            raise SubmissionBlocked("this SIM book already has an unresolved order")
+        cash = store.load_ledger().replay(request.book_id).cash_eur
+        if request.precheck_cash_eur > cash:
+            raise SubmissionBlocked("SIM book EUR allocation exceeded")
+
     def submit(self, request: SimOrderRequest, authorization: ExecutionAuthorization,
                *, now: datetime) -> str:
         """Make at most one injected attempt; network submission is opt-in only."""
@@ -453,6 +485,7 @@ class SaxoSimSubmitter:
             raise SubmissionBlocked("order evidence is stale; prepare and approve again")
         if lifecycle_state(self._db_path, request.order_key) is not None:
             raise SubmissionBlocked("order key already has a broker lifecycle")
+        self._require_book_capacity(request)
         try:
             with sqlite3.connect(self._db_path, isolation_level="IMMEDIATE") as db:
                 row = db.execute("SELECT request_sha256, status FROM saxo_execution_authorization "
@@ -464,13 +497,15 @@ class SaxoSimSubmitter:
                 db.execute("INSERT INTO saxo_execution_authorization "
                            "(authorization_id, order_key, account_id, portfolio_id, request_sha256, "
                            "broker_payload_sha256, risk_evidence_sha256, attestation, issued_by, "
-                           "expires_at, status, broker_order_id, quantity, requested_by) "
-                           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', NULL, ?, ?)",
+                           "expires_at, status, broker_order_id, quantity, requested_by, "
+                           "book_id, fx_usd_per_eur, fx_provider) "
+                           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', NULL, ?, ?, ?, ?, ?)",
                            (authorization.authorization_id, request.order_key,
                             request.account_id, request.portfolio_id, request.digest(),
                             request.broker_payload_digest(), request.risk_evidence_sha256,
                             authorization.attestation, authorization.issued_by,
-                            expiry.isoformat(), str(request.quantity), request.requested_by))
+                            expiry.isoformat(), str(request.quantity), request.requested_by,
+                            request.book_id, str(request.fx_eur_to_usd), request.fx_provider))
         except sqlite3.IntegrityError as exc:
             raise SubmissionBlocked("authorization was already consumed") from exc
         # The claim is durable before the lifecycle and the POST. A crash from

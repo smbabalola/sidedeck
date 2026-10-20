@@ -227,7 +227,7 @@ def prepared(monkeypatch, *, order_key="sofi-1", portfolio_id="tradingagents", n
              **overrides):
     kwargs = dict(order_key=order_key, portfolio_id=portfolio_id, evidence=evidence(),
                   precheck=sealed_precheck(monkeypatch), account_scope=authenticated_scope(),
-                  expected_account_id="approved", portfolio_cash_usd=Decimal("1000"), now=now,
+                  expected_account_id="approved", book_cash_eur=Decimal("1000"), now=now,
                   market_verifier=TrustedMarketVerifier())
     kwargs.update(overrides)
     return prepare_sofi_request(**kwargs)
@@ -268,6 +268,15 @@ class Timeout:
         raise TimeoutError("simulated")
 
 
+def sim_db(tmp_path, name):
+    """Disposable database with the three SIM books opened (EUR 1,000 per strategy)."""
+    from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
+    path = str(tmp_path / name)
+    SimJournalStore(path).open_books(account_id="approved", opened_at=NOW - timedelta(hours=1),
+                                     approval_ref="owner-decision-2026-10-20")
+    return path
+
+
 def auth_row(db, order_key="sofi-1"):
     with sqlite3.connect(db) as connection:
         return connection.execute("SELECT status, broker_order_id FROM saxo_execution_authorization "
@@ -277,7 +286,7 @@ def auth_row(db, order_key="sofi-1"):
 def test_submission_is_disabled_by_release_gate_even_when_everything_else_is_on(tmp_path, monkeypatch):
     request = prepared(monkeypatch)
     transport = Acknowledged()
-    submitter = SaxoSimSubmitter(str(tmp_path / "orders.sqlite"), network_enabled=True,
+    submitter = SaxoSimSubmitter(sim_db(tmp_path, "orders.sqlite"), network_enabled=True,
                                  transport=transport, approval_verifier=TrustedVerifier())
     with pytest.raises(SubmissionBlocked, match="NO-GO"):
         submitter.submit(request, approve(request), now=NOW)
@@ -289,13 +298,13 @@ def test_submission_is_disabled_and_approval_is_exactly_bound(tmp_path, monkeypa
     request = prepared(monkeypatch)
     approval = approve(request)
     with pytest.raises(SubmissionBlocked, match="disabled"):
-        SaxoSimSubmitter(str(tmp_path / "orders.sqlite"),
+        SaxoSimSubmitter(sim_db(tmp_path, "orders.sqlite"),
                          approval_verifier=TrustedVerifier()).submit(request, approval, now=NOW)
     forged = ExecutionAuthorization("x", "operator", "sidedeck-automation", "sofi-1", "wrong",
                                     "tradingagents", "SOFI", 23241352, "Buy", 1, "Market",
                                     "wrong", "wrong", "wrong", NOW + timedelta(minutes=1))
     with pytest.raises(SubmissionBlocked, match="authorization"):
-        SaxoSimSubmitter(str(tmp_path / "enabled.sqlite"), network_enabled=True,
+        SaxoSimSubmitter(sim_db(tmp_path, "enabled.sqlite"), network_enabled=True,
                          transport=Acknowledged(), approval_verifier=TrustedVerifier()).submit(
                              request, forged, now=NOW)
 
@@ -320,7 +329,7 @@ def test_self_attesting_verifier_cannot_approve_its_own_request(tmp_path, monkey
         approve(request, verifier=SelfAttesting())
     transport = Acknowledged()
     with pytest.raises(SubmissionBlocked, match="cannot authorize its own"):
-        SaxoSimSubmitter(str(tmp_path / "o.sqlite"), network_enabled=True, transport=transport,
+        SaxoSimSubmitter(sim_db(tmp_path, "o.sqlite"), network_enabled=True, transport=transport,
                          approval_verifier=SelfAttesting()).submit(request, approve(request), now=NOW)
     assert transport.calls == 0
 
@@ -349,7 +358,7 @@ def test_approval_expiry_window_and_stale_evidence_are_enforced(tmp_path, monkey
         approve(request, expires_at=NOW + timedelta(hours=1))
     with pytest.raises(SubmissionBlocked, match="expiry"):
         approve(request, expires_at=NOW)
-    submitter = SaxoSimSubmitter(str(tmp_path / "o.sqlite"), network_enabled=True,
+    submitter = SaxoSimSubmitter(sim_db(tmp_path, "o.sqlite"), network_enabled=True,
                                  transport=Acknowledged(), approval_verifier=TrustedVerifier())
     approval = approve(request, expires_at=NOW + timedelta(minutes=10))
     with pytest.raises(SubmissionBlocked, match="stale"):
@@ -398,8 +407,9 @@ def test_acknowledged_order_links_lifecycle_and_fill_posts_end_to_end(tmp_path, 
     from sidedeck.application.saxo_execution_pipeline import SaxoExecutionPipeline
     from sidedeck.domain.contracts import ExperimentManifest
 
-    db = str(tmp_path / "e2e.sqlite")
+    db = sim_db(tmp_path, "e2e.sqlite")
     request = prepared(monkeypatch)
+    assert request.book_id == "saxo-sim:tradingagents"
     transport = Acknowledged()
     submitter = SaxoSimSubmitter(db, network_enabled=True, transport=transport,
                                  approval_verifier=TrustedVerifier())
@@ -417,27 +427,32 @@ def test_acknowledged_order_links_lifecycle_and_fill_posts_end_to_end(tmp_path, 
                              external_reference="sofi-1", instrument_currency="USD",
                              account_currency="EUR", price_currency="USD", fees_currency="EUR",
                              authorized_quantity=Decimal("1"), expected_uic=23241352)
-    ledger = initialise_two_portfolios(ExperimentManifest(
+    research = initialise_two_portfolios(ExperimentManifest(
         experiment_id="p4", configuration_revision="r1", created_at=NOW,
         instruments=("US:SOFI",), data_policy="licensed"), NOW)
-    applied = SaxoExecutionPipeline(db, ledger).apply_buy_fill(
-        fills[0], order_key="sofi-1", portfolio_id="tradingagents", fx=evidence().fx,
-        account_id="approved", now=NOW)
-    assert applied.fee_usd == Decimal("0.2970")
-    assert ledger.replay("tradingagents").positions["US:SOFI"].quantity == Decimal("1")
-    assert ledger.replay("ai-trading").cash == Decimal("1000")
+    before = [research.replay(p) for p in ("tradingagents", "ai-trading")]
+    pipeline = SaxoExecutionPipeline(db)
+    applied = pipeline.apply_buy_fill(fills[0], order_key="sofi-1", account_id="approved", now=NOW)
+    assert applied.book_id == "saxo-sim:tradingagents"
+    assert applied.settlement_eur == Decimal("37.2727")      # 41 USD / 1.10, from the approval
+    assert applied.fee_eur == Decimal("0.27")
+    book = pipeline.ledger.replay("saxo-sim:tradingagents")
+    assert book.cash_eur == Decimal("1000") - Decimal("37.2727") - Decimal("0.27")
+    assert book.positions["US:SOFI"].quantity == Decimal("1")
+    assert pipeline.ledger.replay("saxo-sim:ai-trading").cash_eur == Decimal("1000")
+    assert [research.replay(p) for p in ("tradingagents", "ai-trading")] == before
     assert lifecycle_state(db, "sofi-1")[0] == "FILLED"
 
 
 def test_malformed_ack_is_uncertain_and_explicit_error_is_rejected(tmp_path, monkeypatch, released):
-    db = str(tmp_path / "ack.sqlite")
+    db = sim_db(tmp_path, "ack.sqlite")
     request = prepared(monkeypatch)
     submitter = SaxoSimSubmitter(db, network_enabled=True, transport=Acknowledged({"Status": "ok"}),
                                  approval_verifier=TrustedVerifier())
     with pytest.raises(SubmissionBlocked, match="uncertain"):
         submitter.submit(request, approve(request), now=NOW)
     assert auth_row(db)[0] == "UNKNOWN" and lifecycle_state(db, "sofi-1")[0] == "UNKNOWN"
-    second = prepared(monkeypatch, order_key="sofi-2")
+    second = prepared(monkeypatch, order_key="sofi-2", portfolio_id="ai-trading")
     rejecting = SaxoSimSubmitter(db, network_enabled=True,
                                  transport=Acknowledged({"ErrorInfo": {"ErrorCode": "X"}}),
                                  approval_verifier=TrustedVerifier())
@@ -448,18 +463,18 @@ def test_malformed_ack_is_uncertain_and_explicit_error_is_rejected(tmp_path, mon
 
 
 def test_authorization_cannot_be_reused_for_another_order(tmp_path, monkeypatch, released):
-    db = str(tmp_path / "reuse.sqlite")
+    db = sim_db(tmp_path, "reuse.sqlite")
     submitter = SaxoSimSubmitter(db, network_enabled=True, transport=Acknowledged(),
                                  approval_verifier=TrustedVerifier())
     first = prepared(monkeypatch)
     submitter.submit(first, approve(first), now=NOW)
-    second = prepared(monkeypatch, order_key="sofi-2")
+    second = prepared(monkeypatch, order_key="sofi-2", portfolio_id="ai-trading")
     with pytest.raises(SubmissionBlocked, match="already consumed"):
         submitter.submit(second, approve(second, authorization_id="approval-1"), now=NOW)
 
 
 def test_injected_sim_transport_is_single_attempt_and_uncertain(tmp_path, monkeypatch, released):
-    db = str(tmp_path / "orders.sqlite")
+    db = sim_db(tmp_path, "orders.sqlite")
     request = prepared(monkeypatch, order_key="sofi-2", portfolio_id="ai-trading")
     transport = Timeout()
     submitter = SaxoSimSubmitter(db, transport=transport, network_enabled=True,
@@ -474,7 +489,7 @@ def test_injected_sim_transport_is_single_attempt_and_uncertain(tmp_path, monkey
 
 
 def test_uncertain_order_is_reconciled_read_only_and_never_resubmitted(tmp_path, monkeypatch, released):
-    db = str(tmp_path / "reconcile.sqlite")
+    db = sim_db(tmp_path, "reconcile.sqlite")
     request = prepared(monkeypatch)
     transport = Timeout()
     with pytest.raises(SubmissionBlocked, match="uncertain"):
@@ -536,7 +551,7 @@ def test_offline_acceptance_reports_no_go_with_code_gates_passing(tmp_path, caps
     assert "P4_OFFLINE_CHECK=PASS" in out and "P4_DECISION=NO-GO" in out
     assert "SELF_APPROVAL_REJECTED=PASS" in out and "HAND_BUILT_PRECHECK_REJECTED=PASS" in out
     assert "BROKER_REQUESTS_MADE=0" in out
-    assert "SIM_ACCOUNTING_SEPARATED=MISSING" in out
+    assert "SIM_ACCOUNTING_SEPARATED=PASS" in out
     assert "TRUSTED_MARKET_VERIFIER_REGISTRY=MISSING" in out
     data = json.loads(report.read_text(encoding="utf-8"))
     assert data["decision"] == "NO-GO" and data["broker_requests_made"] == 0
@@ -655,7 +670,7 @@ def test_hand_built_scope_and_unprepared_request_are_refused(tmp_path, monkeypat
                                                     account_key="other-key"))
     request = prepared(monkeypatch)
     transport = Acknowledged()
-    submitter = SaxoSimSubmitter(str(tmp_path / "o.sqlite"), network_enabled=True,
+    submitter = SaxoSimSubmitter(sim_db(tmp_path, "o.sqlite"), network_enabled=True,
                                  transport=transport, approval_verifier=TrustedVerifier())
     unsealed = replace(request, preparation_seal="")
     with pytest.raises(SubmissionBlocked, match="production preparation"):
@@ -697,3 +712,45 @@ def test_real_operator_signature_passes_but_release_keeps_no_go(monkeypatch, tmp
                           market_verifier=TrustedMarketVerifier(), authorization=tampered,
                           allowed_signers=signers, ssh_keygen=ssh.SSH_KEYGEN)
     assert status["INDEPENDENT_OPERATOR_APPROVAL"][0] == "MISSING"
+
+
+def test_submission_is_blocked_by_frozen_busy_or_underfunded_sim_books(tmp_path, monkeypatch, released):
+    from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
+    unopened = str(tmp_path / "unopened.sqlite")
+    request = prepared(monkeypatch)
+    transport = Acknowledged()
+    with pytest.raises(SubmissionBlocked, match="not opened"):
+        SaxoSimSubmitter(unopened, network_enabled=True, transport=transport,
+                         approval_verifier=TrustedVerifier()).submit(request, approve(request), now=NOW)
+    db = sim_db(tmp_path, "gating.sqlite")
+    store = SimJournalStore(db)
+    submitter = SaxoSimSubmitter(db, network_enabled=True, transport=transport,
+                                 approval_verifier=TrustedVerifier())
+    store.freeze(("saxo-sim:tradingagents",), scope="BOOK", reason="proven mismatch", at=NOW)
+    with pytest.raises(SubmissionBlocked, match="book is frozen"):
+        submitter.submit(request, approve(request), now=NOW)
+    store.release(("saxo-sim:tradingagents",), released_by="operator")
+    store.freeze(("saxo-sim:ai-trading",), scope="ACCOUNT", reason="unexplained", at=NOW)
+    with pytest.raises(SubmissionBlocked, match="account-wide"):
+        submitter.submit(request, approve(request), now=NOW)
+    store.release(("saxo-sim:ai-trading",), released_by="operator")
+    assert transport.calls == 0
+    assert submitter.submit(request, approve(request), now=NOW) == "broker-1"
+    second = prepared(monkeypatch, order_key="sofi-3")
+    with pytest.raises(SubmissionBlocked, match="unresolved order"):
+        submitter.submit(second, approve(second, authorization_id="approval-3"), now=NOW)
+    with pytest.raises(SubmissionBlocked, match="allocation exceeded"):
+        prepared(monkeypatch, order_key="sofi-4", portfolio_id="ai-trading",
+                 book_cash_eur=Decimal("10"))
+    assert transport.calls == 1
+
+
+def test_sim_requests_bind_the_strategy_book_into_the_signed_material(monkeypatch):
+    request = prepared(monkeypatch, portfolio_id="ai-trading")
+    assert request.book_id == "saxo-sim:ai-trading" and request.fx_provider == "licensed-fx"
+    material = json.loads(approval_material(request, authorization_id="a", approver="operator",
+                                            expires_at=NOW + timedelta(minutes=5)))
+    assert material["book_id"] == "saxo-sim:ai-trading"
+    assert material["fx_usd_per_eur"] == "1.10" and material["fx_provider"] == "licensed-fx"
+    with pytest.raises(ValueError, match="strategy book"):
+        prepared(monkeypatch, portfolio_id="alpaca-paper")

@@ -85,6 +85,9 @@ values. Now:
   `test_real_operator_signature_passes_but_release_keeps_no_go` (real throwaway
   SSH key; all external gates PASS, decision still NO-GO).
 
-**SIM accounting (designed, not implemented).** See
-[`ADR-003-saxo-sim-accounting.md`](ADR-003-saxo-sim-accounting.md). The
-evaluator now reports `SIM_ACCOUNTING_SEPARATED=MISSING` until it is built.
+**SIM accounting (implemented 2026-10-20).** See
+[`ADR-003-saxo-sim-accounting.md`](ADR-003-saxo-sim-accounting.md) §8–§9.
+New tests: `tests/test_saxo_execution_pipeline.py` (rewritten, 20 tests),
+`tests/test_saxo_sim_accounting.py` (14), `tests/test_saxo_migration_0009.py` (4),
+and two submission-gating tests in `tests/test_saxo_p4_execution.py`.
+The evaluator reports `SIM_ACCOUNTING_SEPARATED=PASS`; decision `NO-GO`.

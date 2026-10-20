@@ -1,10 +1,11 @@
 # ADR-003 — Separate Saxo SIM execution accounting with per-strategy attribution
 
-**Status:** Proposed (design only, not implemented). `P4_DECISION=NO-GO`.
+**Status:** Accepted and implemented offline (2026-10-20). `P4_DECISION=NO-GO`.
 **Date:** 2026-10-20. **Branch:** `feat/p4-claude-review` (PR #4, draft).
 
-This ADR documents schema, reconciliation and migration implications *before*
-any accounting code changes, as requested by the owner.
+Implemented after owner sign-off; see §8 for the decisions and §9 for where the
+implementation differs from the original proposal. No broker call, order,
+credential use or release-switch change was made.
 
 ## 1. Context — what happens today
 
@@ -176,3 +177,53 @@ unchanged.
    verified second account).
 4. Whether SIM results should ever be reported side by side with research
    results (proposed: separate reports, never merged totals).
+
+## 8. Owner decisions (2026-10-20) — implemented
+
+| Decision | Implementation |
+|---|---|
+| EUR 1,000 per strategy book; EUR 2,000 total virtual SIM capital | `SimJournalStore.open_books` writes one `SIM_ALLOCATION` of exactly EUR 1,000 to each strategy book; the unattributed book gets none. Allocations are internal budgets, not broker transfers. |
+| No automatic top-ups | `SimLedger` refuses any second allocation ("top-ups need an owner-approved audited allocation"). No top-up path exists yet. |
+| USD 200 per-position cap | Enforced at preparation (`MAX_POSITION_COST_USD`) and again on every fill against cumulative book cost. |
+| Freeze policy | Account-wide, unexplained or incomplete evidence freezes **all** SIM books. A proven book mismatch freezes only that book when the other strategy book is independently verified against broker order evidence and the account position difference is fully explained by it. |
+| One SIM account, three logical books | `saxo-sim:tradingagents`, `saxo-sim:ai-trading`, `saxo-sim:unattributed`; all bound to one verified account. |
+| Separate reporting | `saxo_sim_report` reports per strategy book (returns, realised/unrealised P&L, fees, status) with no cross-book or cross-venue totals. |
+| Unattributed book never conceals discrepancies | It accepts only read-only `SIM_BASELINE` records; never fills, allocations or balancing entries. Reconciliation never writes journal entries. |
+| SIM failure must not freeze Alpaca | SIM freezes live only in `saxo_sim_books`; no Saxo/SIM module imports Alpaca code and `reconciliation.py` is unchanged (tested). |
+| Kill switch unchanged | `SIM_SUBMISSION_RELEASED = False`. |
+
+## 9. Implementation notes and differences from the proposal
+
+- **Modules:** `domain/sim_accounting.py` (`SimEvent`, `SimLedger`),
+  `infrastructure/saxo_sim_journal.py` (durable store), rewritten
+  `application/saxo_execution_pipeline.py` (constructor takes only `db_path`;
+  it cannot be given the research `Ledger`), `application/saxo_sim_reconciliation.py`,
+  `application/saxo_sim_report.py`, migration `0009_saxo_sim_books`.
+- **Atomic journal instead of a recovery table:** each fill is validated and
+  inserted in one `BEGIN IMMEDIATE` SQLite transaction, so there is no
+  half-posted state. `recover()` rebuilds the ledger from the hash-verified
+  journal and only advances lifecycles. `saxo_execution_recovery` therefore
+  gets **no** `book_id`; any row in it now means a legacy research-ledger fill,
+  and both the pipeline and migration `0009` refuse to run.
+- **Authorization binding:** `saxo_execution_authorization` gains `book_id`,
+  `fx_usd_per_eur` and `fx_provider`. All three come from the prepared request
+  and are part of the operator-signed approval material. Fills read them from
+  the row, never from the caller.
+- **Settlement:** fills are booked at USD price / approved EUR/USD
+  (`settlement_source = DERIVED_FX`, 4 dp). Broker-reported EUR settlement is
+  not yet available in the parsed order activity; account-level cash
+  reconciliation uses a EUR 1.00 tolerance for this reason.
+- **Event types implemented:** `SIM_ALLOCATION`, `SIM_BUY_FILL`, `SIM_BASELINE`.
+  Not implemented (no current order path produces them): sells, separate fee
+  events, and `SIM_ADJUSTMENT`. Realised P&L is therefore 0 until sells exist.
+- **Submission gating:** the submitter refuses when the books are not opened,
+  the book or account is frozen, the book has an unresolved order, or the
+  precheck EUR cash exceeds the book's remaining cash.
+- **Freeze release:** only a later reconciliation report produced by
+  `reconcile_sim_account` in the same process (sealed), with status `MATCHED`,
+  plus a named principal. Hand-built reports are refused.
+- **Downgrade:** refuses while any SIM journal entry exists, including allocations.
+- **Evaluator:** `SIM_ACCOUNTING_SEPARATED` is computed by a probe that exercises
+  the real guards (research ledger rejects `saxo:` events, `SimLedger` rejects
+  research portfolio IDs, pipeline cannot take a ledger, books open with
+  EUR 1,000 / 1,000 / 0). It reports `PASS`; the decision remains `NO-GO`.

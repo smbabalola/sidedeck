@@ -8,6 +8,7 @@ from sqlalchemy import DateTime, Engine, Integer, String, Text, UniqueConstraint
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
+from sidedeck.domain.accounting import SIM_EVENT_PREFIX
 from sidedeck.domain.contracts import IdempotencyConflict, LedgerEvent
 
 
@@ -41,6 +42,8 @@ def create_schema(engine: Engine) -> None:
 def _save_events_once(engine: Engine, pending: list[LedgerEvent]) -> None:
     with Session(engine) as session, session.begin():
         for event in pending:
+            if event.idempotency_key.startswith(SIM_EVENT_PREFIX):
+                raise ValueError("Saxo SIM executions belong to the SIM books, not research journals")
             payload = event.canonical()
             existing_by_key = session.scalar(
                 select(JournalEventRecord).where(

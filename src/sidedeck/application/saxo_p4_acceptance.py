@@ -34,6 +34,51 @@ class Gate:
     detail: str
 
 
+def _accounting_separation_probe() -> str | None:
+    """Exercise the real guards offline; return a problem description or None."""
+    import inspect
+    import tempfile
+
+    from sidedeck.application import saxo_execution_pipeline as pipeline
+    from sidedeck.domain.accounting import Ledger, fill_event
+    from sidedeck.domain.contracts import EventType
+    from sidedeck.domain.sim_accounting import (
+        INITIAL_ALLOCATION_EUR, STRATEGY_BOOKS, UNATTRIBUTED_BOOK, SimAccountingError, SimEvent,
+        SimEventType,
+    )
+    from sidedeck.infrastructure.saxo_sim_journal import SimJournalStore
+
+    now = datetime.now(timezone.utc)
+    try:
+        Ledger().append(fill_event("tradingagents", "saxo:probe", EventType.BUY_FILL, "US:SOFI",
+                                   Decimal("1"), Decimal("1"), now))
+        return "research ledger accepted a Saxo SIM event"
+    except ValueError as exc:
+        if "SIM books" not in str(exc):
+            return "research ledger lacks the Saxo SIM guard"
+    try:
+        SimEvent(book_id="tradingagents", idempotency_key="probe",
+                 event_type=SimEventType.SIM_ALLOCATION, occurred_at=now,
+                 allocation_eur=Decimal("1"), approval_ref="probe")
+        return "SIM ledger accepted a research portfolio identity"
+    except SimAccountingError:
+        pass
+    if list(inspect.signature(pipeline.SaxoExecutionPipeline.__init__).parameters) != ["self", "db_path"]:
+        return "execution pipeline accepts an external ledger"
+    if hasattr(pipeline, "Ledger") or hasattr(pipeline, "fill_event"):
+        return "execution pipeline can reach the research ledger"
+    with tempfile.TemporaryDirectory(prefix="sidedeck-sim-probe-") as work:
+        store = SimJournalStore(str(Path(work) / "probe.sqlite3"))
+        store.open_books(account_id="probe-account", opened_at=now, approval_ref="probe")
+        ledger = store.load_ledger()
+        allocations = [ledger.replay(b).allocation_eur for b in STRATEGY_BOOKS.values()]
+        if allocations != [INITIAL_ALLOCATION_EUR] * len(STRATEGY_BOOKS):
+            return "strategy books are not opened with EUR 1,000 each"
+        if ledger.replay(UNATTRIBUTED_BOOK).allocation_eur:
+            return "unattributed book received capital"
+    return None
+
+
 def _code_gates() -> list[Gate]:
     gates: list[Gate] = []
     hosts = (saxo_sim.SIM_BASE, submission.SIM_HOST, saxo_precheck._PRECHECK_URL)
@@ -77,10 +122,9 @@ def _code_gates() -> list[Gate]:
                                                  submission.TRUSTED_MARKET_VERIFIER_TYPES)
                       if submission.TRUSTED_MARKET_VERIFIER_TYPES
                       else "no authenticated quote/FX verifier is registered yet (Stage 2)"))
-    # Reporting only: SIM fills still post to the research ledgers until the
-    # separate SIM books in docs/ADR-003-saxo-sim-accounting.md are built.
-    gates.append(Gate("SIM_ACCOUNTING_SEPARATED", "MISSING",
-                      "SIM fills would post to research ledgers; ADR-003 not implemented"))
+    separation_problem = _accounting_separation_probe()
+    gates.append(Gate("SIM_ACCOUNTING_SEPARATED", "FAIL" if separation_problem else "PASS",
+                      separation_problem or "SIM books isolated from research ledgers (ADR-003)"))
     gates.append(Gate("SIM_SUBMISSION_RELEASE",
                       "FAIL" if submission.SIM_SUBMISSION_RELEASED else "DISABLED",
                       "no approved release; submission refuses before any POST"))
