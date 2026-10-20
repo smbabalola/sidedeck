@@ -2,15 +2,15 @@
 from __future__ import annotations
 import argparse
 import json
-from datetime import date
 from pathlib import Path
+from typing import Any, cast
 
 from sidedeck.application.p5_bvps_join import reconcile_bvps
 from sidedeck.application.p5_filing_disclosure_review import disclosure_review
 from sidedeck.application.p5_preferred_filing_audit import preferred_filing_audit
 
 
-def validate_bvps(coverage: dict, bvps: dict, capital: dict, companyfacts: dict) -> dict:
+def validate_bvps(coverage: dict[str, Any], bvps: dict[str, Any], capital: dict[str, Any], companyfacts: dict[str, Any]) -> dict[str, Any]:
     joined = reconcile_bvps(coverage, bvps)
     if capital.get("as_of") != joined["as_of"] or capital.get("cik") != 1818874:
         raise ValueError("capital inventory mismatch")
@@ -64,8 +64,8 @@ def main() -> int:
     out = Path(a.output)
     if out.exists():
         p.error("refusing to overwrite previous review")
-    def load(path: str) -> dict:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+    def load(path: str) -> dict[str, Any]:
+        return cast(dict[str, Any], json.loads(Path(path).read_text(encoding="utf-8")))
     report = validate_bvps(load(a.quarterly_coverage), load(a.bvps_evidence),
                            load(a.capital_inventory), load(a.companyfacts))
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
