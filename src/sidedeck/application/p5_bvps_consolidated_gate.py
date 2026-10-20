@@ -7,25 +7,26 @@ import argparse
 import json
 from datetime import date
 from pathlib import Path
+from typing import Any, cast
 
 
 class BVPSGateError(ValueError):
     pass
 
 
-def consolidate_bvps(joined: dict, accounting: dict, preferred: dict, disclosures: dict) -> dict:
+def consolidate_bvps(joined: dict[str, Any], accounting: dict[str, Any], preferred: dict[str, Any], disclosures: dict[str, Any]) -> dict[str, Any]:
     inputs = (joined, accounting, preferred, disclosures)
     if any(x.get("ticker") != "SOFI" or x.get("buffett_ready") is not False
            or x.get("broker_execution") != "DISABLED" for x in inputs):
         raise BVPSGateError("issuer or NO-GO contract mismatch")
     asof = joined.get("as_of")
-    date.fromisoformat(asof)
+    date.fromisoformat(str(asof))
     if any(x.get("as_of") != asof for x in inputs):
         raise BVPSGateError("inconsistent evidence cutoff")
     expected = joined.get("buffett_periods")
     if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
         raise BVPSGateError("invalid period count")
-    def index(payload: dict, key: str) -> dict:
+    def index(payload: dict[str, Any], key: str) -> dict[str, dict[str, Any]]:
         entries = payload.get(key)
         if not isinstance(entries, list) or len(entries) != expected:
             raise BVPSGateError("incomplete evidence history")
@@ -91,8 +92,8 @@ def main() -> int:
     out = Path(a.output)
     if out.exists():
         p.error("refusing to overwrite evidence")
-    def load(path: str) -> dict:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+    def load(path: str) -> dict[str, Any]:
+        return cast(dict[str, Any], json.loads(Path(path).read_text(encoding="utf-8")))
     result = consolidate_bvps(load(a.joined_audit), load(a.accounting_review),
                               load(a.preferred_audit), load(a.disclosure_review))
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
