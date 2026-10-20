@@ -73,7 +73,7 @@ Sources:
 - [x] `ETORO_DEMO_PORTFOLIO_READ=PASS`: this single read-only response.
 - [x] `ETORO_DEMO_POSITION_SCHEMA_OBSERVED`: four positions and explicit position IDs.
 - [ ] Full value-level cash/position accounting validation with local sensitive-data controls.
-- [ ] Read-only Demo snapshot and reconciliation adapter with full offline acceptance tests.
+- [x] Read-only Demo snapshot and reconciliation adapter with full offline acceptance tests (see [`P5_ETORO_DEMO_ADAPTER.md`](P5_ETORO_DEMO_ADAPTER.md); synthetic fixtures only).
 - [ ] Owner-approved, audited virtual capital partitioning between SideDeck strategy books.
 - [ ] Separately reviewed Demo-only order lifecycle, idempotency and explicit operator release.
 - [ ] Real-money execution remains disabled, regardless of key's possible wider permissions.
