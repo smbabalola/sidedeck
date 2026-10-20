@@ -91,16 +91,47 @@ def dashboard_summary(db_path: str, snapshot_path: str | None = None, *, now: da
             ]}
 
 
-def make_handler(db_path: str, snapshot_path: str | None = None) -> type[BaseHTTPRequestHandler]:
+def research_summary(path: str | None) -> dict[str, Any]:
+    """Return a sanitized local research-status document for the dashboard."""
+    base = {"schema_version": 1, "source": "LOCAL_RESEARCH_EVIDENCE",
+            "status": "BLOCKED", "execution_enabled": False, "agents": [],
+            "valuation": "PENDING", "broker_execution": "DISABLED"}
+    if not path:
+        return base
+    target = Path(path)
+    if not target.is_file() or target.is_symlink() or target.stat().st_size > 32768:
+        return base
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if data.get("schema_version") != 1 or data.get("execution_enabled") is not False:
+            return base
+        agents = [{"id": str(item["id"]), "status": str(item["status"]),
+                   "evidence_count": int(item.get("evidence_count", 0))}
+                  for item in data.get("agents", []) if isinstance(item, dict)
+                  and item.get("id") in ("tradingagents", "ai-trading")
+                  and item.get("status") in ("VERIFIED_OFFLINE", "BLOCKED", "NOT_RUN")
+                  and type(item.get("evidence_count", 0)) is int and item["evidence_count"] >= 0]
+        return {**base, "status": data.get("status") if data.get("status") in ("READY_OFFLINE", "BLOCKED") else "BLOCKED",
+                "agents": agents, "valuation": data.get("valuation") if data.get("valuation") in ("VALIDATED", "PENDING", "BLOCKED") else "PENDING"}
+    except (OSError, ValueError, KeyError, TypeError):
+        return base
+
+
+def make_handler(db_path: str, snapshot_path: str | None = None, research_path: str | None = None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            if (self.headers.get("Host") not in ("127.0.0.1:8765", "localhost:8765")
-                    or urlsplit(self.path).path != "/api/demo/summary"
-                    or urlsplit(self.path).query):
+            if self.headers.get("Host") not in ("127.0.0.1:8765", "localhost:8765") or urlsplit(self.path).query:
                 self.send_error(404)
                 return
             try:
-                data = dashboard_summary(db_path, snapshot_path)
+                route = urlsplit(self.path).path
+                if route == "/api/demo/summary":
+                    data = dashboard_summary(db_path, snapshot_path)
+                elif route == "/api/research/summary":
+                    data = research_summary(research_path)
+                else:
+                    self.send_error(404)
+                    return
                 payload = json.dumps(data).encode("utf-8")
                 status = 200
             except (OSError, sqlite3.Error, ValueError):
@@ -128,8 +159,9 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Local-only read-only eToro baseline summary")
     p.add_argument("--db", required=True)
     p.add_argument("--snapshot", default=None)
+    p.add_argument("--research", default=None)
     a = p.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot))
+    server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()

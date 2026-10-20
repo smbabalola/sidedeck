@@ -72,6 +72,11 @@
   file remains ignored; see `docs/M2_MSFT_FINANCIAL_RECONSTRUCTION.md`.
 - MSFT valuation: unresolved until historical price adjustment, filing-date
   price and share-basis validation are complete. No market cap or P/E emitted.
+- M2 integrated batch: offline market-data normalization, valuation admission,
+  dual-agent dry-run planning, research-only backtest analytics and sanitized
+  dashboard readiness endpoint implemented; see
+  `docs/M2_INTEGRATED_BATCH.md`. Live providers, model calls and broker
+  execution remain blocked.
 - Local verification: `409 passed, 1 skipped, 3 warnings`; Ruff passed;
   mypy passed across 92 source files; frontend build passed; disposable
   SQLite Alembic upgrade/downgrade passed.

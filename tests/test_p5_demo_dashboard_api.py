@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sidedeck.application.p5_demo_dashboard_api import baseline_summary, dashboard_summary
+from sidedeck.application.p5_demo_dashboard_api import baseline_summary, dashboard_summary, research_summary
 
 
 def test_read_only_saved_baseline_summary(tmp_path):
@@ -53,3 +53,16 @@ def test_missing_database_is_not_created(tmp_path):
     with pytest.raises(FileNotFoundError):
         baseline_summary(str(path))
     assert not path.exists()
+
+
+def test_research_summary_is_sanitized_and_fail_closed(tmp_path):
+    path = tmp_path / "research.json"
+    path.write_text('{"schema_version":1,"execution_enabled":false,"status":"READY_OFFLINE",'
+                    '"valuation":"PENDING","agents":[{"id":"tradingagents",'
+                    '"status":"VERIFIED_OFFLINE","evidence_count":2}],"api_key":"secret"}',
+                    encoding="utf-8")
+    result = research_summary(str(path))
+    assert result["status"] == "READY_OFFLINE"
+    assert result["agents"] == [{"id": "tradingagents", "status": "VERIFIED_OFFLINE", "evidence_count": 2}]
+    assert "api_key" not in result and "secret" not in str(result)
+    assert research_summary(str(tmp_path / "missing.json"))["status"] == "BLOCKED"

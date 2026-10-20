@@ -3,6 +3,7 @@ import { Activity, ArrowUpRight, BarChart3, Bot, BrainCircuit, CircleAlert, Circ
 import "./index.css";
 
 type Book = { id: string; title: string; positions: number; pnlStatus: "AVAILABLE" | "UNAVAILABLE"; allocation: string; description: string };
+type ResearchStatus = { status: "READY_OFFLINE" | "BLOCKED"; valuation: "VALIDATED" | "PENDING" | "BLOCKED"; agents: { id: string; status: string; evidence_count: number }[]; execution_enabled: false };
 const initialBooks: Book[] = [
   { id: "tradingagents", title: "TradingAgents", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
   { id: "ai-trading", title: "AI-Trading", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
@@ -20,6 +21,7 @@ export default function App() {
   useEffect(() => { const timer = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const [summary, setSummary] = useState<{ protected_positions: number | null; captured_at: string | null; books: {id: string; positions: number | null}[]; fresh_snapshot?: { observed_at: string; reconciliation_status: string; discrepancy_count: number | null; available_cash_usd_status: string; books: {id: string; positions: number | null}[] } | null } | null>(null);
   const [apiError, setApiError] = useState(false);
+  const [research, setResearch] = useState<ResearchStatus | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/demo/summary", { signal: controller.signal, cache: "no-store" })
@@ -30,6 +32,12 @@ export default function App() {
       })
       .catch(() => { if (!controller.signal.aborted) setApiError(true); });
     return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    fetch("/api/research/summary", { cache: "no-store" })
+      .then(response => response.ok ? response.json() : Promise.reject())
+      .then(data => setResearch(data))
+      .catch(() => setResearch({ status: "BLOCKED", valuation: "PENDING", agents: [], execution_enabled: false }));
   }, []);
   const observed = summary?.fresh_snapshot ? Date.parse(summary.fresh_snapshot.observed_at) : NaN;
   const fresh = Number.isFinite(observed) && clock >= observed && clock - observed <= 300000 ? summary?.fresh_snapshot : null;
@@ -42,8 +50,8 @@ export default function App() {
         <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-ink"><BarChart3 size={23}/></div><div><div className="text-xl font-bold tracking-tight">SideDeck</div><div className="text-xs text-slate-500">Research workstation</div></div></div>
         <div className="mt-12 space-y-2">
           <div className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent/10 px-4 py-3 text-sm font-semibold text-accent"><LayoutDashboard size={17}/> Demo portfolio</div>
-          <div className="flex items-center gap-3 px-4 py-3 text-sm text-slate-500"><Activity size={17}/> Strategy analytics <span className="ml-auto text-[10px] uppercase">Soon</span></div>
-          <div className="flex items-center gap-3 px-4 py-3 text-sm text-slate-500"><Database size={17}/> Evidence center <span className="ml-auto text-[10px] uppercase">Soon</span></div>
+          <div className="flex items-center gap-3 px-4 py-3 text-sm text-slate-400"><Activity size={17}/> Strategy analytics <span className="ml-auto text-[10px] uppercase">Local</span></div>
+          <div className="flex items-center gap-3 px-4 py-3 text-sm text-slate-400"><Database size={17}/> Evidence center <span className="ml-auto text-[10px] uppercase">Local</span></div>
         </div>
         <div className="mt-auto rounded-xl border border-slate-700 bg-raised p-4"><div className="flex items-center gap-2 text-sm text-emerald-300"><ShieldCheck size={16}/> Execution locked</div><p className="mt-2 text-xs leading-5 text-slate-400">All broker order submission remains disabled. This screen contains no broker connectivity.</p></div>
       </aside>
@@ -53,6 +61,7 @@ export default function App() {
           <div className="flex flex-wrap gap-2"><StatusPill positive><CircleCheck size={13}/> {fresh ? "Fresh Demo snapshot" : "Saved baseline only"}</StatusPill><StatusPill><LockKeyhole size={13}/> Read-only</StatusPill></div>
         </header>
         <div className="mt-7 flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-sm text-amber-100"><CircleAlert size={18} className="mt-0.5 shrink-0 text-amber-300"/><p><strong>Local baseline, not live.</strong> {apiError ? "Backend unavailable. Start the local SideDeck service." : summary ? `Baseline captured ${summary.captured_at ?? "at an unknown time"}.` : "Loading baseline metadata."} {fresh ? `Fresh owner-authorized snapshot ${fresh.observed_at}. Reconciliation: ${fresh.reconciliation_status}.` : "No recent authorized snapshot. Current portfolio reconciliation, cash and P&L are unavailable."}</p></div>
+        <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">M2 research readiness</h2><p className="mt-1 text-sm text-slate-400">Offline evidence only; provider calls and broker execution remain disabled.</p></div><StatusPill positive={research?.status === "READY_OFFLINE"}><ShieldCheck size={13}/> {research?.status ?? "LOADING"}</StatusPill></div><div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">TradingAgents</p><p className="mt-2 font-semibold">{research?.agents.find(a => a.id === "tradingagents")?.status ?? "NOT RUN"}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">BuffettAgent</p><p className="mt-2 font-semibold">{research?.agents.find(a => a.id === "ai-trading")?.status ?? "NOT RUN"}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Valuation</p><p className="mt-2 font-semibold text-amber-300">{research?.valuation ?? "PENDING"}</p></div></div></section>
         <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Stat title="Protected positions" value={summary?.protected_positions?.toString() ?? "—"} detail="Saved holdings · unattributed" icon={ShieldCheck}/>
           <Stat title="Strategy positions" value={fresh ? String((fresh.books[0]?.positions ?? 0) + (fresh.books[1]?.positions ?? 0)) : "—"} detail={fresh ? "Owner-authorized snapshot" : "Current positions unavailable"} icon={BrainCircuit}/>
