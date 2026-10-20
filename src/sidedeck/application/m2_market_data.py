@@ -104,13 +104,13 @@ def normalize_daily_bars(payload: dict[str, Any], *, cutoff: datetime) -> tuple[
 
 
 def admit_valuation(*, eps: Decimal, shares: Decimal, bar: NormalizedBar,
-                    market_report: dict[str, Any], shares_filed: date, cutoff: date) -> dict[str, Any]:
+                    market_report: dict[str, Any], shares_filed: date, cutoff: date,\n                    independent_close_verified: bool = False,\n                    corporate_actions_verified: bool = False,\n                    share_price_basis_verified: bool = False) -> dict[str, Any]:
     """Admit one market-cap/P-E observation only after all evidence gates pass."""
-    if market_report.get("status") != "READY" or market_report.get("conflicts") or market_report.get("gaps"):
+    if not (independent_close_verified and corporate_actions_verified\n            and share_price_basis_verified):\n        raise MarketDataError("independent closing-price, corporate-action and share-basis proof required")\n    if market_report.get("status") != "READY" or market_report.get("conflicts") or market_report.get("gaps"):
         raise MarketDataError("market evidence is not ready for valuation")
     if bar.currency != "USD" or bar.adjustment != "split_adjusted" or bar.session != "REGULAR":
         raise MarketDataError("valuation requires USD regular split-adjusted evidence")
-    if shares_filed > bar.trading_date or bar.trading_date > cutoff or eps <= 0 or shares <= 0:
+    if (not eps.is_finite() or not shares.is_finite() or shares_filed > bar.trading_date\n            or bar.trading_date > cutoff or eps <= 0 or shares <= 0):
         raise MarketDataError("valuation evidence is not point-in-time valid")
     market_cap = bar.close * shares
     return {"price_date": bar.trading_date.isoformat(), "close_usd": str(bar.close),
