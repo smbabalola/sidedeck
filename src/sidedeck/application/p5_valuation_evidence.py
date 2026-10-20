@@ -54,8 +54,9 @@ def valuation_evidence_report(fundamentals: dict[str, Any], prices: dict[str, An
                 or isinstance(value, bool) or not isinstance(value, (int, float))
                 or not math.isfinite(value)):
             raise PriceEvidenceError("unverified or future SEC EPS evidence")
-        day = next((d for i in range(4) if (d := filed + timedelta(days=i)) in bars), None)
-        if day is None:
+        price_day: date | None = next((filed + timedelta(days=i) for i in range(4)
+                                      if filed + timedelta(days=i) in bars), None)
+        if price_day is None:
             status = "PRICE_WINDOW_UNAVAILABLE"
         elif value <= 0:
             status = "P_E_NOT_MEANINGFUL"
@@ -64,9 +65,9 @@ def valuation_evidence_report(fundamentals: dict[str, Any], prices: dict[str, An
         evidence = {
             "eps_period": period.isoformat(), "eps_filed": filed.isoformat(),
             "eps": value, "eps_source": source, "status": status,
-            "price_date": day.isoformat() if day else None,
-            "price_close": bars[day]["close"] if day else None,
-            "price_source_id": bars[day]["source_id"] if day else None,
+            "price_date": price_day.isoformat() if price_day else None,
+            "price_close": bars[price_day]["close"] if price_day else None,
+            "price_source_id": bars[price_day]["source_id"] if price_day else None,
         }
         # Do not produce a numeric P/E until independently attested share
         # adjustment, release timing, and price provenance are available.
