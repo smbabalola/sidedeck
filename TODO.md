@@ -17,7 +17,10 @@
 ## Verification
 
 - Branch: `feat/p5-agent-adapters`
-- Latest local commit: pending final verification and push.
+- Latest local commit: `d9a78fb561ee6b428bf4fe5641fa6b5dea68a834` (pushed to
+  `origin/feat/p5-agent-adapters`).
+- CI baseline: GitHub Actions run `39421932813` passed before this offline
+  verification batch; no live-research workflow was triggered.
 - TradingAgents: import/signature verified; graph execution not attempted.
 - AI Hedge Fund: Buffett v2 import/signature verified; execution blocked by
   missing model and Financial Datasets credentials; no call attempted.
