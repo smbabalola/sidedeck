@@ -27,6 +27,7 @@ class MsftValuationEvidence:
     shares_outstanding: Decimal
     shares_as_of: date
     price_tolerance_bps: Decimal = Decimal("1")
+    share_basis: str = "actual_outstanding"
 
 
 def admit_msft_valuation(evidence: MsftValuationEvidence) -> dict[str, str]:
@@ -45,6 +46,8 @@ def admit_msft_valuation(evidence: MsftValuationEvidence) -> dict[str, str]:
         raise ValuationEvidenceError("split-adjusted closing basis is required")
     if evidence.corporate_actions_status != "VERIFIED":
         raise ValuationEvidenceError("corporate actions are not verified")
+    if evidence.share_basis != "actual_outstanding":
+        raise ValuationEvidenceError("actual outstanding share basis is required")
     if not evidence.eps_source or not evidence.shares_as_of <= cutoff.date():
         raise ValuationEvidenceError("filing-dated EPS/share evidence is incomplete")
     values = (evidence.close_source_a, evidence.close_source_b, evidence.diluted_eps,

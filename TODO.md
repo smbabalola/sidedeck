@@ -11,7 +11,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-001 | P0 | VERIFIED | deps: none | Backtest correctness independent audit.** Next-observation signal timing is explicit, costs reject nonfinite/portfolio-consuming values, trade ledger records signal/execution dates and the returned path is marked independently checked. **Evidence:** `src/sidedeck/application/m2_backtest.py`; `tests/test_m2_backtest_chronology.py`; Batch A CI.
 - [x] **SD-002 | P0 | VERIFIED | deps: none | Research spending/identity security hardening.** Provider authorization is a 15-minute, single-run, single-use lease with finite USD/call caps and replay prevention; subprocess allowlisting remains broker-secret free. **Evidence:** `src/sidedeck/application/m2_research_run.py`, `src/sidedeck/application/ai_agents.py`, `tests/test_m2_model_budget_gate.py`, Batch A CI.
 - [x] **SD-003 | P0 | VERIFIED | deps: none | Historical-price evidence inventory and offline importers.** Normalized evidence now enforces approved instrument/exchange identity and independently compares common closes without admitting conflicts. eToro entitlement and genuine MSFT history remain NOT_VERIFIED. **Evidence:** `src/sidedeck/application/m2_market_data.py`, `docs/M2_ETORO_MARKET_DATA_ENDPOINT_MATRIX.md`, Batch A CI.
-- [ ] **SD-004 | P0 | BLOCKED_EXTERNAL | deps: SD-003 | MSFT genuine valuation admission.** `ALPACA_SIP_ACQUIRED` and `CALENDAR_VERIFIED` partial milestones: one authorized HTTP 200, 59 MSFT SIP split-adjusted daily bars, 2026-07-29 through 2026-10-20, one-page response, SHA-256 manifest in ignored local data; official Nasdaq 2026 calendar reconciles all 59 sessions and excludes 2026-09-07. Official SEC records match accessions `0001193125-26-323632` (8-K, accepted 2026-07-29 16:04:53 ET) and `0001193125-26-323660` (10-K, accepted 2026-07-29 16:08:01 ET); first eligible close is 2026-07-30. **Accept:** genuine dated evidence with reproducible market-cap/P-E audit, or still NO-GO with precise missing proof. **Blocker:** independent corroboration, corporate-action verification and share-basis compatibility remain unavailable; Yahoo is rate-limited/unverified and public Nasdaq Data Link entitlement/licensing is unverified. *Do not assert valuation from one source or fixtures*.
+- [ ] **SD-004 | P0 | BLOCKED_EXTERNAL | deps: SD-003 | MSFT genuine valuation admission.** `ALPACA_SIP_ACQUIRED`, `CALENDAR_VERIFIED`, `CORPORATE_ACTIONS_VERIFIED` and `SHARE_BASIS_VERIFIED` milestones: one authorized HTTP 200, 59 MSFT SIP split-adjusted daily bars, 2026-07-29 through 2026-10-20, one-page response, SHA-256 manifest in ignored local data; official Nasdaq 2026 calendar reconciles all 59 sessions and excludes 2026-09-07. Official SEC records match accessions `0001193125-26-323632` (8-K, accepted 2026-07-29 16:04:53 ET) and `0001193125-26-323660` (10-K, accepted 2026-07-29 16:08:01 ET); first eligible close is 2026-07-30. **Accept:** genuine dated evidence with reproducible market-cap/P-E audit, or still NO-GO with precise missing proof. **Blocker:** complete independent 59-row corroboration remains unavailable; Quiver displays a partial public history but its current coverage stops before 2026-10-20 and terms restrict redistribution/product use; Yahoo is rate-limited/unverified. *Do not assert valuation from one source or fixtures*.
 - [x] **SD-005 | P1 | VERIFIED | deps: none | MSFT accounting integration and research-input manifest.** Existing MSFT reconstruction remains 2026-06-30 `10/12`, with eight fully reconciled non-valuation periods; new hash-only input manifest preserves cutoff/source lineage and explicitly blocks valuation. **Evidence:** `docs/M2_MSFT_FINANCIAL_RECONSTRUCTION.md`, `src/sidedeck/application/p5_research_manifest.py`, `tests/test_p5_research_manifest.py`.
 - [x] **SD-006 | P1 | VERIFIED | deps: SD-001 | Backtest strategy robustness and OOS acceptance.** Added same-observation buy-and-hold benchmark and finite fee/slippage sensitivity grid with locked OOS counts; robustness remains `NOT_ASSESSED` and no fixture profitability claim is emitted. **Evidence:** `src/sidedeck/application/m2_backtest.py`, `tests/test_m2_integrated_batch.py`.
 - [x] **SD-007 | P1 | VERIFIED | deps: SD-002, SD-005 | Real dual-agent dry-run acceptance harness.** Offline pair acceptance remains lineage/cutoff/provenance/abstention fail-closed; launcher now records `tradingagents==0.7.0` and the verified `aihf` git identity. No model/provider call was made. **Evidence:** `src/sidedeck/application/p5_agents.py`, `src/sidedeck/application/p5_research_pair_acceptance.py`, `tests/test_p5_agents.py`, `tests/test_p5_research_pair_acceptance.py`.
@@ -82,6 +82,27 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   retain SD-004's valuation block until independent price/corporate-action/
   share-basis proof exists. No owner approval is currently required for that
   offline work.
+
+**Batch F (in progress; SD-004 Phase 4 corporate actions/share basis) — 2026-10-21**
+
+- Added `p5_msft_corporate_actions.py` and regression tests: no MSFT split
+  occurs in the Jul 29-Oct 20 window; latest official split is 2-for-1 on
+  2003-02-18; the official $0.91 dividend has 2026-08-20 ex-date. Split-
+  adjusted close and dividend-excluded close are kept distinct.
+- Added `p5_msft_share_basis.py`: actual common shares outstanding are
+  7,425,545,491 measured 2026-07-23; FY26 basic/diluted weighted averages are
+  7,429m/7,453m and diluted EPS is $17.95. Valuation admission now explicitly
+  rejects a diluted weighted-average denominator as actual shares.
+- Investigated Quiver's public historical table as an independent candidate.
+  It displays Close separately from Adj. Close, but does not provide complete
+  reproducible coverage through Alpaca's 2026-10-20 endpoint in the public
+  page, and its terms restrict redistribution/product use. No export or Yahoo
+  data was acquired. Independent comparison remains `BLOCKED_EXTERNAL`.
+- No authenticated request, paid dataset/model call, credential read,
+  account/order endpoint, eToro request, or trading action was performed.
+- Focused Phase 4 tests: 11 passed. Full verification and exact CI are
+  pending. Next action: finish engineering verification, then advance to
+  independent strategy-testing work while retaining SD-004's block.
 
 **Decision record:** MSFT is the first *candidate*, not an approved trade; SOFI is a second sector-specific case. SOFI borrowings-excluding-deposits is supplementary audit only; no generic Buffett D/E approval. No Financial Datasets subscription is required for locally supplied Buffett SEC inputs. Price/valuation remain NO-GO until proved.
 

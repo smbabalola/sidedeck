@@ -48,11 +48,29 @@ accession lineage: 8-K `0001193125-26-323632` was accepted at 16:04:53 ET on
 are after the 16:00 ET close, so the first eligible valuation close is
 2026-07-30; 2026-07-29 is rejected for look-ahead.
 
-Yahoo MSFT history remains an independent candidate, not evidence. Its public
-history page was rate-limited during research and no CSV was acquired. The
-offline owner-supplied parser uses `Close`, never `Adj Close`, and keeps
-provenance and adjustment status unverified until a lawful export and
-corporate-action basis are supplied. No market cap or P/E is emitted.
+## Phase 4 evidence reconciliation
+
+The SEC 10-K identifies one common stock class listed on Nasdaq and reports
+7,425,545,491 actual common shares outstanding as of 2026-07-23. FY26 diluted
+weighted-average shares are 7,453 million, basic weighted-average shares are
+7,429 million, and FY26 diluted EPS is $17.95. The implementation now carries
+an explicit `actual_outstanding` share-basis requirement and rejects diluted
+weighted-average shares as a substitute.
+
+Microsoft's official history reports the latest split as a 2-for-1 effective
+2003-02-18, and its June 2026 dividend release records a $0.91 dividend
+with an 2026-08-20 ex-dividend date. There is no split in the Jul 29-Oct 20
+window. The SIP `adjustment=split` series is therefore compatible with the
+split basis, but dividend adjustment is not part of a closing-price valuation.
+
+Quiver's public MSFT history page displays `Close` and `Adj. Close` separately
+and shows the 2026 window's rows, but the page currently stops before the
+Alpaca series' final 2026-10-20 observation. Its terms permit personal,
+non-commercial use but restrict redistribution and commercial/product use.
+No export was acquired or committed. The source is therefore an independent
+candidate only, not complete reproducible corroboration for SideDeck's 59-row
+audit. Yahoo remains rate-limited and unverified. No market cap or P/E is
+emitted.
 
 ## Admission rules
 
@@ -71,8 +89,8 @@ market evidence.
 
 ## Remaining blocker and next action
 
-Independent corroborated MSFT prices, publication-time evidence, corporate
-action validation and share-basis compatibility remain unavailable. SD-004
-therefore remains `BLOCKED_EXTERNAL`; do not mark it verified from the single
-Alpaca source or fixture adapters. No further authenticated request is
-authorized by this phase.
+Independent complete MSFT prices remain unavailable for a reproducible 59-row
+comparison. Corporate-action and actual-share basis are now verified, while
+independent price corroboration is `BLOCKED_EXTERNAL`; do not mark SD-004
+verified or emit valuation from a partial/proprietary display or fixtures. No
+further authenticated request is authorized by this phase.
