@@ -139,9 +139,9 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   `BLOCKED_OWNER`. Meaningful safe implementation work is exhausted at this
   boundary; next action is a new independent evidence or owner-authorization
   decision, not another authenticated request.
-- Exact-head GitHub CI `39590562086` passed on
-  `e2640ebbe4a45085b0a1ac8f3527e66598aa4899`:
-  https://github.com/smbabalola/sidedeck/actions/runs/39590562086. CI emitted
+- Exact-head GitHub CI `39590894464` passed on
+  `2e007911f7cd1b1aa2c520210fd4e1abb8994a4b`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39590894464. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
