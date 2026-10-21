@@ -21,12 +21,12 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [ ] **SD-011 | P1 | BLOCKED_OWNER | deps: SD-001, SD-002, SD-006, SD-008, SD-009, SD-010 | Paper/demo order release and capital assignment.** Separate broker/environment-specific consent, authenticated read-only funds check, protected baseline, risk cap, order/fill/position/exit attribution, idempotency, kill switch. **Accept:** independent audited human approval and controlled scoped release. **Blocker:** no owner order-release authorization. P4 remains NO-GO and eToro original positions untouchable.
 - [x] **SD-012 | P2 | VERIFIED | deps: SD-009, SD-010 | Operator runbooks and recovery.** `docs/OPERATOR_RUNBOOK.md` documents loopback startup, verification, disposable migration recovery, backup/restore precautions, outage handling, privacy and release stops. **Evidence:** Batch C docs review and existing replay/migration tests.
 - [ ] **SD-013 | P2 | BLOCKED_OWNER | deps: SD-011, SD-012 | Controlled paper soak and formal MVP release.** **Accept:** documented minimum one-month demo observation, metric thresholds, approval record and no serious unresolved incidents. **Blocker:** owner has not released paper execution; no real money.
-- [x] **SD-014 | P1 | IMPLEMENTED | deps: SD-001, SD-003 | Deterministic strategy catalogue.** Four versioned proposal-only strategies expose parameter, holding-period and next-observation execution contracts. **Evidence:** `src/sidedeck/application/sd014_strategy_engine.py`; `tests/test_sd014_strategy_engine.py`.
-- [x] **SD-015 | P1 | IMPLEMENTED | deps: SD-003, SD-004 | Genuine historical-data boundary.** Reusable normalized-bar conversion preserves caller provenance; the 59-session MSFT SIP bundle is classified `INSUFFICIENT_DATA`, not profitability evidence. **Evidence:** `docs/SD014_STRATEGY_VALIDATION.md`; local ignored SIP manifest.
-- [x] **SD-016 | P1 | IMPLEMENTED | deps: SD-014, SD-015 | Chronological robustness machinery.** Parameter surfaces, in-sample-only selection, locked OOS boundary, embargo configuration, walk-forward windows and fee/slippage controls are deterministic and tested. **Evidence:** `sd014_strategy_engine.py`; `test_sd014_strategy_engine.py`.
-- [x] **SD-017 | P1 | IMPLEMENTED | deps: SD-016 | Proposal portfolio simulation.** Equal weights, exposure/correlation controls, attribution and configurable drawdown kill-switch simulation are implemented without order or broker paths. **Evidence:** `sd014_strategy_engine.py`; `test_sd014_strategy_engine.py`.
-- [x] **SD-018 | P1 | IMPLEMENTED | deps: SD-016, SD-017 | Acceptance framework.** Reports annualized return, drawdown, profit factor, Sharpe, win rate, exposure, OOS counts and explicit acceptance status; minimum-data gates remain fail-closed. **Evidence:** `sd014_strategy_engine.py`; `docs/SD014_STRATEGY_VALIDATION.md`.
-- [x] **SD-019 | P2 | IMPLEMENTED | deps: SD-014, SD-018 | Dashboard catalogue surface.** Read-only strategy metadata and acceptance status are exposed through a sanitized loopback endpoint and React view; no simulated broker holdings are implied. **Evidence:** `p5_demo_dashboard_api.py`, `web/src/App.tsx`, dashboard tests.
+- [x] **SD-014 | P1 | VERIFIED | deps: SD-001, SD-003 | Deterministic strategy catalogue.** Four versioned proposal-only strategies expose parameter, holding-period and next-observation execution contracts. **Evidence:** `src/sidedeck/application/sd014_strategy_engine.py`; `tests/test_sd014_strategy_engine.py`; Batch G CI.
+- [x] **SD-015 | P1 | VERIFIED | deps: SD-003, SD-004 | Genuine historical-data boundary.** Reusable normalized-bar conversion preserves caller provenance; the 59-session MSFT SIP bundle is classified `INSUFFICIENT_DATA`, not profitability evidence. **Evidence:** `docs/SD014_STRATEGY_VALIDATION.md`; local ignored SIP manifest; Batch G CI.
+- [x] **SD-016 | P1 | VERIFIED | deps: SD-014, SD-015 | Chronological robustness machinery.** Parameter surfaces, in-sample-only selection, locked OOS boundary, embargo configuration, walk-forward windows and fee/slippage controls are deterministic and tested. **Evidence:** `sd014_strategy_engine.py`; `test_sd014_strategy_engine.py`; Batch G CI.
+- [x] **SD-017 | P1 | VERIFIED | deps: SD-016 | Proposal portfolio simulation.** Equal weights, exposure/correlation controls, attribution and configurable drawdown kill-switch simulation are implemented without order or broker paths. **Evidence:** `sd014_strategy_engine.py`; `test_sd014_strategy_engine.py`; Batch G CI.
+- [x] **SD-018 | P1 | VERIFIED | deps: SD-016, SD-017 | Acceptance framework.** Reports annualized return, drawdown, profit factor, Sharpe, win rate, exposure, OOS counts and explicit acceptance status; minimum-data gates remain fail-closed. **Evidence:** `sd014_strategy_engine.py`; `docs/SD014_STRATEGY_VALIDATION.md`; Batch G CI.
+- [x] **SD-019 | P2 | VERIFIED | deps: SD-014, SD-018 | Dashboard catalogue surface.** Read-only strategy metadata and acceptance status are exposed through a sanitized loopback endpoint and React view; no simulated broker holdings are implied. **Evidence:** `p5_demo_dashboard_api.py`, `web/src/App.tsx`, dashboard tests; Batch G CI.
 
 ## Session control and next autonomous batch
 
@@ -88,6 +88,34 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   retain SD-004's valuation block until independent price/corporate-action/
   share-basis proof exists. No owner approval is currently required for that
   offline work.
+
+**Batch G (verified; SD-014–SD-019 real-data strategy engine) — 2026-10-21**
+
+- Implemented and tested the four-strategy catalogue, reusable normalized-bar
+  boundary, chronological 80/20 selection with locked OOS, embargo and
+  walk-forward evaluation, fee/slippage sensitivity, parameter surfaces,
+  acceptance statuses, equal-risk proposal portfolio simulation, correlation
+  controls, attribution and configurable drawdown kill-switch simulation.
+- Added the sanitized strategy-catalogue API and dashboard surface. It shows
+  metadata and acceptance state only; it cannot create positions, orders,
+  balances or broker state.
+- Existing ignored MSFT SIP evidence was processed offline: 59 observations;
+  channel mean reversion 0 trades, liquidity-sweep reversal 0 trades,
+  moving-average trend 1 trade and buy-and-hold 1 trade. All four are
+  `INSUFFICIENT_DATA`; no genuine profitability or five-year claim was made.
+- Full local verification: 554 passed, 1 skipped, 3 warnings; Ruff passed;
+  mypy passed across 114 source files; SQLite Alembic upgrade and frontend
+  production build passed. Exact-HEAD GitHub CI `39576134538` passed on
+  `a5c6e8f11dbf89e62b1f3396b88eeb3cbd1dccdd`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39576134538. CI emitted
+  only Node 20 and ubuntu-latest migration warnings.
+- No authenticated data request, paid data/model call, credential read,
+  account/portfolio endpoint, eToro request, paper order, real order or
+  production release occurred. SD-004, SD-008, SD-011 and SD-013 retain their
+  existing external/owner blockers.
+- Next batch: apply the engine to a lawful multi-year owner-supplied dataset
+  or continue independent strategy-testing infrastructure; 59 sessions remain
+  correctness evidence only.
 
 **Batch F (verified; SD-004 Phase 4 corporate actions/share basis) — 2026-10-21**
 
