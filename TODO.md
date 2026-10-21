@@ -203,6 +203,10 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   `a79b726ad6f92fbf45bc7dcc0ddd1d5e2faa1d89`:
   https://github.com/smbabalola/sidedeck/actions/runs/39595852824. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
+- Final evidence-alignment commit: `6aca8995b482da82991b81494971c92540b51775`;
+  exact-head GitHub CI `39596052580` passed:
+  https://github.com/smbabalola/sidedeck/actions/runs/39596052580. CI emitted
+  only the existing Node 20 and ubuntu-latest migration warnings.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
