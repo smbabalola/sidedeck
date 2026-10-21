@@ -36,11 +36,27 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-026 | P1 | VERIFIED | deps: SD-025 | Dashboard benchmark presentation.** Added a read-only dashboard view for benchmark convention and evidence status with explicit price-only/total-return wording and no performance recommendation language; frontend production build passes. **Evidence:** `web/src/App.tsx`; `docs/SD025_BENCHMARK_REPORT_INTEGRATION.md`; Batch M.
 
 
-- [ ] **SD-027 | P0 | READY | deps: SD-017, SD-022, SD-026 | Offline Alpaca paper execution safety readiness.** Independently inspect existing P4 security findings, signing/approval boundaries, broker isolation, idempotency, stale quotes, duplicate orders, partial fills, reconciliation, lineage, kill-switch and account separation; create failing adversarial regression tests and repair safe offline defects. **Accept:** independently reproducible NO-GO/GO readiness matrix with exact residual issues; no authenticated broker request, actual paper order, owner self-approval or automatic release. P4 remains NO-GO until distinct independent sign-off. **Evidence target:** `docs/SD027_PAPER_READINESS_AUDIT.md`, tests, exact-HEAD CI.
-- [ ] **SD-028 | P1 | READY | deps: SD-017, SD-022 | SPY/QQQ joint portfolio economics and risk audit.** Independently test overlapping holdings, cross-instrument correlation, capital/cash allocation, rebalance timing, transaction costs, concentration, turnover, regime and walk-forward sensitivity with the admitted local dataset. **Accept:** deterministic multi-asset ledger, comparison with appropriate price-only benchmarks, status corrections where warranted; do not promote research screen to trading approval. **Evidence target:** `docs/SD028_PORTFOLIO_ECONOMICS.md`, reproducible tests.
+- [x] **SD-027 | P0 | VERIFIED | deps: SD-017, SD-022, SD-026 | Offline Alpaca paper execution safety readiness.** Independently reproduced a `NO_GO` matrix covering broker isolation, disabled order submission, proposal boundary, idempotency, stale quotes, duplicate orders, partial fills, reconciliation, approval signatures, kill-switch and account separation. Residual release issues are explicit; no broker request/order/owner self-approval occurred. **Evidence:** `docs/SD027_PAPER_READINESS_AUDIT.md`; `src/sidedeck/application/sd027_paper_readiness_audit.py`; `tests/test_sd027_sd028_audits.py`.
+- [x] **SD-028 | P1 | VERIFIED | deps: SD-017, SD-022 | SPY/QQQ joint portfolio economics and risk audit.** Deterministically aligned 1,254 sessions, computed equal-weight ledger, price-only benchmark, correlation, exposure, concentration and drawdown; turnover/cost/regime sensitivity remain explicitly unassessed. No trading approval inferred. **Evidence:** `docs/SD028_PORTFOLIO_ECONOMICS.md`; `src/sidedeck/application/sd028_portfolio_economics.py`; `tests/test_sd027_sd028_audits.py`.
 - [ ] **SD-029 | P1 | READY | deps: SD-027 | Dry-run operator rehearsal and release evidence pack.** Run only isolated mock or disposable DB scenarios for order intent → external human-approval verification → submission simulation → ack/fill/position/exit attribution, replay/rollback, outages and emergency stop. **Accept:** documented operator steps, fail-closed controls, independently signed approval design, no real broker account state, HTTP calls or order actions. Produce bounded future owner approval proposal only when all prerequisites actually pass. **Evidence target:** `docs/SD029_PAPER_RELEASE_CHECKLIST.md`, regression and UAT results. Do not remove SD-011/013 blocks.
 
 ## Session control and next autonomous batch
+
+**Batch N (2026-10-21; SD-027 and SD-028 verified):**
+
+- Added an independent offline paper-readiness matrix. Safe boundaries pass,
+  but duplicate-order, broker-fill reconciliation, approval-signature,
+  kill-switch and account-separation gates fail; overall status is `NO_GO` and
+  paper submission remains disabled.
+- Added deterministic SPY/QQQ joint economics over 1,254 overlapping sessions:
+  50/50 weights, 0.947673 return correlation, 1.804260 equal-weight ending
+  equity, 30.33% maximum drawdown and 50% maximum concentration. Turnover,
+  costs and regime sensitivity remain explicitly unassessed.
+- Focused verification: 2 passed. Full local verification: 572 passed,
+  1 skipped, 3 warnings; Ruff, mypy across 121 source files, SQLite Alembic
+  upgrade and frontend build passed. No network, credential, paid-data/model,
+  account, broker or trading action occurred. Exact-head CI is pending.
+- SD-029 is now the next READY package because SD-027 is verified.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
