@@ -29,7 +29,8 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-019 | P2 | VERIFIED | deps: SD-014, SD-018 | Dashboard catalogue surface.** Read-only strategy metadata and acceptance status are exposed through a sanitized loopback endpoint and React view; no simulated broker holdings are implied. **Evidence:** `p5_demo_dashboard_api.py`, `web/src/App.tsx`, dashboard tests; Batch G CI.
 - [x] **SD-020 | P1 | VERIFIED | deps: SD-015, SD-018 | Five-year data inventory and bounded retrieval plan.** Read-only inventory found no SPY/QQQ history and no five-year MSFT series; it documented the existing 59-bar MSFT SIP and unrelated 701-bar SOFI IEX bundles without reading credentials or contacting providers. **Evidence:** `docs/SD020_FIVE_YEAR_DATA_PLAN.md`; local ignored-file inventory.
 - [x] **SD-021 | P1 | VERIFIED | deps: SD-020 | Approved five-year SPY/QQQ/MSFT SIP retrieval and proposal-only validation.** Exact owner-authorized scope completed: 1,254 bars per ticker, 1 request per ticker, 3/60 global requests, offline admission, deterministic strategy evaluation and sanitized research reports. **Limit:** `ADMITTED_RESEARCH_ONLY`; independent corporate-action/dividend corroboration remains pending and SD-004 stays blocked. **Evidence:** `docs/SD021_RESULTS.md`, `src/sidedeck/application/p5_sd021_validation.py`, `src/sidedeck/application/p5_sd021_research.py`, ignored local manifests/bundles.
-- [ ] **SD-022 | P1 | READY | deps: SD-021 | Robustness and independent evidence review.** Re-run accepted screens across an independently licensed/corroborated price source or owner-supplied dataset, verify split/dividend treatment and OOS calculation independently, and preserve rejection/insufficient outcomes. No new authenticated provider request is implied.
+- [x] **SD-022 | P1 | VERIFIED | deps: SD-021 | Independent strategy robustness audit.** Recalculated metrics independently, changed the denominator to completed BUY→SELL trades, verified locked OOS/selection boundaries and portfolio weights/correlations, and reclassified the five prior screens to two robustness survivors, one OOS rejection and nine insufficient-data outcomes. **Evidence:** `docs/SD022_ROBUSTNESS_AUDIT.md`; `src/sidedeck/application/sd022_robustness_audit.py`; `tests/test_sd022_robustness_audit.py`.
+- [ ] **SD-023 | P1 | READY | deps: SD-022 | Independent corporate-action and benchmark evidence.** Use only lawful existing/public evidence or owner-supplied licensed data to corroborate split/dividend treatment and distinguish price-only from total-return benchmarks. Do not make new authenticated requests; preserve SD-004 valuation block until independent price/share-basis proof exists.
 
 ## Session control and next autonomous batch
 
@@ -143,7 +144,23 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - No account, portfolio, order, eToro, Saxo, paid model/data or paper/real
   trading action occurred; credential values were not logged or exposed.
   SD-004 remains blocked by independent valuation evidence; next safe batch is
-  SD-022 robustness/independent evidence review.
+  SD-023 independent corporate-action and benchmark evidence.
+
+**Batch I (2026-10-21; SD-022 verified):**
+
+- Added an independent audit path for equity, drawdown, volatility, Sharpe,
+  profit factor, completed round trips, exposure, fees/slippage and locked OOS
+  results. Reconciled core metrics to the saved engine paths at zero or
+  floating-point rounding deltas.
+- Corrected the acceptance denominator to completed BUY→SELL trades. The five
+  prior SD-021 whole-period screens reduce to two robustness survivors (SPY and
+  QQQ channel mean reversion), one OOS rejection (MSFT channel mean reversion)
+  and nine `INSUFFICIENT_DATA` outcomes.
+- Verified in-sample-only selection, four chronological walk-forward windows,
+  9-cell surfaces without OOS selection, portfolio weight sum and correlation
+  limits. No cross-instrument diversification claim was made.
+- No new authenticated/public network request, credential read, paid call,
+  account access, order or trading action occurred. Next safe batch: SD-023.
 
 **Batch F (verified; SD-004 Phase 4 corporate actions/share basis) — 2026-10-21**
 
