@@ -43,6 +43,20 @@ from sidedeck.domain.etoro_demo_orders import (
 
 ETORO_DEMO_EXECUTION_RELEASE = "NO_GO"
 DESK_OPERATOR = "sidedeck-etoro-demo-desk"
+# Unresolved risks from docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md §6 (R4 mitigated by SD-037).
+ETORO_DEMO_OPEN_RISKS = ("R1_BASELINE_UNVERIFIED_SINCE_2026_10_20", "R2_KEY_SCOPE_UNVERIFIED",
+                         "R3_CLOSE_LOOKUP_UNVERIFIED", "R5_NO_RELEASED_TRANSPORT",
+                         "R6_LIVE_SCHEMA_UNVERIFIED", "R8_NO_CAPITAL_ALLOCATED")
+
+
+def etoro_demo_status() -> dict[str, Any]:
+    """Sanitized, code-derived broker status for release-gate surfaces. No IDs or values."""
+    return {"broker_priority": "PRIMARY", "secondary_broker": "ALPACA_PAPER",
+            "execution_release": ETORO_DEMO_EXECUTION_RELEASE,
+            "real_execution": ETORO_REAL_EXECUTION, "transport": "OFFLINE_SIMULATOR_ONLY",
+            "baseline": "PROTECTED_UNATTRIBUTED", "ownership": "VERIFIED_LINEAGE_ONLY",
+            "agent_portfolios": "NOT_ADOPTED_PENDING_EVIDENCE",
+            "open_risks": list(ETORO_DEMO_OPEN_RISKS)}
 
 
 class BrokerExecutionDisabled(PermissionError):
@@ -79,6 +93,62 @@ class DemoDeskPolicy:
             raise EtoroDemoOrderError("max order notional must be a positive Decimal")
         if not self.allowed_instrument_ids or self.max_open_positions_per_book < 1:
             raise EtoroDemoOrderError("instrument allowlist and position cap are required")
+
+
+# Documented eToro Demo quotas (requests, window seconds), shared per bucket.
+RATE_LIMITS = {"write": (20, 60), "order_info": (60, 60), "portfolio": (60, 60)}
+MAX_CLOCK_REGRESSION = timedelta(seconds=1)
+# eToro documents orders:lookup for open orders; its use for close orders is unproven.
+CLOSE_LOOKUP_RECOVERY = "NOT_VERIFIED"
+
+
+def bucket_for(method: str, path: str) -> str:
+    if method == "POST":
+        return "write"
+    return "portfolio" if path.endswith("/pnl") else "order_info"
+
+
+class RateBudgetExceeded(EtoroDemoOrderError):
+    """A documented eToro quota would be exceeded; nothing was sent. No automatic retry."""
+
+
+class DemoRateBudget:
+    """Restart-safe sliding-window budget. Refuses (never sleeps or retries) when exhausted."""
+
+    def __init__(self, path: str, limits: dict[str, tuple[int, int]] | None = None) -> None:
+        self._limits = dict(RATE_LIMITS if limits is None else limits)
+        self._db = sqlite3.connect(Path(path), isolation_level=None)
+        self._db.execute("CREATE TABLE IF NOT EXISTS etoro_demo_rate_events ("
+                         "sequence INTEGER PRIMARY KEY AUTOINCREMENT, bucket TEXT NOT NULL, "
+                         "at TEXT NOT NULL)")
+
+    def close(self) -> None:
+        self._db.close()
+
+    def acquire(self, bucket: str, now: datetime | None = None) -> int:
+        """Record one request in ``bucket``; return the remaining allowance."""
+        if bucket not in self._limits:
+            raise RateBudgetExceeded("unknown eToro rate bucket")
+        moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        limit, window = self._limits[bucket]
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            latest = self._db.execute("SELECT MAX(at) FROM etoro_demo_rate_events").fetchone()[0]
+            if latest is not None and moment < datetime.fromisoformat(latest) - MAX_CLOCK_REGRESSION:
+                raise RateBudgetExceeded("clock moved backwards; budget refuses to guess")
+            since = (moment - timedelta(seconds=window)).isoformat()
+            used = self._db.execute("SELECT COUNT(*) FROM etoro_demo_rate_events "
+                                    "WHERE bucket=? AND at>?", (bucket, since)).fetchone()[0]
+            if used >= limit:
+                raise RateBudgetExceeded(f"eToro {bucket} quota {limit}/{window}s exhausted")
+            self._db.execute("INSERT INTO etoro_demo_rate_events(bucket, at) VALUES (?, ?)",
+                             (bucket, moment.isoformat()))
+            self._db.execute("COMMIT")
+        except BaseException:
+            if self._db.in_transaction:
+                self._db.execute("ROLLBACK")
+            raise
+        return int(limit - used - 1)
 
 
 def open_scope(book: str, request: DemoOpenRequest) -> str:
@@ -214,7 +284,8 @@ class EtoroDemoLineage:
 class EtoroDemoDesk:
     def __init__(self, *, outbox: DurablePaperIntentStore, controls: ApprovalKillSwitch,
                  lineage: EtoroDemoLineage, transport: EtoroDemoTransport,
-                 policy: DemoDeskPolicy, baseline: Iterable[BaselinePosition]) -> None:
+                 policy: DemoDeskPolicy, baseline: Iterable[BaselinePosition],
+                 budget: DemoRateBudget) -> None:
         if getattr(transport, "offline_simulation", False) is not True:
             raise BrokerExecutionDisabled(
                 f"eToro Demo execution release is {ETORO_DEMO_EXECUTION_RELEASE}; only the offline "
@@ -222,11 +293,15 @@ class EtoroDemoDesk:
         self._outbox, self._controls, self._lineage = outbox, controls, lineage
         self._transport, self._policy = transport, policy
         self._baseline = tuple(baseline)
+        self._budget = budget
 
     # ---- transport boundary -------------------------------------------------
     def _send(self, method: str, path: str, *, reference_id: str,
               body: dict[str, Any] | None = None, query: dict[str, str] | None = None) -> Any:
+        """Writes must pre-acquire budget before write-ahead; reads acquire here."""
         require_demo_route(method, path)
+        if method == "GET":
+            self._budget.acquire(bucket_for(method, path))
         return self._transport.send(method, path, reference_id=reference_id, body=body, query=query)
 
     def _halt(self, reason: str) -> None:
@@ -252,6 +327,7 @@ class EtoroDemoDesk:
             raise EtoroDemoOrderError("book already holds the maximum open positions")
         if not self._controls.is_approved(intent_id, open_scope(book, request)):
             raise EtoroDemoOrderError("no verified, unexpired approval for this exact order")
+        self._budget.acquire("write")
         self._outbox.enqueue(PaperIntent(
             intent_id, request.reference_id, "sidedeck", "etoro", "paper", "etoro-demo", book,
             f"etoro:{request.instrument_id}", "BUY", request.units, request.limit_rate))
@@ -352,6 +428,7 @@ class EtoroDemoDesk:
             raise EtoroDemoOrderError("close exceeds SideDeck-owned units")
         if not self._controls.is_approved(intent_id, close_scope(owned["book_id"], request)):
             raise EtoroDemoOrderError("no verified, unexpired approval for this exact close")
+        self._budget.acquire("write")
         self._lineage.record_pending(reference_id=request.reference_id, kind="CLOSE",
                                      intent_id=intent_id, book_id=owned["book_id"],
                                      instrument_id=request.instrument_id,
@@ -386,6 +463,38 @@ class EtoroDemoDesk:
             self._lineage.reduce_position(row["position_id"], delta)
         self._lineage.set_state(reference_id, outcome.status, filled_units=outcome.closed_units)
         return outcome.status
+
+    def recover_close_from_snapshot(self, reference_id: str, *,
+                                    snapshot: DemoPortfolioSnapshot, now: datetime) -> str:
+        """Resolve a close whose response was lost, using a fresh documented /pnl snapshot.
+
+        ``orders:lookup`` for close orders is ``CLOSE_LOOKUP_RECOVERY=NOT_VERIFIED``, so the
+        broker-reported position units decide. The kill-switch stays tripped; clearing it is
+        a separate operator action.
+        """
+        row = self._lineage.order(reference_id)
+        if row["kind"] != "CLOSE" or row["state"] != "OUTCOME_UNKNOWN":
+            raise EtoroDemoOrderError("only a close with an unknown outcome can be recovered")
+        snapshot.require_fresh(now)
+        owned = self._lineage.owned(row["position_id"])
+        if owned is None:
+            raise EtoroDemoBookError("position has no SideDeck lineage")
+        before = Decimal(owned["remaining_units"])
+        live = next((p for p in snapshot.positions if p.position_id == row["position_id"]), None)
+        if live is not None and (live.order_id != owned["order_id"] or live.units > before):
+            self._halt("close recovery snapshot contradicts lineage")
+            raise EtoroDemoBookError("snapshot contradicts SideDeck lineage")
+        closed = before if live is None else before - live.units
+        if closed > Decimal(row["units"]):
+            self._halt("close recovery shows more units closed than requested")
+            raise EtoroDemoOrderError("more units closed than the close requested")
+        if closed > 0:
+            self._lineage.reduce_position(row["position_id"], closed)
+        state = ("RECONCILED_NOT_EXECUTED" if closed == 0 else
+                 "RECONCILED_CLOSED_BY_SNAPSHOT" if live is None else
+                 "RECONCILED_PARTIAL_BY_SNAPSHOT")
+        self._lineage.set_state(reference_id, state, filled_units=closed)
+        return state
 
     # ---- reconciliation -----------------------------------------------------
     def reconcile(self, snapshot: DemoPortfolioSnapshot, now: datetime) -> dict[str, Any]:
@@ -555,9 +664,10 @@ def rehearse(workdir: str) -> dict[str, Any]:
                                baseline_position_ids=[b.position_id for b in baseline],
                                baseline_order_ids=[b.order_id for b in baseline if b.order_id])
     outbox = DurablePaperIntentStore(str(root / "outbox.sqlite3"))
+    budget = DemoRateBudget(str(root / "budget.sqlite3"))
     desk = EtoroDemoDesk(outbox=outbox, controls=controls, lineage=lineage, transport=sim,
                          policy=DemoDeskPolicy(Decimal("500"), frozenset({1001}), 2),
-                         baseline=baseline)
+                         baseline=baseline, budget=budget)
     expiry = now + timedelta(minutes=10)
 
     def approve(intent_id: str, scope: str) -> None:
@@ -591,6 +701,7 @@ def rehearse(workdir: str) -> dict[str, Any]:
         outbox.close()
         controls.close()
         lineage.close()
+        budget.close()
     return {"evidence": "OFFLINE_SIMULATED_NOT_BROKER_EVIDENCE",
             "open_submit": submitted, "recovery": sorted(recovered.values()),
             "baseline_close_refused": baseline_close_refused, "close": close_status,

@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from sidedeck.application.sd014_strategy_engine import catalogue
+from sidedeck.application.sd036_etoro_demo_desk import etoro_demo_status
 
 
 def baseline_summary(db_path: str) -> dict[str, Any]:
@@ -231,6 +232,8 @@ def release_gate_summary(path: str | None = None) -> dict[str, Any]:
         "blocking_controls": ["RELEASE_GATE_NOT_LOADED"],
         "rehearsal": {"status": "UNAVAILABLE", "broker_execution": "DISABLED"},
         "broker_execution": "DISABLED",
+        # Always code-derived; a local file can never override broker status.
+        "etoro_demo": etoro_demo_status(),
     }
     if not path:
         return base

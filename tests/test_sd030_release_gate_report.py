@@ -18,6 +18,16 @@ def test_release_gate_is_sanitized_and_never_go() -> None:
     assert "api_key" not in str(report).lower()
 
 
+def test_release_gate_reports_etoro_demo_primary_and_real_excluded() -> None:
+    report = build_release_gate_report(audit_paper_release_controls(), rehearsal_report())
+    etoro = report["etoro_demo"]
+    assert etoro["broker_priority"] == "PRIMARY" and etoro["secondary_broker"] == "ALPACA_PAPER"
+    assert etoro["execution_release"] == "NO_GO"
+    assert etoro["real_execution"] == "PERMANENTLY_EXCLUDED"
+    assert etoro["transport"] == "OFFLINE_SIMULATOR_ONLY"
+    assert "R2_KEY_SCOPE_UNVERIFIED" in etoro["open_risks"]
+
+
 def test_gate_rejects_any_non_no_go_readiness() -> None:
     audit = audit_paper_release_controls()
     audit["overall_status"] = "GO"

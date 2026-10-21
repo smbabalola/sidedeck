@@ -11,8 +11,10 @@ from sidedeck.application import sd036_etoro_demo_desk as desk_module
 from sidedeck.application.sd032_durable_paper_intent import DurablePaperIntentStore, IntentError
 from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch, intent_digest
 from sidedeck.application.sd036_etoro_demo_desk import (
-    SYNTHETIC_BASELINE_ROWS, BrokerExecutionDisabled, DemoDeskPolicy, EtoroDemoDesk,
-    EtoroDemoLineage, OfflineEtoroDemoSimulator, close_scope, open_scope, rehearse,
+    SYNTHETIC_BASELINE_ROWS, BrokerExecutionDisabled, DemoDeskPolicy, DemoRateBudget,
+    EtoroDemoDesk,
+    EtoroDemoLineage, OfflineEtoroDemoSimulator, RateBudgetExceeded, bucket_for, close_scope,
+    open_scope, rehearse,
 )
 from sidedeck.domain import etoro_demo_orders as orders_module
 from sidedeck.domain.etoro_demo import EtoroDemoDataError, parse_demo_portfolio
@@ -51,16 +53,18 @@ class Harness:
             baseline_position_ids=[b.position_id for b in self.baseline],
             baseline_order_ids=[b.order_id for b in self.baseline if b.order_id])
         self.outbox = DurablePaperIntentStore(str(self.tmp / "outbox.sqlite3"))
+        self.budget = DemoRateBudget(str(self.tmp / "budget.sqlite3"))
         self.desk = EtoroDemoDesk(outbox=self.outbox, controls=self.controls,
                                   lineage=self.lineage, transport=self.sim,
                                   policy=DemoDeskPolicy(Decimal(self.cap), frozenset({1001}),
                                                         self.max_open),
-                                  baseline=self.baseline)
+                                  baseline=self.baseline, budget=self.budget)
 
     def close_stores(self):
         self.outbox.close()
         self.controls.close()
         self.lineage.close()
+        self.budget.close()
 
     def approve(self, intent_id, scope):
         digest = intent_digest(intent_id, scope)
@@ -228,7 +232,7 @@ def test_only_offline_simulator_may_be_attached(h, transport):
     with pytest.raises(BrokerExecutionDisabled, match="NO_GO"):
         EtoroDemoDesk(outbox=h.outbox, controls=h.controls, lineage=h.lineage,
                       transport=transport, policy=DemoDeskPolicy(Decimal(1), frozenset({1}), 1),
-                      baseline=h.baseline)
+                      baseline=h.baseline, budget=h.budget)
 
 
 def test_unapproved_or_mis_scoped_orders_refused(h):
@@ -456,6 +460,126 @@ def test_record_rejection_requires_reason_and_valid_state(h):
     h.desk.refresh_open(request.reference_id)
     with pytest.raises(IntentError, match="invalid transition"):
         h.outbox.record_rejection("open-1", "late")
+
+
+# ---- SD-037: documented quotas and close recovery ----------------------------
+
+T0 = datetime(2026, 10, 21, 12, tzinfo=timezone.utc)
+
+
+def test_rate_budget_refuses_burst_and_survives_restart(tmp_path):
+    path = str(tmp_path / "budget.sqlite3")
+    budget = DemoRateBudget(path)
+    for i in range(20):
+        budget.acquire("write", T0 + timedelta(seconds=i))
+    with pytest.raises(RateBudgetExceeded, match="20/60s"):
+        budget.acquire("write", T0 + timedelta(seconds=21))
+    budget.close()
+    restarted = DemoRateBudget(path)
+    with pytest.raises(RateBudgetExceeded):
+        restarted.acquire("write", T0 + timedelta(seconds=30))
+    assert restarted.acquire("order_info", T0 + timedelta(seconds=30)) == 59
+    # window (1s, 61s]: writes at 0s and 1s have expired, 18 remain in use
+    assert restarted.acquire("write", T0 + timedelta(seconds=61)) == 1
+    restarted.close()
+
+
+def test_rate_budget_refuses_clock_regression_and_unknown_bucket(tmp_path):
+    budget = DemoRateBudget(str(tmp_path / "budget.sqlite3"))
+    budget.acquire("portfolio", T0)
+    with pytest.raises(RateBudgetExceeded, match="backwards"):
+        budget.acquire("portfolio", T0 - timedelta(minutes=5))
+    with pytest.raises(RateBudgetExceeded, match="unknown"):
+        budget.acquire("real", T0)
+    budget.close()
+
+
+def test_bucket_mapping_matches_documented_quotas():
+    assert bucket_for("POST", "/api/v2/trading/execution/demo/orders") == "write"
+    assert bucket_for("POST", "/api/v1/trading/execution/demo/market-close-orders/positions/5") \
+        == "write"
+    assert bucket_for("GET", "/api/v2/trading/info/demo/orders:lookup") == "order_info"
+    assert bucket_for("GET", "/api/v1/trading/info/demo/close-orders/5") == "order_info"
+    assert bucket_for("GET", "/api/v1/trading/info/demo/pnl") == "portfolio"
+
+
+def test_exhausted_write_budget_blocks_before_write_ahead(tmp_path):
+    h = Harness(tmp_path)
+    h.close_stores()
+    h.budget = None
+    h.open_stores()
+    h.budget.close()
+    h.budget = DemoRateBudget(str(tmp_path / "tight.sqlite3"), {"write": (1, 60),
+                                                                 "order_info": (60, 60),
+                                                                 "portfolio": (60, 60)})
+    h.desk._budget = h.budget
+    h.open("o1")
+    with pytest.raises(RateBudgetExceeded):
+        h.open("o2")
+    assert len(h.posts()) == 1
+    assert h.lineage.orders()[-1]["intent_id"] == "o1"
+    with pytest.raises(IntentError, match="unknown"):
+        h.outbox.get("o2")
+    h.close_stores()
+
+
+def _lost_close(h, units=None):
+    position_id = _filled(h)
+    close = DemoCloseRequest(ref(), position_id, 1001, units)
+    h.approve("c1", close_scope(BOOK, close))
+    h.sim.lose_next_response = True
+    h.desk.submit_close(intent_id="c1", request=close, snapshot=h.snapshot(), now=h.now)
+    return position_id, close
+
+
+def test_lost_full_close_recovered_from_snapshot(h):
+    position_id, close = _lost_close(h)
+    state = h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
+                                               now=h.now)
+    assert state == "RECONCILED_CLOSED_BY_SNAPSHOT"
+    assert h.lineage.owned(position_id)["state"] == "CLOSED"
+    assert h.controls.is_halted()   # separate operator clearance still required
+
+
+def test_lost_partial_close_recovered_from_snapshot(h):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
+                                              now=h.now) == "RECONCILED_PARTIAL_BY_SNAPSHOT"
+    assert Decimal(h.lineage.owned(position_id)["remaining_units"]) == Decimal("1.5")
+
+
+def test_close_that_never_reached_broker_recovers_as_not_executed(h):
+    position_id = _filled(h)
+    close = DemoCloseRequest(ref(), position_id, 1001)
+    h.approve("c1", close_scope(BOOK, close))
+    h.sim.drop_next_request = True
+    h.desk.submit_close(intent_id="c1", request=close, snapshot=h.snapshot(), now=h.now)
+    assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
+                                              now=h.now) == "RECONCILED_NOT_EXECUTED"
+    assert h.lineage.owned(position_id)["state"] == "OPEN"
+
+
+def test_close_recovery_refuses_contradictions(h):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    grown = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    for row in grown["clientPortfolio"]["positions"]:
+        if row["positionID"] == position_id:
+            row["units"] = 5
+    with pytest.raises(EtoroDemoBookError, match="contradicts"):
+        h.desk.recover_close_from_snapshot(close.reference_id, now=h.now,
+                                           snapshot=parse_demo_portfolio(grown, observed_at=h.now))
+    gone = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    gone["clientPortfolio"]["positions"] = list(SYNTHETIC_BASELINE_ROWS)
+    with pytest.raises(EtoroDemoOrderError, match="more units closed"):
+        h.desk.recover_close_from_snapshot(close.reference_id, now=h.now,
+                                           snapshot=parse_demo_portfolio(gone, observed_at=h.now))
+    with pytest.raises(EtoroDemoOrderError, match="unknown outcome"):
+        h.desk.recover_close_from_snapshot(h.lineage.orders()[0]["reference_id"],
+                                           snapshot=h.snapshot(), now=h.now)
+
+
+def test_close_lookup_recovery_is_explicitly_unverified():
+    assert desk_module.CLOSE_LOOKUP_RECOVERY == "NOT_VERIFIED"
 
 
 # ---- structural safety -----------------------------------------------------

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from sidedeck.application.sd036_etoro_demo_desk import etoro_demo_status
+
 
 def build_release_gate_report(paper_audit: dict[str, Any], rehearsal: dict[str, Any]) -> dict[str, Any]:
     if paper_audit.get("overall_status") != "NO_GO" or paper_audit.get("release_enabled") is not False:
@@ -24,6 +26,7 @@ def build_release_gate_report(paper_audit: dict[str, Any], rehearsal: dict[str, 
         "broker_reconciliation": "UNRELEASED",
         "kill_switch": "UNRELEASED",
         "protected_baseline": "PRESERVED",
+        "etoro_demo": etoro_demo_status(),
         "blocking_controls": sorted(str(check.get("name")) for check in checks if isinstance(check, dict) and check.get("status") == "FAIL"),
         "rehearsal": {
             "status": "REHEARSED",

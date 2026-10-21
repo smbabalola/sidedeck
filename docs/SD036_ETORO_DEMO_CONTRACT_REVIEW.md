@@ -122,8 +122,8 @@ Verified lineage on the direct Demo account gives the isolation needed without t
 |---|---|---|
 | R1 | Baseline unchanged since 2026-10-20 is unverified | Bounded read (§7) |
 | R2 | Key environment (Demo/Real) and permission (Read/Write) unverified | Owner UI check in the eToro API portal, no API call. A Real or Write key must not be used for reads |
-| R3 | A lost **close** response cannot be recovered by order ID; operator `/pnl` reconciliation is needed | Kill-switch trips; `refresh_close` refuses until reconciled. Docs suggest `orders:lookup` may cover close orders, but this is unverified |
-| R4 | Shared write rate limit (20/60 s) not enforced client-side | Must be added before any release |
+| R3 | A lost **close** response cannot be recovered by order ID | **Partly mitigated (SD-037).** `recover_close_from_snapshot` resolves it from a fresh `/pnl` snapshot into not executed, partial or closed, and refuses contradictions. The kill-switch stays tripped. Close recovery via `orders:lookup` remains `CLOSE_LOOKUP_RECOVERY=NOT_VERIFIED` |
+| R4 | Shared write rate limit (20/60 s) not enforced client-side | **Mitigated (SD-037).** `DemoRateBudget` persists across restarts and enforces write 20/60 s, order-info 60/60 s and portfolio 60/60 s. It refuses rather than retries, and refuses on clock regression. Writes reserve budget before write-ahead |
 | R5 | No HTTP transport exists for Demo writes; key scoping and `x-request-id` idempotency are unverified live | Intentional. A release needs a reviewed transport and owner G4 approval |
 | R6 | Lookup field casing differs in doc examples (`positionId` vs `positionID`) | Parsers are strict; a live schema check is needed before release |
 | R7 | Owner manual changes to baseline positions halt SideDeck | Fail-closed by design; documented |

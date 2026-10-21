@@ -150,6 +150,16 @@ def test_release_gate_is_sanitized_and_rejects_enabled_or_secret_payload(tmp_pat
     assert result["rehearsal"] == {"status": "REHEARSED", "broker_execution": "DISABLED",
                                     "final_state": "ROLLED_BACK", "event_count": 9}
     assert "secret" not in json.dumps(result)
+    assert result["etoro_demo"]["execution_release"] == "NO_GO"
+    path.write_text(json.dumps({
+        "schema_version": 1, "gate": "PAPER_RELEASE", "overall_status": "NO_GO",
+        "release_enabled": False, "paper_order_submission": "DISABLED", "blocking_controls": [],
+        "rehearsal": {"status": "REHEARSED", "broker_execution": "DISABLED"},
+        "etoro_demo": {"execution_release": "GO", "real_execution": "ENABLED"},
+    }), encoding="utf-8")
+    forged = release_gate_summary(str(path))["etoro_demo"]
+    assert forged["execution_release"] == "NO_GO"
+    assert forged["real_execution"] == "PERMANENTLY_EXCLUDED"
     path.write_text(json.dumps({"schema_version": 1, "gate": "PAPER_RELEASE",
                                 "overall_status": "GO", "release_enabled": True}), encoding="utf-8")
     assert release_gate_summary(str(path))["overall_status"] == "NO_GO"
