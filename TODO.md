@@ -207,8 +207,8 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   SD-008, SD-011 and SD-013 remain blocked by independent data/provider or
   owner release gates. Preserve SD-027 as a future derived task for local
   dashboard/API UI verification if a browser test harness is added.
-- Exact-head GitHub CI `39585503390` passed on `3a9d22ada835e28e6d231f65073a3fb899c8fe70`:
-  https://github.com/smbabalola/sidedeck/actions/runs/39585503390. CI emitted
+- Exact-head GitHub CI `39585876080` passed on `c0f4f48a2fd3e91b79751858ef8b3e6854e021f6`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39585876080. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
 - No account, portfolio, order, eToro, Saxo, paid model/data or paper/real
   trading action occurred; credential values were not logged or exposed.
