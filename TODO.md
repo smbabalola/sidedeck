@@ -180,9 +180,9 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - Next action: obtain a separate explicit owner authorization for this exact
   two-request scope, or continue offline work; do not reuse SD-034's exhausted
   three-request authorization.
-- Exact-head GitHub CI `39594074412` passed on
-  `509710244dd804497af59c65969b054d5a6f8640`:
-  https://github.com/smbabalola/sidedeck/actions/runs/39594074412. CI emitted
+- Exact-head GitHub CI `39594281787` passed on
+  `03a9cf1e42796fb79287307cadfc5f1a76e86702`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39594281787. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
