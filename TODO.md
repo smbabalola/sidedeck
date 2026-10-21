@@ -19,25 +19,30 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-009 | P1 | VERIFIED | deps: none | Dashboard research/evidence acceptance.** Sanitized baseline/research endpoints retain expiry, fail-closed, no-order and no-value/credential/broker-ID boundaries; Vite/TypeScript production build passes. **Evidence:** `src/sidedeck/application/p5_demo_dashboard_api.py`, `web/src/App.tsx`, `tests/test_p5_demo_dashboard_api.py`, Batch A CI.
 - [x] **SD-010 | P1 | VERIFIED | deps: none | CI and persistence hardening.** CI now runs Alembic head migration and a read-only dashboard build in addition to tests/Ruff/mypy/PostgreSQL service; local SQLite round-trip passes. **Evidence:** `.github/workflows/ci.yml`, Batch A CI.
 - [ ] **SD-011 | P1 | BLOCKED_OWNER | deps: SD-001, SD-002, SD-006, SD-008, SD-009, SD-010 | Paper/demo order release and capital assignment.** Separate broker/environment-specific consent, authenticated read-only funds check, protected baseline, risk cap, order/fill/position/exit attribution, idempotency, kill switch. **Accept:** independent audited human approval and controlled scoped release. **Blocker:** no owner order-release authorization. P4 remains NO-GO and eToro original positions untouchable.
-- [ ] **SD-012 | P2 | READY | deps: SD-009, SD-010 | Operator runbooks and recovery.** Logs, rollback, replay, backups, outage handling, state restore, acceptance UAT. **Accept:** reproducible operator setup/verification and privacy review.
+- [x] **SD-012 | P2 | VERIFIED | deps: SD-009, SD-010 | Operator runbooks and recovery.** `docs/OPERATOR_RUNBOOK.md` documents loopback startup, verification, disposable migration recovery, backup/restore precautions, outage handling, privacy and release stops. **Evidence:** Batch C docs review and existing replay/migration tests.
 - [ ] **SD-013 | P2 | BLOCKED_OWNER | deps: SD-011, SD-012 | Controlled paper soak and formal MVP release.** **Accept:** documented minimum one-month demo observation, metric thresholds, approval record and no serious unresolved incidents. **Blocker:** owner has not released paper execution; no real money.
 
 ## Session control and next autonomous batch
 
 **Batch A (completed locally; exact-HEAD CI pending):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
-**Batch B (completed locally; exact-HEAD CI pending):** SD-005 + SD-006 + SD-007. The next safe batch is SD-012 operator runbooks/recovery, while SD-008 remains BLOCKED_OWNER on paid-provider authorization and SD-004 remains BLOCKED_EXTERNAL on genuine MSFT price evidence.
+**Batch B (completed locally; exact-HEAD CI pending):** SD-005 + SD-006 + SD-007. **Batch C (implemented locally; exact-HEAD CI pending):** SD-012 operator runbooks/recovery. No further safe release work can satisfy SD-004/008/011/013 without external evidence or owner approval.
 
 ### Batch A evidence — 2026-10-21
 
 - Local exact verification before commit: `515 passed, 1 skipped, 3 warnings`; Ruff passed; mypy passed for 104 source files; SQLite Alembic upgrade → downgrade base → upgrade head passed; `web` `npm run build` passed. PostgreSQL service test remains the single skipped local test and is exercised in GitHub CI.
 - No authenticated eToro/Alpaca/Saxo request, paid model/data call, broker order, baseline refresh, or credential read was performed. Fixture/offline evidence is not research or trading performance.
-- Code/documentation commit and exact-HEAD CI link will be appended immediately after push. Genuine MSFT price/valuation evidence remains `BLOCKED_EXTERNAL`; paper release remains `BLOCKED_OWNER`.
+- Batch A code commit `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`; exact-HEAD GitHub CI `39549008720` passed: tests, Ruff, mypy, disposable PostgreSQL and the new Alembic/dashboard-build steps. Genuine MSFT price/valuation evidence remains `BLOCKED_EXTERNAL`; paper release remains `BLOCKED_OWNER`.
 
 ### Batch B evidence — 2026-10-21
 
 - Local focused verification: `20 passed`; Ruff passed; mypy passed for 105 source files. Hash-only MSFT research manifests omit raw content; backtest sensitivity output keeps robustness `NOT_ASSESSED`; paired-agent checks remain offline and proposal-only.
 - No provider/model call, SEC download, authenticated broker request, order, baseline refresh or credential read was performed. Batch B is implementation/fixture evidence, not genuine research or performance evidence.
+
+### Batch C evidence — 2026-10-21
+
+- Added `docs/OPERATOR_RUNBOOK.md` covering loopback operation, sanitized recovery, disposable migration rollback, protected baseline handling and privacy/release stops.
+- Remaining gates are genuine MSFT price evidence (`BLOCKED_EXTERNAL`), paid-provider/model authorization (`BLOCKED_OWNER`), and all paper/demo execution/release work (`BLOCKED_OWNER` / `NO-GO`).
 
 **Decision record:** MSFT is the first *candidate*, not an approved trade; SOFI is a second sector-specific case. SOFI borrowings-excluding-deposits is supplementary audit only; no generic Buffett D/E approval. No Financial Datasets subscription is required for locally supplied Buffett SEC inputs. Price/valuation remain NO-GO until proved.
 
