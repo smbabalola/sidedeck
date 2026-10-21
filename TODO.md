@@ -155,6 +155,11 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - Focused verification: 2 passed. No network, credential, paid-data/model,
   account, broker or trading action occurred. Next safe batch: SD-024 ETF
   distribution evidence boundary.
+- Full local verification: 565 passed, 1 skipped, 3 warnings; Ruff, mypy,
+  SQLite Alembic upgrade and frontend production build passed. Exact-head
+  GitHub CI `39584305784` passed on `b2add69a7f554891558f4dbbfbe0b2b3c9cac1a7`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39584305784. CI emitted
+  only the existing Node 20 and ubuntu-latest migration warnings.
 - No account, portfolio, order, eToro, Saxo, paid model/data or paper/real
   trading action occurred; credential values were not logged or exposed.
   SD-004 remains blocked by independent valuation evidence; next safe batch is
