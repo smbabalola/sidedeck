@@ -25,7 +25,9 @@ def test_release_gate_reports_etoro_demo_primary_and_real_excluded() -> None:
     assert etoro["execution_release"] == "NO_GO"
     assert etoro["real_execution"] == "PERMANENTLY_EXCLUDED"
     assert etoro["transport"] == "OFFLINE_SIMULATOR_ONLY"
-    assert "R2_KEY_SCOPE_UNVERIFIED" in etoro["open_risks"]
+    assert "R2_KEY_IP_EXPIRY_WRITE_UNVERIFIED" in etoro["open_risks"]
+    assert "R9_MONITORING_KEY_IS_READ_WRITE" in etoro["open_risks"]
+    assert not any(r.startswith("R1_") for r in etoro["open_risks"])
 
 
 def test_gate_rejects_any_non_no_go_readiness() -> None:

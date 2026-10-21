@@ -50,7 +50,7 @@ No credentials, account, position or order identifiers, quantities, prices, bala
 
 | ID | Blocker |
 |---|---|
-| R2 | The owner states the key is Demo. Its Read/Write permission, IP whitelist and expiry are not independently verified (portal UI check) |
+| R2 | **Update 2026-10-21:** the owner confirmed Demo environment and Read/Write permission. The IP whitelist, expiry and actual write capability remain unverified. R9: this Read/Write key was used for the monitoring read; a separate Read-only monitoring key is recommended |
 | R3 | Close recovery via `orders:lookup` is unverified (snapshot recovery exists) |
 | R5 | No reviewed or released Demo write transport (SD-041 design only) |
 | R6 | Live order/lookup/close response schemas are unverified (a future bounded canary is needed) |

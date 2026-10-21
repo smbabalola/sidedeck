@@ -62,6 +62,65 @@ class RealExecutionExcluded(PermissionError):
     """eToro Real (or any non-allowlisted) endpoint; permanently refused."""
 
 
+# Documented field shapes (SD-043). "number" = JSON int/float, never bool or string.
+_OPEN_ACCEPT_SPEC: dict[str, Any] = {"orderId": "int", "referenceId": "str"}
+_LOOKUP_SPEC: dict[str, Any] = {
+    "orderId": "int", "action": "str", "transaction": "str",
+    "status": {"id": "int", "errorCode": "int"},
+    "asset": {"instrumentId": "int", "leverage": "int", "side": "str"},
+    "positionExecutions": [{"positionId": "int", "state": "str", "remainingUnits": "number",
+                            "openingData": {"orderId": "int", "units": "number",
+                                            "avgPrice": "number", "fees": "number"}}]}
+_CLOSE_ACCEPT_SPEC: dict[str, Any] = {"orderForClose": {"positionID": "int", "instrumentID": "int",
+                                                        "orderID": "int"}}
+_CLOSE_INFO_SPEC: dict[str, Any] = {"orderID": "int", "statusID": "int",
+                                    "positions": [{"positionID": "int", "units": "number"}]}
+RESPONSE_SPECS = {"open_acceptance": _OPEN_ACCEPT_SPEC, "order_lookup": _LOOKUP_SPEC,
+                  "close_acceptance": _CLOSE_ACCEPT_SPEC, "close_info": _CLOSE_INFO_SPEC}
+
+
+def _kind(value: Any) -> str:
+    if value is None:
+        return "null"
+    return {bool: "bool", int: "int", float: "float", str: "str", list: "list",
+            dict: "object"}.get(type(value), "other")
+
+
+def _type_matches(value: Any, expected: str) -> bool:
+    if expected == "number":
+        return type(value) in (int, float)
+    return _kind(value) == expected
+
+
+def _walk(value: Any, spec: Any, path: str, issues: list[str]) -> None:
+    if isinstance(spec, dict):
+        if not isinstance(value, dict):
+            issues.append(f"{path or '$'}: expected object, got {_kind(value)}")
+            return
+        for key, child in spec.items():
+            child_path = f"{path}.{key}" if path else key
+            if key not in value:
+                variant = next((k for k in value if k.lower() == key.lower()), None)
+                issues.append(f"{child_path}: missing" + (" (casing differs)" if variant else ""))
+                continue
+            _walk(value[key], child, child_path, issues)
+    elif isinstance(spec, list):
+        if not isinstance(value, list):
+            issues.append(f"{path}: expected list, got {_kind(value)}")
+            return
+        for index, item in enumerate(value):
+            _walk(item, spec[0], f"{path}[{index}]", issues)
+    elif not _type_matches(value, spec):
+        issues.append(f"{path}: expected {spec}, got {_kind(value)}")
+
+
+def response_shape_issues(kind: str, payload: Any) -> tuple[str, ...]:
+    """Sanitized live-schema diagnostics: field paths and JSON types only, never values."""
+    issues: list[str] = []
+    _walk(payload, RESPONSE_SPECS[kind], "", issues)
+    return tuple(issues)
+
+
 def require_demo_route(method: str, path: str) -> None:
     """Refuse every route except the documented Demo allowlist (checked pre-network)."""
     if "/demo/" not in path:
