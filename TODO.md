@@ -87,7 +87,10 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - Full local verification: 577 passed, 1 skipped, 3 warnings; Ruff, mypy
   across 123 source files, SQLite Alembic upgrade and frontend build passed.
   No network, credentials, account access, paid call, broker or trading action
-  occurred. Exact-head CI is pending.
+  occurred. Exact-head GitHub CI `39588376589` passed on
+  `1020be8d6232b4b14024a1731a962f60e2230ace`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39588376589. CI emitted
+  only the existing Node 20 and ubuntu-latest migration warnings.
 - Next safe batch: SD-031 operator evidence surface.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
