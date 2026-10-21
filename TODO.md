@@ -163,9 +163,9 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   account access, order or trading action occurred. Next safe batch: SD-023.
 - Full local verification: 563 passed, 1 skipped, 3 warnings; Ruff passed;
   mypy passed across 117 source files; SQLite Alembic upgrade and frontend
-  production build passed. Exact-head GitHub CI `39583122802` passed on merge
-  head `72cd2b9f820f87595accd88a9b655e2f94d0915b`:
-  https://github.com/smbabalola/sidedeck/actions/runs/39583122802. CI emitted
+  production build passed. Exact-head GitHub CI `39583318757` passed on head
+  `f3b466e13bd9a8c1c304baf7108545282da3fac5`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39583318757. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
 
 **Batch F (verified; SD-004 Phase 4 corporate actions/share basis) — 2026-10-21**
