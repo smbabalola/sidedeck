@@ -105,9 +105,9 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   `INSUFFICIENT_DATA`; no genuine profitability or five-year claim was made.
 - Full local verification: 554 passed, 1 skipped, 3 warnings; Ruff passed;
   mypy passed across 114 source files; SQLite Alembic upgrade and frontend
-  production build passed. Exact-HEAD GitHub CI `39576134538` passed on
-  `a5c6e8f11dbf89e62b1f3396b88eeb3cbd1dccdd`:
-  https://github.com/smbabalola/sidedeck/actions/runs/39576134538. CI emitted
+  production build passed. Exact-HEAD GitHub CI `39576345876` passed on
+  `b54fc1912348be1ed6580d7e6facfac58a1a05e4`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39576345876. CI emitted
   only Node 20 and ubuntu-latest migration warnings.
 - No authenticated data request, paid data/model call, credential read,
   account/portfolio endpoint, eToro request, paper order, real order or
