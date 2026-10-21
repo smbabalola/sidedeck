@@ -33,7 +33,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-023 | P1 | VERIFIED | deps: SD-022 | Independent corporate-action and benchmark evidence.** Independently recomputed price-only benchmarks from all three saved five-year bundles, reconciled ending equity to the research reports, verified the existing limited MSFT split/dividend record, and kept SPY/QQQ ETF actions and total-return figures `NOT_ASSESSED`/`UNAVAILABLE`. No authenticated requests; SD-004 remains blocked. **Evidence:** `docs/SD023_CORPORATE_ACTION_BENCHMARK_AUDIT.md`; `src/sidedeck/application/sd023_corporate_action_audit.py`; `tests/test_sd023_corporate_action_audit.py`.
 - [x] **SD-024 | P1 | VERIFIED | deps: SD-023 | ETF distribution and benchmark evidence boundary.** Added a fail-closed owner-supplied/public evidence parser with split/distribution semantics, ex-date/payment-date validation, source-class rejection and explicit price-only versus total-return labels. No ETF records were available, so SPY/QQQ remain `NOT_ASSESSED`. **Evidence:** `docs/SD024_ETF_DISTRIBUTION_EVIDENCE.md`; `src/sidedeck/application/sd024_etf_distribution_evidence.py`; `tests/test_sd024_etf_distribution_evidence.py`.
 - [x] **SD-025 | P1 | VERIFIED | deps: SD-024 | Benchmark/report integration.** Strategy validation summaries and the loopback API now expose sanitized price-only benchmark convention, metrics, corporate-action status and explicit total-return availability from local SD-023 audits; malformed/missing audits fail closed and `UNAVAILABLE` total return is preserved. **Evidence:** `docs/SD025_BENCHMARK_REPORT_INTEGRATION.md`; `src/sidedeck/application/p5_demo_dashboard_api.py`; `tests/test_p5_demo_dashboard_api.py`.
-- [ ] **SD-026 | P1 | READY | deps: SD-025 | Dashboard benchmark presentation.** Add a read-only dashboard view for benchmark convention and evidence status with explicit price-only/total-return wording, loading/error states and no performance recommendation language; verify via frontend tests/build.
+- [x] **SD-026 | P1 | VERIFIED | deps: SD-025 | Dashboard benchmark presentation.** Added a read-only dashboard view for benchmark convention and evidence status with explicit price-only/total-return wording and no performance recommendation language; frontend production build passes. **Evidence:** `web/src/App.tsx`; `docs/SD025_BENCHMARK_REPORT_INTEGRATION.md`; Batch M.
 
 ## Session control and next autonomous batch
 
@@ -194,6 +194,19 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - Exact-head GitHub CI `39585241005` passed on `6d47cfac0768463580fa78d8b8d50d3635490201`:
   https://github.com/smbabalola/sidedeck/actions/runs/39585241005. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
+
+**Batch M (2026-10-21; SD-026 verified locally):**
+
+- Added a read-only dashboard benchmark-evidence panel showing the explicit
+  price-only convention, corporate-action status and `UNAVAILABLE` total
+  return wording. It contains no recommendation, allocation or order control.
+- Frontend production build passed with Vite 6.4.4; the API and Python
+  regression suite remain covered by the preceding CI-verified head. No
+  external access or trading action occurred. Exact-head CI is pending.
+- Next safe work is exhausted at the current evidence boundary: SD-004,
+  SD-008, SD-011 and SD-013 remain blocked by independent data/provider or
+  owner release gates. Preserve SD-027 as a future derived task for local
+  dashboard/API UI verification if a browser test harness is added.
 - No account, portfolio, order, eToro, Saxo, paid model/data or paper/real
   trading action occurred; credential values were not logged or exposed.
   SD-004 remains blocked by independent valuation evidence; next safe batch is
