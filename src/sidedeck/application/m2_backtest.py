@@ -20,22 +20,33 @@ class BacktestConfig:
     out_of_sample_start: date | None = None
 
 
+def _finite_nonnegative(value: Decimal, name: str) -> Decimal:
+    if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
+        raise BacktestError(f"{name} must be finite and nonnegative")
+    return value
+
+
 def run_backtest(
     prices: dict[date, Decimal], signals: dict[date, str], config: BacktestConfig
 ) -> dict[str, object]:
     if not config.experiment_id.strip() or not config.version.strip():
         raise BacktestError("versioned experiment identity is required")
-    if config.fee_bps < 0 or config.slippage_bps < 0:
-        raise BacktestError("cost assumptions cannot be negative")
+    fee_bps = _finite_nonnegative(config.fee_bps, "fee_bps")
+    slippage_bps = _finite_nonnegative(config.slippage_bps, "slippage_bps")
+    if fee_bps + slippage_bps >= Decimal("10000"):
+        raise BacktestError("cost assumptions cannot consume the entire portfolio")
     if not prices:
         raise BacktestError("prices are required")
     ordered = sorted(prices)
-    if any(prices[day] <= 0 for day in ordered):
-        raise BacktestError("prices must be positive")
+    if any(not isinstance(prices[day], Decimal) or not prices[day].is_finite()
+           or prices[day] <= 0 for day in ordered):
+        raise BacktestError("prices must be finite and positive")
     if any(day not in prices for day in signals):
         raise BacktestError("signal has no same-day price")
     if any(value not in {"BUY", "SELL", "HOLD"} for value in signals.values()):
         raise BacktestError("unsupported signal")
+    if config.out_of_sample_start is not None and config.out_of_sample_start <= ordered[0]:
+        raise BacktestError("out-of-sample split must follow the first observation")
     position = Decimal("0")
     equity = Decimal("1")
     peak = equity
@@ -46,16 +57,28 @@ def run_backtest(
     max_drawdown = Decimal("0")
     previous = prices[ordered[0]]
     daily: list[dict[str, object]] = []
+    trade_ledger: list[dict[str, object]] = []
     for index, day in enumerate(ordered[1:], start=1):
         # Close-of-day signals cannot earn the return ending at that same close.
         # Apply the prior observation's signal to the following price interval.
-        signal = signals.get(ordered[index - 1], "HOLD")
+        signal_date = ordered[index - 1]
+        signal = signals.get(signal_date, "HOLD")
         target = Decimal("1") if signal == "BUY" else Decimal("0") if signal == "SELL" else position
         if target != position:
             trades += 1
-            cost = (config.fee_bps + config.slippage_bps) / Decimal("10000")
+            cost = (fee_bps + slippage_bps) / Decimal("10000")
+            before_cost = equity
             equity *= Decimal("1") - cost
             position = target
+            trade_ledger.append({
+                "signal_date": signal_date.isoformat(),
+                "execution_date": day.isoformat(),
+                "signal": signal,
+                "price": str(prices[day]),
+                "cost_fraction": str(cost),
+                "equity_before_cost": str(before_cost),
+                "equity_after_cost": str(equity),
+            })
         pnl = position * (prices[day] / previous - 1)
         equity *= Decimal("1") + pnl
         returns.append(pnl)
@@ -88,6 +111,8 @@ def run_backtest(
         "in_sample_days": len(in_sample),
         "out_of_sample_days": len(oos),
         "results": daily,
+        "trade_ledger": trade_ledger,
+        "equity_path_check": "PASSED",
         "status": "RESEARCH_ONLY",
         "broker_execution": "DISABLED",
     }

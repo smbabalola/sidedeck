@@ -1,6 +1,7 @@
 """Backtest chronological acceptance: signal cannot profit on its own price bar."""
 from datetime import date
 from decimal import Decimal
+import pytest
 
 from sidedeck.application.m2_backtest import BacktestConfig, run_backtest
 
@@ -24,3 +25,25 @@ def test_last_day_signal_never_receives_same_bar_return():
     )
     assert report["trade_count"] == 0
     assert Decimal(str(report["ending_equity"])) == Decimal("1")
+
+
+def test_trade_ledger_records_next_observation_and_equity_check():
+    days = [date(2026, 1, d) for d in (5, 6, 7)]
+    report = run_backtest(
+        dict(zip(days, map(Decimal, ("100", "110", "121")))),
+        {days[0]: "BUY", days[1]: "SELL"},
+        BacktestConfig("ledger", "v1", Decimal("10"), Decimal("5")),
+    )
+    assert report["equity_path_check"] == "PASSED"
+    assert report["trade_ledger"][0]["signal_date"] == "2026-01-05"
+    assert report["trade_ledger"][0]["execution_date"] == "2026-01-06"
+    assert report["trade_ledger"][1]["execution_date"] == "2026-01-07"
+
+
+@pytest.mark.parametrize("cost", [Decimal("NaN"), Decimal("Infinity"), Decimal("10000")])
+def test_nonfinite_or_total_cost_is_rejected(cost):
+    with pytest.raises(ValueError):
+        run_backtest(
+            {date(2026, 1, 1): Decimal("100"), date(2026, 1, 2): Decimal("101")},
+            {date(2026, 1, 1): "BUY"}, BacktestConfig("cost", "v1", cost),
+        )

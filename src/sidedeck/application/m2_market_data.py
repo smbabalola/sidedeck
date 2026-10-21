@@ -11,6 +11,8 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+from sidedeck.domain.instruments import get_instrument_by_id
+
 
 class MarketDataError(ValueError):
     pass
@@ -56,6 +58,12 @@ def normalize_daily_bars(payload: dict[str, Any], *, cutoff: datetime) -> tuple[
     required = ("instrument_id", "source", "exchange", "session", "currency", "adjustment")
     if any(not isinstance(payload.get(key), str) or not payload[key].strip() for key in required):
         raise MarketDataError("market-data provenance is incomplete")
+    try:
+        instrument = get_instrument_by_id(payload["instrument_id"])
+    except ValueError as exc:
+        raise MarketDataError("instrument is not in the approved universe") from exc
+    if payload["exchange"] != instrument.venue:
+        raise MarketDataError("instrument and exchange identity conflict")
     raw = payload.get("records")
     if not isinstance(raw, list) or not raw:
         raise MarketDataError("market-data records are required")
@@ -101,6 +109,28 @@ def normalize_daily_bars(payload: dict[str, Any], *, cutoff: datetime) -> tuple[
               "gaps": gaps, "conflicts": [], "issues": issues,
               "status": "READY" if not issues else "BLOCKED"}
     return bars, report
+
+
+def compare_independent_closes(
+    primary: list[NormalizedBar], independent: list[NormalizedBar], *, tolerance_bps: Decimal = Decimal("0")
+) -> dict[str, Any]:
+    """Compare two already-normalized sources without choosing a winner."""
+    if not tolerance_bps.is_finite() or tolerance_bps < 0:
+        raise MarketDataError("invalid comparison tolerance")
+    if not primary or not independent:
+        raise MarketDataError("two nonempty price sources are required")
+    identity = {(bar.instrument_id, bar.currency, bar.session, bar.adjustment) for bar in primary}
+    other_identity = {(bar.instrument_id, bar.currency, bar.session, bar.adjustment) for bar in independent}
+    if len(identity) != 1 or identity != other_identity:
+        raise MarketDataError("independent price identities do not match")
+    left = {bar.trading_date: bar for bar in primary}
+    right = {bar.trading_date: bar for bar in independent}
+    common = sorted(left.keys() & right.keys())
+    tolerance = tolerance_bps / Decimal("10000")
+    conflicts = [day.isoformat() for day in common
+                 if abs(left[day].close - right[day].close) / left[day].close > tolerance]
+    return {"instrument_id": next(iter(identity))[0], "common_dates": len(common),
+            "conflicts": conflicts, "status": "CORROBORATED" if common and not conflicts else "CONFLICT"}
 
 
 def admit_valuation(*, eps: Decimal, shares: Decimal, bar: NormalizedBar,

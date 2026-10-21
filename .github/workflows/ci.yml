@@ -37,3 +37,7 @@ jobs:
       - run: python -m pytest
       - run: ruff check .
       - run: mypy src --no-incremental --follow-imports=silent
+      - run: python -m alembic upgrade head
+      - name: Build read-only dashboard
+        working-directory: web
+        run: npm install --no-package-lock --ignore-scripts && npm run build

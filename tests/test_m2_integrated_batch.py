@@ -4,7 +4,9 @@ from decimal import Decimal
 import pytest
 
 from sidedeck.application.m2_backtest import BacktestConfig, run_backtest
-from sidedeck.application.m2_market_data import MarketDataError, admit_valuation, normalize_daily_bars
+from sidedeck.application.m2_market_data import (
+    MarketDataError, admit_valuation, compare_independent_closes, normalize_daily_bars,
+)
 from sidedeck.application.m2_research_run import ResearchRunBlocked, dry_run, plan_run, require_owner_authorization
 
 
@@ -35,6 +37,21 @@ def test_market_data_rejects_future_duplicate_and_bad_range():
                              cutoff=datetime(2026, 1, 6, tzinfo=timezone.utc))
     with pytest.raises(MarketDataError):
         normalize_daily_bars(bars(records=bars()["records"] * 2), cutoff=datetime(2026, 1, 6, tzinfo=timezone.utc))
+
+
+def test_independent_close_comparison_reports_conflicts_without_admission():
+    first, _ = normalize_daily_bars(bars(), cutoff=datetime(2026, 1, 6, tzinfo=timezone.utc))
+    second_payload = bars(source="https://independent.example/prices")
+    second_payload["records"][1] = {**second_payload["records"][1], "close": "106"}
+    second, _ = normalize_daily_bars(second_payload, cutoff=datetime(2026, 1, 6, tzinfo=timezone.utc))
+    report = compare_independent_closes(first, second)
+    assert report["status"] == "CONFLICT"
+    assert report["conflicts"] == ["2026-01-05"]
+
+
+def test_market_data_rejects_instrument_exchange_mismatch():
+    with pytest.raises(MarketDataError, match="exchange"):
+        normalize_daily_bars(bars(exchange="NYSE"), cutoff=datetime(2026, 1, 6, tzinfo=timezone.utc))
 
 
 def test_backtest_is_versioned_costed_and_split():
