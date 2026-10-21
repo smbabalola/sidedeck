@@ -83,7 +83,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   share-basis proof exists. No owner approval is currently required for that
   offline work.
 
-**Batch F (in progress; SD-004 Phase 4 corporate actions/share basis) — 2026-10-21**
+**Batch F (verified; SD-004 Phase 4 corporate actions/share basis) — 2026-10-21**
 
 - Added `p5_msft_corporate_actions.py` and regression tests: no MSFT split
   occurs in the Jul 29-Oct 20 window; latest official split is 2-for-1 on
@@ -100,9 +100,18 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   data was acquired. Independent comparison remains `BLOCKED_EXTERNAL`.
 - No authenticated request, paid dataset/model call, credential read,
   account/order endpoint, eToro request, or trading action was performed.
-- Focused Phase 4 tests: 11 passed. Full verification and exact CI are
-  pending. Next action: finish engineering verification, then advance to
-  independent strategy-testing work while retaining SD-004's block.
+- Focused Phase 4 tests: 11 passed. Full local regression: 544 passed, 1
+  skipped, 3 warnings; Ruff passed; mypy passed across 113 source files;
+  SQLite Alembic upgrade and frontend production build passed. PostgreSQL
+  disposable migration/test coverage passed in CI. Exact-HEAD GitHub CI
+  `39572269210` passed on `a50ccda6f3a0a9f8767d7cbeba890fb2afcbe8d8`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39572269210. CI emitted
+  only Node 20 and ubuntu-latest migration warnings.
+- Next action: advance to independent strategy-testing work while retaining
+  SD-004's valuation block. Owner action, if MSFT valuation is still desired,
+  is to provide a lawful complete independent 59-row export or written data
+  license permitting reproducible use; no broker or paid-data authorization is
+  being requested.
 
 **Decision record:** MSFT is the first *candidate*, not an approved trade; SOFI is a second sector-specific case. SOFI borrowings-excluding-deposits is supplementary audit only; no generic Buffett D/E approval. No Financial Datasets subscription is required for locally supplied Buffett SEC inputs. Price/valuation remain NO-GO until proved.
 
