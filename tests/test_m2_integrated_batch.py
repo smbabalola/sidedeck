@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from sidedeck.application.m2_backtest import BacktestConfig, run_backtest
+from sidedeck.application.m2_backtest import BacktestConfig, run_backtest, sensitivity_grid
 from sidedeck.application.m2_market_data import (
     MarketDataError, admit_valuation, compare_independent_closes, normalize_daily_bars,
 )
@@ -66,6 +66,18 @@ def test_backtest_is_versioned_costed_and_split():
         {date(2026, 1, 2): "BUY"}, BacktestConfig("EXP-MSFT-002", "v1"),
     )
     assert Decimal(str(drawdown["max_drawdown"])) > 0
+
+
+def test_sensitivity_grid_reports_benchmark_and_never_claims_robustness():
+    prices = {date(2026, 1, d): Decimal(str(v)) for d, v in ((1, 100), (2, 110), (3, 90), (4, 95))}
+    report = sensitivity_grid(
+        prices, {date(2026, 1, 1): "BUY"}, experiment_id="grid", version="v1",
+        fee_bps=(Decimal("0"), Decimal("5")), slippage_bps=(Decimal("0"),),
+        out_of_sample_start=date(2026, 1, 3),
+    )
+    assert len(report["grid"]) == 2
+    assert report["benchmark"]["ending_equity"] == "0.95"
+    assert report["robustness"] == "NOT_ASSESSED"
 
 
 def test_research_run_dry_run_never_authorizes_provider():

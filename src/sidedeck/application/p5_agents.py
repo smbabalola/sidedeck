@@ -16,6 +16,10 @@ from sidedeck.application.p5_model_config import load_model_settings
 from sidedeck.application.p5_research_credentials import import_research_env
 
 
+TRADINGAGENTS_REVISION = "tradingagents==0.7.0"
+AI_HEDGE_FUND_REVISION = "aihf==2.5.0+git.ec025370c66cf71d3ea2f2d8f463b5934c1c48af"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="P5 research-only external agent comparison")
     parser.add_argument("--ticker", default="SOFI")
@@ -41,7 +45,7 @@ def main() -> int:
     agents = (
         ExternalJsonAgent(
             upstream="TauricResearch/TradingAgents", portfolio_id="tradingagents",
-            revision="upstream-unpinned-local",
+            revision=TRADINGAGENTS_REVISION,
             command=(args.tradingagents_python, "-m",
                      "sidedeck.bridges.tradingagents_bridge"),
             model_provider=settings.portfolios["tradingagents"].default.provider,
@@ -49,7 +53,7 @@ def main() -> int:
         ),
         ExternalJsonAgent(
             upstream="virattt/ai-hedge-fund", portfolio_id="ai-trading",
-            revision="upstream-unpinned-local",
+            revision=AI_HEDGE_FUND_REVISION,
             command=(args.hedge_fund_python, hedge_bridge) + (
                 ("--fundamentals-json", args.fundamentals_json)
                 if args.fundamentals_json else ()

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from itertools import product
+from typing import Any
 
 
 class BacktestError(ValueError):
@@ -116,3 +118,34 @@ def run_backtest(
         "status": "RESEARCH_ONLY",
         "broker_execution": "DISABLED",
     }
+
+
+def buy_and_hold_benchmark(prices: dict[date, Decimal]) -> dict[str, str]:
+    """Return a transparent close-to-close benchmark for the same observations."""
+    if not prices or any(not isinstance(value, Decimal) or not value.is_finite() or value <= 0
+                         for value in prices.values()):
+        raise BacktestError("benchmark prices must be finite and positive")
+    ordered = sorted(prices)
+    return {"start": ordered[0].isoformat(), "end": ordered[-1].isoformat(),
+            "ending_equity": str(prices[ordered[-1]] / prices[ordered[0]]),
+            "status": "RESEARCH_ONLY"}
+
+
+def sensitivity_grid(
+    prices: dict[date, Decimal], signals: dict[date, str], *, experiment_id: str, version: str,
+    fee_bps: tuple[Decimal, ...], slippage_bps: tuple[Decimal, ...],
+    out_of_sample_start: date | None = None,
+) -> dict[str, Any]:
+    """Run a finite fee/slippage grid and expose results without selecting a winner."""
+    if not fee_bps or not slippage_bps:
+        raise BacktestError("sensitivity axes cannot be empty")
+    results = [run_backtest(
+        prices, signals, BacktestConfig(experiment_id, version, fee, slip, out_of_sample_start),
+    ) for fee, slip in product(fee_bps, slippage_bps)]
+    return {"benchmark": buy_and_hold_benchmark(prices),
+            "grid": [{"fee_bps": str(fee), "slippage_bps": str(slip),
+                       "ending_equity": result["ending_equity"],
+                       "out_of_sample_days": result["out_of_sample_days"]}
+                      for (fee, slip), result in zip(product(fee_bps, slippage_bps), results)],
+            "robustness": "NOT_ASSESSED", "status": "RESEARCH_ONLY",
+            "broker_execution": "DISABLED"}
