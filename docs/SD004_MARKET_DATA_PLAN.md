@@ -37,6 +37,23 @@ periods. A filing date is not a filing publication timestamp, so the first
 price cannot yet be admitted as point-in-time evidence. The Alpaca series is
 also not independent corroboration.
 
+## Phase 3 offline reconciliation
+
+The official Nasdaq Trader 2026 schedule confirms that 2026-09-07 was closed
+for Labor Day. The 59 expected regular sessions from 2026-07-29 through
+2026-10-20 therefore match the acquired dates with no missing or unexpected
+sessions. The official SEC EDGAR records match the local Company Facts
+accession lineage: 8-K `0001193125-26-323632` was accepted at 16:04:53 ET on
+2026-07-29, and 10-K `0001193125-26-323660` was accepted at 16:08:01 ET. Both
+are after the 16:00 ET close, so the first eligible valuation close is
+2026-07-30; 2026-07-29 is rejected for look-ahead.
+
+Yahoo MSFT history remains an independent candidate, not evidence. Its public
+history page was rate-limited during research and no CSV was acquired. The
+offline owner-supplied parser uses `Close`, never `Adj Close`, and keeps
+provenance and adjustment status unverified until a lawful export and
+corporate-action basis are supplied. No market cap or P/E is emitted.
+
 ## Admission rules
 
 `p5_alpaca_history.py` is a read-only data adapter boundary. It validates

@@ -11,7 +11,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-001 | P0 | VERIFIED | deps: none | Backtest correctness independent audit.** Next-observation signal timing is explicit, costs reject nonfinite/portfolio-consuming values, trade ledger records signal/execution dates and the returned path is marked independently checked. **Evidence:** `src/sidedeck/application/m2_backtest.py`; `tests/test_m2_backtest_chronology.py`; Batch A CI.
 - [x] **SD-002 | P0 | VERIFIED | deps: none | Research spending/identity security hardening.** Provider authorization is a 15-minute, single-run, single-use lease with finite USD/call caps and replay prevention; subprocess allowlisting remains broker-secret free. **Evidence:** `src/sidedeck/application/m2_research_run.py`, `src/sidedeck/application/ai_agents.py`, `tests/test_m2_model_budget_gate.py`, Batch A CI.
 - [x] **SD-003 | P0 | VERIFIED | deps: none | Historical-price evidence inventory and offline importers.** Normalized evidence now enforces approved instrument/exchange identity and independently compares common closes without admitting conflicts. eToro entitlement and genuine MSFT history remain NOT_VERIFIED. **Evidence:** `src/sidedeck/application/m2_market_data.py`, `docs/M2_ETORO_MARKET_DATA_ENDPOINT_MATRIX.md`, Batch A CI.
-- [ ] **SD-004 | P0 | BLOCKED_EXTERNAL | deps: SD-003 | MSFT genuine valuation admission.** `ALPACA_SIP_ACQUIRED` partial milestone: one authorized HTTP 200, 59 MSFT SIP split-adjusted daily bars, 2026-07-29 through 2026-10-20, one-page response, SHA-256 manifest in ignored local data. **Accept:** genuine dated evidence with reproducible market-cap/P-E audit, or still NO-GO with precise missing proof. **Blocker:** independent corroboration, filing publication timestamp, corporate-action verification and share-basis compatibility remain unavailable; public Nasdaq page reports unavailable data and Nasdaq Data Link entitlement/licensing is unverified. *Do not assert valuation from one source or fixtures*.
+- [ ] **SD-004 | P0 | BLOCKED_EXTERNAL | deps: SD-003 | MSFT genuine valuation admission.** `ALPACA_SIP_ACQUIRED` and `CALENDAR_VERIFIED` partial milestones: one authorized HTTP 200, 59 MSFT SIP split-adjusted daily bars, 2026-07-29 through 2026-10-20, one-page response, SHA-256 manifest in ignored local data; official Nasdaq 2026 calendar reconciles all 59 sessions and excludes 2026-09-07. Official SEC records match accessions `0001193125-26-323632` (8-K, accepted 2026-07-29 16:04:53 ET) and `0001193125-26-323660` (10-K, accepted 2026-07-29 16:08:01 ET); first eligible close is 2026-07-30. **Accept:** genuine dated evidence with reproducible market-cap/P-E audit, or still NO-GO with precise missing proof. **Blocker:** independent corroboration, corporate-action verification and share-basis compatibility remain unavailable; Yahoo is rate-limited/unverified and public Nasdaq Data Link entitlement/licensing is unverified. *Do not assert valuation from one source or fixtures*.
 - [x] **SD-005 | P1 | VERIFIED | deps: none | MSFT accounting integration and research-input manifest.** Existing MSFT reconstruction remains 2026-06-30 `10/12`, with eight fully reconciled non-valuation periods; new hash-only input manifest preserves cutoff/source lineage and explicitly blocks valuation. **Evidence:** `docs/M2_MSFT_FINANCIAL_RECONSTRUCTION.md`, `src/sidedeck/application/p5_research_manifest.py`, `tests/test_p5_research_manifest.py`.
 - [x] **SD-006 | P1 | VERIFIED | deps: SD-001 | Backtest strategy robustness and OOS acceptance.** Added same-observation buy-and-hold benchmark and finite fee/slippage sensitivity grid with locked OOS counts; robustness remains `NOT_ASSESSED` and no fixture profitability claim is emitted. **Evidence:** `src/sidedeck/application/m2_backtest.py`, `tests/test_m2_integrated_batch.py`.
 - [x] **SD-007 | P1 | VERIFIED | deps: SD-002, SD-005 | Real dual-agent dry-run acceptance harness.** Offline pair acceptance remains lineage/cutoff/provenance/abstention fail-closed; launcher now records `tradingagents==0.7.0` and the verified `aihf` git identity. No model/provider call was made. **Evidence:** `src/sidedeck/application/p5_agents.py`, `src/sidedeck/application/p5_research_pair_acceptance.py`, `tests/test_p5_agents.py`, `tests/test_p5_research_pair_acceptance.py`.
@@ -53,6 +53,27 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - Genuine evidence acquired: one bounded authenticated Alpaca SIP market-data read plus public documentation. No SEC download, eToro/Saxo request, paid data, model call, account read or broker action was used. SD-004 remains `BLOCKED_EXTERNAL`.
 - Full local regression for Batch D: `532 passed, 1 skipped, 3 warnings`; Ruff passed; mypy passed across 107 source files; Alembic upgrade and dashboard build passed. Exact-HEAD CI `39555238835` passed on `e662e4094d1ad8292cb3f96a499450832a72945a`.
 - Authorized retrieval correction: genuine Alpaca SIP evidence was acquired locally under the bounded 20-request approval: 1 HTTP request, status 200, 59 bars, one page, 2026-07-29 to 2026-10-20. Raw bundle and budget remain ignored/local; sanitized manifest only is described above. This does not constitute independent corroboration or valuation acceptance.
+
+**Batch E (in progress; SD-004 Phase 3 offline reconciliation) — 2026-10-21**
+
+- Added the official-source 2026 Nasdaq session calendar boundary and tested
+  that the 59-bar Jul 29-Oct 20 window is complete after excluding the Sep 7
+  Labor Day closure; no interpolation or holiday filling is performed.
+- Verified official SEC EDGAR accession/timestamp evidence against the local
+  Company Facts lineage: 8-K `0001193125-26-323632` accepted 16:04:53 ET and
+  10-K `0001193125-26-323660` accepted 16:08:01 ET on Jul 29. Both reject the
+  Jul 29 close; first eligible close is Jul 30. The implementation preserves
+  timezone-aware timestamps and applies a strict next-session look-ahead rule.
+- Added an offline owner-supplied Yahoo CSV parser that uses historical
+  `Close`, never `Adj Close`, and marks provenance/adjustment unverified. The
+  public Yahoo history page was rate-limited; no Yahoo rows were acquired.
+- SD-004 remains `BLOCKED_EXTERNAL`: no independent price corroboration,
+  verified split/dividend basis, or compatible actual-share denominator.
+  No new authenticated Alpaca call, account/portfolio/order endpoint, eToro
+  request, paid data/model call, or trading action was performed.
+- Focused Phase 3 tests: 7 passed before final lint cleanup; final counts and
+  exact CI are pending. Next action after green CI: continue the next safe
+  offline R1/R2 work while retaining SD-004's valuation block.
 
 **Decision record:** MSFT is the first *candidate*, not an approved trade; SOFI is a second sector-specific case. SOFI borrowings-excluding-deposits is supplementary audit only; no generic Buffett D/E approval. No Financial Datasets subscription is required for locally supplied Buffett SEC inputs. Price/valuation remain NO-GO until proved.
 
