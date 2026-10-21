@@ -26,7 +26,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 **Batch A (completed locally; exact-HEAD CI pending):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
-**Batch B (completed locally; exact-HEAD CI pending):** SD-005 + SD-006 + SD-007. **Batch C (implemented locally; exact-HEAD CI pending):** SD-012 operator runbooks/recovery. No further safe release work can satisfy SD-004/008/011/013 without external evidence or owner approval.
+**Batch B (verified):** SD-005 + SD-006 + SD-007. Exact-HEAD GitHub CI `39549110907` passed on `75eea2e52c013cb7946a80da36c30bf980af67e7`. **Batch C (verified):** SD-012 operator runbooks/recovery. Exact-HEAD GitHub CI `39549183270` passed on `14c846bb2ba24f302f9647a4377645b5480866c7`. No further safe release work can satisfy SD-004/008/011/013 without external evidence or owner approval.
 
 ### Batch A evidence — 2026-10-21
 
@@ -36,13 +36,14 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 ### Batch B evidence — 2026-10-21
 
-- Local focused verification: `20 passed`; Ruff passed; mypy passed for 105 source files. Hash-only MSFT research manifests omit raw content; backtest sensitivity output keeps robustness `NOT_ASSESSED`; paired-agent checks remain offline and proposal-only.
+- Local focused verification: `20 passed`; final full regression `518 passed, 1 skipped, 3 warnings`; Ruff passed; mypy passed for 105 source files. Hash-only MSFT research manifests omit raw content; backtest sensitivity output keeps robustness `NOT_ASSESSED`; paired-agent checks remain offline and proposal-only.
 - No provider/model call, SEC download, authenticated broker request, order, baseline refresh or credential read was performed. Batch B is implementation/fixture evidence, not genuine research or performance evidence.
 
 ### Batch C evidence — 2026-10-21
 
 - Added `docs/OPERATOR_RUNBOOK.md` covering loopback operation, sanitized recovery, disposable migration rollback, protected baseline handling and privacy/release stops.
 - Remaining gates are genuine MSFT price evidence (`BLOCKED_EXTERNAL`), paid-provider/model authorization (`BLOCKED_OWNER`), and all paper/demo execution/release work (`BLOCKED_OWNER` / `NO-GO`).
+- Exact-HEAD CI for Batch B and Batch C passed with Python 3.12, disposable PostgreSQL, Ruff, mypy, Alembic upgrade and dashboard build: [39549110907](https://github.com/smbabalola/sidedeck/actions/runs/39549110907), [39549183270](https://github.com/smbabalola/sidedeck/actions/runs/39549183270).
 
 **Decision record:** MSFT is the first *candidate*, not an approved trade; SOFI is a second sector-specific case. SOFI borrowings-excluding-deposits is supplementary audit only; no generic Buffett D/E approval. No Financial Datasets subscription is required for locally supplied Buffett SEC inputs. Price/valuation remain NO-GO until proved.
 
