@@ -134,6 +134,12 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - Ran four strategies per instrument with locked OOS, 9-cell parameter
   surfaces, in-sample-only selection, four walk-forward windows and proposal
   portfolio controls. Results and hashes: `docs/SD021_RESULTS.md`.
+- Full local verification: 562 passed, 1 skipped, 3 warnings; Ruff passed;
+  mypy passed across 116 source files; SQLite Alembic upgrade and frontend
+  production build passed. Exact-head GitHub CI `39579019726` passed on
+  `05289068e40daa83c96dea3443c272290dd6f6bf`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39579019726. CI emitted
+  only the existing Node 20 and ubuntu-latest migration warnings.
 - No account, portfolio, order, eToro, Saxo, paid model/data or paper/real
   trading action occurred; credential values were not logged or exposed.
   SD-004 remains blocked by independent valuation evidence; next safe batch is
