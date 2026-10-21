@@ -46,6 +46,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-032 | P0 | VERIFIED | deps: SD-027, SD-029, SD-030 | Durable offline paper intent and idempotent dispatcher boundary.** Added a SQLite-backed append-only intent/event store with tenant/broker/environment/account-scope identity, conflicting client-order rejection, atomic idempotency, partial/full simulated-fill replay and restart recovery. State transitions fail closed and the only acknowledgement is `offline-simulated`; no broker client or authenticated call exists. **Evidence:** `docs/SD032_DURABLE_PAPER_INTENT.md`; `src/sidedeck/application/sd032_durable_paper_intent.py`; `tests/test_sd032_durable_paper_intent.py`.
 - [x] **SD-033 | P0 | VERIFIED | deps: SD-032 | Independent signed approval and emergency-stop enforcement.** Added a verifier-only approval store using an externally supplied public-key/verifier boundary, scoped intent digest, expiry, requester/approver separation and replay prevention. Kill-switch state persists across restart and requires separate operator clearance; signing secrets are never generated or stored. **Evidence:** `docs/SD033_APPROVAL_KILLSWITCH.md`; `src/sidedeck/application/sd033_approval_killswitch.py`; `tests/test_sd033_approval_killswitch.py`.
 - [x] **SD-034 | P1 | VERIFIED | deps: SD-032, SD-033 | Offline broker-reconciliation contract and bounded owner-read proposal.** Added mock-only acknowledgement, partial/full fill, exit attribution and duplicate/missing/out-of-order/invalid-event detection, plus a dormant three-request Alpaca PAPER read-only proposal. No authenticated read was executed; release remains `NO_GO` and transport `DISABLED`. **Evidence:** `docs/SD034_RECONCILIATION_RELEASE_EVIDENCE.md`; `src/sidedeck/application/sd034_reconciliation_contract.py`; `tests/test_sd034_reconciliation_contract.py`.
+- [ ] **SD-035 | P0 | READY | deps: SD-034 | Alpaca PAPER account-separation comparison proposal.** Prepare a separate, two-request maximum, read-only comparison using `ALPACA_API_KEY`/`ALPACA_API_SECRET` and `ALPACA_API_KEY2`/`ALPACA_API_SECRET2`, exactly one `GET /v2/account` per pair. Compare identities only in memory and emit `DISTINCT`, `SAME` or `UNVERIFIED`; failures are sanitized, never retried and never permit release. **Blocker:** separate owner authorization required before any authenticated request. **Evidence target:** `docs/SD035_ALPACA_ACCOUNT_SEPARATION_PROPOSAL.md`; no request is authorized by this TODO item.
 
 ## Session control and next autonomous batch
 
@@ -167,6 +168,18 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   `811f3184f0f6dd8d45bc6585f0875bde4a00fcf4`:
   https://github.com/smbabalola/sidedeck/actions/runs/39593173513. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
+
+**Batch T (2026-10-21; SD-035 proposal prepared, no request executed):**
+
+- Prepared the exact two-request account-separation scope: one `/v2/account`
+  GET for each configured Alpaca PAPER credential pair, with in-memory
+  identity comparison and only `DISTINCT`, `SAME` or `UNVERIFIED` output.
+- No authenticated request, credential read, account identifier access,
+  order, eToro request, paid call or trading action occurred. Paper release
+  remains `NO_GO` and broker transport remains `DISABLED`.
+- Next action: obtain a separate explicit owner authorization for this exact
+  two-request scope, or continue offline work; do not reuse SD-034's exhausted
+  three-request authorization.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
