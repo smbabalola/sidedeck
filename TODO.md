@@ -163,9 +163,9 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   The ignored local budget is `data/sd034-auth-budget.sqlite3` and contains
   counters only. The authorization is exhausted; no further authenticated
   request is permitted without a new bounded owner decision.
-- Exact-head GitHub CI `39593002043` passed on
-  `ce695dc9b1e7f755b68498878a76f37e45ace0f7`:
-  https://github.com/smbabalola/sidedeck/actions/runs/39593002043. CI emitted
+- Exact-head GitHub CI `39593173513` passed on
+  `811f3184f0f6dd8d45bc6585f0875bde4a00fcf4`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39593173513. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
