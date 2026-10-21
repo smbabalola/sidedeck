@@ -39,7 +39,8 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-027 | P0 | VERIFIED | deps: SD-017, SD-022, SD-026 | Offline Alpaca paper execution safety readiness.** Independently reproduced a `NO_GO` matrix covering broker isolation, disabled order submission, proposal boundary, idempotency, stale quotes, duplicate orders, partial fills, reconciliation, approval signatures, kill-switch and account separation. Residual release issues are explicit; no broker request/order/owner self-approval occurred. **Evidence:** `docs/SD027_PAPER_READINESS_AUDIT.md`; `src/sidedeck/application/sd027_paper_readiness_audit.py`; `tests/test_sd027_sd028_audits.py`.
 - [x] **SD-028 | P1 | VERIFIED | deps: SD-017, SD-022 | SPY/QQQ joint portfolio economics and risk audit.** Deterministically aligned 1,254 sessions, computed equal-weight ledger, price-only benchmark, correlation, exposure, concentration and drawdown; turnover/cost/regime sensitivity remain explicitly unassessed. No trading approval inferred. **Evidence:** `docs/SD028_PORTFOLIO_ECONOMICS.md`; `src/sidedeck/application/sd028_portfolio_economics.py`; `tests/test_sd027_sd028_audits.py`.
 - [x] **SD-029 | P1 | VERIFIED | deps: SD-027 | Dry-run operator rehearsal and release evidence pack.** Completed isolated in-memory intent → external human-approval record → simulated submission/ack/fill/exit lineage, partial fills, idempotency conflict, rollback and emergency stop tests. No broker state, HTTP calls or order actions; `broker_execution=DISABLED`. SD-011/013 remain blocked. **Evidence:** `docs/SD029_PAPER_RELEASE_CHECKLIST.md`; `src/sidedeck/application/sd029_operator_rehearsal.py`; `tests/test_sd029_operator_rehearsal.py`.
-- [ ] **SD-030 | P1 | READY | deps: SD-029 | Release-gate evidence pack hardening.** Add a sanitized machine-readable gate report that combines SD-027 NO-GO controls, SD-029 rehearsal results, explicit owner-approval requirements and protected-baseline status; verify it cannot emit credentials, account IDs, order controls or a paper-release GO.
+- [x] **SD-030 | P1 | VERIFIED | deps: SD-029 | Release-gate evidence pack hardening.** Added a sanitized machine-readable report combining SD-027 `NO_GO` controls and SD-029 rehearsal results; it requires separate owner approval, preserves protected-baseline status, and rejects any attempt to emit credentials/account IDs/order controls or a paper-release `GO`. **Evidence:** `docs/SD030_RELEASE_GATE_REPORT.md`; `src/sidedeck/application/sd030_release_gate_report.py`; `tests/test_sd030_release_gate_report.py`.
+- [ ] **SD-031 | P1 | READY | deps: SD-030 | Operator evidence surface.** Expose the sanitized release-gate report through the read-only local dashboard/API with fail-closed loading/error states; add frontend/API regression coverage and preserve explicit `NO_GO`/`DISABLED` language.
 
 ## Session control and next autonomous batch
 
@@ -76,6 +77,18 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   https://github.com/smbabalola/sidedeck/actions/runs/39587901482. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
 - Next safe batch: SD-030 sanitized release-gate evidence report.
+
+**Batch P (2026-10-21; SD-030 verified):**
+
+- Added a sanitized machine-readable paper-release gate report that combines
+  SD-027 `NO_GO` controls with SD-029 rehearsal evidence. It requires separate
+  owner approval, preserves the protected baseline, and rejects any non-NO-GO
+  readiness or enabled broker execution.
+- Full local verification: 577 passed, 1 skipped, 3 warnings; Ruff, mypy
+  across 123 source files, SQLite Alembic upgrade and frontend build passed.
+  No network, credentials, account access, paid call, broker or trading action
+  occurred. Exact-head CI is pending.
+- Next safe batch: SD-031 operator evidence surface.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
