@@ -24,7 +24,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 ## Session control and next autonomous batch
 
-**Batch A (completed locally; exact-HEAD CI pending):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
+**Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
 **Batch B (verified):** SD-005 + SD-006 + SD-007. Exact-HEAD GitHub CI `39549110907` passed on `75eea2e52c013cb7946a80da36c30bf980af67e7`. **Batch C (verified):** SD-012 operator runbooks/recovery. Exact-HEAD GitHub CI `39549183270` passed on `14c846bb2ba24f302f9647a4377645b5480866c7`. No further safe release work can satisfy SD-004/008/011/013 without external evidence or owner approval.
 
