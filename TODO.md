@@ -38,7 +38,8 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 - [x] **SD-027 | P0 | VERIFIED | deps: SD-017, SD-022, SD-026 | Offline Alpaca paper execution safety readiness.** Independently reproduced a `NO_GO` matrix covering broker isolation, disabled order submission, proposal boundary, idempotency, stale quotes, duplicate orders, partial fills, reconciliation, approval signatures, kill-switch and account separation. Residual release issues are explicit; no broker request/order/owner self-approval occurred. **Evidence:** `docs/SD027_PAPER_READINESS_AUDIT.md`; `src/sidedeck/application/sd027_paper_readiness_audit.py`; `tests/test_sd027_sd028_audits.py`.
 - [x] **SD-028 | P1 | VERIFIED | deps: SD-017, SD-022 | SPY/QQQ joint portfolio economics and risk audit.** Deterministically aligned 1,254 sessions, computed equal-weight ledger, price-only benchmark, correlation, exposure, concentration and drawdown; turnover/cost/regime sensitivity remain explicitly unassessed. No trading approval inferred. **Evidence:** `docs/SD028_PORTFOLIO_ECONOMICS.md`; `src/sidedeck/application/sd028_portfolio_economics.py`; `tests/test_sd027_sd028_audits.py`.
-- [ ] **SD-029 | P1 | READY | deps: SD-027 | Dry-run operator rehearsal and release evidence pack.** Run only isolated mock or disposable DB scenarios for order intent → external human-approval verification → submission simulation → ack/fill/position/exit attribution, replay/rollback, outages and emergency stop. **Accept:** documented operator steps, fail-closed controls, independently signed approval design, no real broker account state, HTTP calls or order actions. Produce bounded future owner approval proposal only when all prerequisites actually pass. **Evidence target:** `docs/SD029_PAPER_RELEASE_CHECKLIST.md`, regression and UAT results. Do not remove SD-011/013 blocks.
+- [x] **SD-029 | P1 | VERIFIED | deps: SD-027 | Dry-run operator rehearsal and release evidence pack.** Completed isolated in-memory intent → external human-approval record → simulated submission/ack/fill/exit lineage, partial fills, idempotency conflict, rollback and emergency stop tests. No broker state, HTTP calls or order actions; `broker_execution=DISABLED`. SD-011/013 remain blocked. **Evidence:** `docs/SD029_PAPER_RELEASE_CHECKLIST.md`; `src/sidedeck/application/sd029_operator_rehearsal.py`; `tests/test_sd029_operator_rehearsal.py`.
+- [ ] **SD-030 | P1 | READY | deps: SD-029 | Release-gate evidence pack hardening.** Add a sanitized machine-readable gate report that combines SD-027 NO-GO controls, SD-029 rehearsal results, explicit owner-approval requirements and protected-baseline status; verify it cannot emit credentials, account IDs, order controls or a paper-release GO.
 
 ## Session control and next autonomous batch
 
@@ -60,6 +61,18 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   https://github.com/smbabalola/sidedeck/actions/runs/39587401345. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
 - SD-029 is now the next READY package because SD-027 is verified.
+
+**Batch O (2026-10-21; SD-029 verified):**
+
+- Added a disposable in-memory paper-release rehearsal covering explicit
+  external approval records, simulated submission/acknowledgement, partial and
+  complete fills, exit lineage, idempotency conflicts, rollback and emergency
+  stop. No HTTP, credentials, broker state or order action exists in the
+  harness.
+- Full local verification: 575 passed, 1 skipped, 3 warnings; Ruff, mypy
+  across 122 source files, SQLite Alembic upgrade and frontend build passed.
+  No external access or trading action occurred. Exact-head CI is pending.
+- Next safe batch: SD-030 sanitized release-gate evidence report.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
