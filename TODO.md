@@ -51,6 +51,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 - Focused verification: `18 passed`; adapter and valuation modules pass Ruff; mypy passes across 107 source files. `docs/SD004_MARKET_DATA_PLAN.md` records official-source findings and the exact remaining entitlement/provenance blocker.
 - Genuine evidence acquired: public documentation only. No MSFT price rows, SEC downloads, authenticated Alpaca/eToro requests, paid data, credentials, model calls or broker actions were used. SD-004 remains `BLOCKED_EXTERNAL`.
+- Full local regression for Batch D: `531 passed, 1 skipped, 3 warnings`; Ruff passed; mypy passed across 107 source files; Alembic upgrade and dashboard build passed. Exact-HEAD CI `39550602905` passed on `383d57b524850a33f33ebaaf504a167f06f789d9`.
 
 **Decision record:** MSFT is the first *candidate*, not an approved trade; SOFI is a second sector-specific case. SOFI borrowings-excluding-deposits is supplementary audit only; no generic Buffett D/E approval. No Financial Datasets subscription is required for locally supplied Buffett SEC inputs. Price/valuation remain NO-GO until proved.
 
