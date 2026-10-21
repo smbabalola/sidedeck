@@ -207,6 +207,13 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   exact-head GitHub CI `39596052580` passed:
   https://github.com/smbabalola/sidedeck/actions/runs/39596052580. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
+- Final SD-035 HEAD `fece1aaaf95e6f9b5cb857930af529bb6ecced99` exact-head
+  GitHub CI `39596254346` subsequently passed:
+  https://github.com/smbabalola/sidedeck/actions/runs/39596254346. The
+  account-separation result remains `UNVERIFIED` because Pair B returned HTTP
+  401; do not repeat the exhausted authorization. Next action is owner-side
+  dashboard/configuration review of the second paper credential pair, followed
+  by a new bounded authorization only if identity comparison is still needed.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
