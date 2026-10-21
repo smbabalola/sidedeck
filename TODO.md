@@ -175,6 +175,9 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   build passed. No network, credentials, paid data/model, account, broker or
   trading action occurred. Exact-head CI is pending for this batch.
 - Next safe batch: SD-025 benchmark/report integration.
+- Exact-head GitHub CI `39584782646` passed on `d317d11e069c7951105d044e68625bfb9c9b0c74`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39584782646. CI emitted
+  only the existing Node 20 and ubuntu-latest migration warnings.
 - No account, portfolio, order, eToro, Saxo, paid model/data or paper/real
   trading action occurred; credential values were not logged or exposed.
   SD-004 remains blocked by independent valuation evidence; next safe batch is
