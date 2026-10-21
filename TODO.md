@@ -144,6 +144,26 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   https://github.com/smbabalola/sidedeck/actions/runs/39590894464. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
 
+**Batch S (2026-10-21; SD-034 authorized read-only verification consumed):**
+
+- Executed exactly three authenticated Alpaca PAPER GETs under the bounded
+  owner authorization: `/v2/account`, `/v2/positions` and `/v2/orders`.
+  Each returned HTTP 200 with a valid coarse schema. The account reported
+  `ACTIVE`/`USD`; zero positions and zero orders were returned. The persistent
+  attempt budget records 3 of 3 consumed, with no retry or additional path.
+- Account identity/separation remains `UNVERIFIED`: the account identifier
+  was withheld and no independently supplied mapping or second-account
+  comparison was authorized. This does not establish release readiness.
+  Paper release is still `NO_GO`; broker execution is `DISABLED`.
+- Raw responses, credentials, headers, account/order/position identifiers,
+  balances, quantities and prices were not persisted or printed. No order,
+  eToro request, paid call, monitoring loop or live trading occurred.
+- **Evidence:** `docs/SD034_ALPACA_READONLY_VERIFICATION.md` and the bounded
+  one-shot verifier in `src/sidedeck/application/sd034_alpaca_one_shot.py`.
+  The ignored local budget is `data/sd034-auth-budget.sqlite3` and contains
+  counters only. The authorization is exhausted; no further authenticated
+  request is permitted without a new bounded owner decision.
+
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
 **Batch B (verified):** SD-005 + SD-006 + SD-007. Exact-HEAD GitHub CI `39549110907` passed on `75eea2e52c013cb7946a80da36c30bf980af67e7`. **Batch C (verified):** SD-012 operator runbooks/recovery. Exact-HEAD GitHub CI `39549183270` passed on `14c846bb2ba24f302f9647a4377645b5480866c7`.
