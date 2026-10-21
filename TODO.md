@@ -110,6 +110,10 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - SD-004 remains `BLOCKED_EXTERNAL`; SD-008, SD-011 and SD-013 remain
   `BLOCKED_OWNER`. Paper-order execution remains disabled. Next safe work is
   exhausted pending new independent market evidence or owner release gates.
+- Exact-head GitHub CI `39588995875` passed on
+  `54d0ba7841c8502fd901efd350a3515240b2dd14`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39588995875. CI emitted
+  only the existing Node 20 and ubuntu-latest migration warnings.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
