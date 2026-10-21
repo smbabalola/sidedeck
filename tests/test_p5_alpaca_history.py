@@ -1,10 +1,11 @@
 import json
 import urllib.parse
+from datetime import date
 
 import pytest
 
 from sidedeck.application.p5_alpaca_history import (
-    MarketDataUnavailable, fetch_alpaca_iex, parse_bars,
+    MarketDataUnavailable, fetch_alpaca_iex, fetch_alpaca_sip, parse_bars,
 )
 
 
@@ -28,7 +29,8 @@ def test_alpaca_iex_fetch_uses_data_endpoint_and_keeps_adjustment_unverified():
     def opener(req, timeout):
         calls.append(req)
         return FakeResponse({"bars": [
-            {"t": "2025-02-03T05:00:00Z", "c": 12.5},
+            {"t": "2025-02-03T05:00:00Z", "o": 12, "h": 13, "l": 11,
+             "c": 12.5, "v": 100},
         ], "next_page_token": None})
 
     output = fetch_alpaca_iex("SOFI", "2025-02-01", "2025-02-05",
@@ -39,13 +41,13 @@ def test_alpaca_iex_fetch_uses_data_endpoint_and_keeps_adjustment_unverified():
     assert query["adjustment"] == ["split"]
     assert output["corporate_actions_verified"] is False
     assert output["research_only"] is True
-    assert output["records"][0]["close"] == 12.5
+    assert output["records"][0]["close"] == "12.5"
 
 
 def test_alpaca_retrieves_all_pages():
     pages = [
-        {"bars": [{"t": "2025-02-03T05:00:00Z", "c": 12.5}], "next_page_token": "NEXT"},
-        {"bars": [{"t": "2025-02-04T05:00:00Z", "c": 12.7}], "next_page_token": None},
+        {"bars": [{"t": "2025-02-03T05:00:00Z", "o": 12, "h": 13, "l": 11, "c": 12.5, "v": 100}], "next_page_token": "NEXT"},
+        {"bars": [{"t": "2025-02-04T05:00:00Z", "o": 12, "h": 13, "l": 11, "c": 12.7, "v": 100}], "next_page_token": None},
     ]
 
     def opener(req, timeout):
@@ -66,15 +68,31 @@ def test_no_data_is_blocked():
 def test_future_bar_rejected():
     from datetime import date
     with pytest.raises(MarketDataUnavailable, match="future"):
-        parse_bars({"bars": [{"t": "2025-02-06T05:00:00Z", "c": 1}]},
+        parse_bars({"bars": [{"t": "2025-02-06T05:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]},
                    cutoff=date(2025, 2, 5))
 
 
 def test_duplicate_dates_rejected():
-    bar = {"t": "2025-02-03T05:00:00Z", "c": 12.5}
+    bar = {"t": "2025-02-03T05:00:00Z", "o": 12, "h": 13, "l": 11, "c": 12.5, "v": 100}
     with pytest.raises(MarketDataUnavailable, match="duplicate"):
         fetch_alpaca_iex("SOFI", "2025-02-01", "2025-02-05",
                          key_id="fake", secret="fake",
                          open_url=lambda req, timeout: FakeResponse({
                              "bars": [bar, bar], "next_page_token": None,
                          }))
+
+
+def test_sip_is_explicit_and_never_substituted_for_iex():
+    seen = []
+    def opener(req, timeout):
+        seen.append(urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query))
+        return FakeResponse({"bars": [{"t": "2025-02-03T05:00:00Z", "o": 12, "h": 13,
+                                        "l": 11, "c": 12.5, "v": 100}], "next_page_token": None})
+    result = fetch_alpaca_sip("MSFT", "2025-02-01", "2025-02-05", key_id="x", secret="y", open_url=opener)
+    assert seen[0]["feed"] == ["sip"]
+    assert result["feed"] == "sip" and result["instrument_id"] == "US:MSFT"
+
+
+def test_missing_ohlcv_is_rejected():
+    with pytest.raises(MarketDataUnavailable, match="invalid open"):
+        parse_bars({"bars": [{"t": "2025-02-03T05:00:00Z", "c": 1}]}, cutoff=date(2025, 2, 5))

@@ -7,18 +7,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date
 from pathlib import Path
-from typing import Any
+from decimal import Decimal, InvalidOperation
+from typing import Any, Callable
 
 _ENDPOINT = "https://data.alpaca.markets/v2/stocks"
 _MAX_PAGES = 20
+_ALLOWED_FEEDS = frozenset(("iex", "sip"))
+_ALLOWED_ADJUSTMENTS = frozenset(("raw", "split", "dividend", "spin-off", "all"))
 
 
 class MarketDataUnavailable(ValueError):
@@ -45,7 +48,19 @@ def _credential(path: str, name: str) -> str:
     raise MarketDataUnavailable("market-data credential not present in env-file")
 
 
-def parse_bars(payload: dict[str, Any], *, cutoff: date) -> list[dict[str, Any]]:
+def _positive_decimal(value: Any, field: str) -> Decimal:
+    if isinstance(value, bool):
+        raise MarketDataUnavailable(f"invalid {field}")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise MarketDataUnavailable(f"invalid {field}") from exc
+    if not result.is_finite() or result <= 0:
+        raise MarketDataUnavailable(f"invalid {field}")
+    return result
+
+
+def parse_bars(payload: dict[str, Any], *, cutoff: date, ticker: str = "") -> list[dict[str, Any]]:
     bars = payload.get("bars")
     if not isinstance(bars, list):
         raise MarketDataUnavailable("invalid market-data bars")
@@ -54,31 +69,38 @@ def parse_bars(payload: dict[str, Any], *, cutoff: date) -> list[dict[str, Any]]
         if not isinstance(row, dict):
             raise MarketDataUnavailable("invalid market-data bar")
         stamp = row.get("t")
-        close = row.get("c")
         if not isinstance(stamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T.*", stamp):
             raise MarketDataUnavailable("bar timestamp missing")
         try:
             day = date.fromisoformat(stamp[:10])
         except ValueError as exc:
             raise MarketDataUnavailable("invalid bar timestamp") from exc
-        if day > cutoff or isinstance(close, bool) or not isinstance(close, (float, int)):
+        if day > cutoff:
             raise MarketDataUnavailable("future bar or invalid close")
-        if not math.isfinite(close) or close <= 0:
-            raise MarketDataUnavailable("invalid close")
-        results.append({"date": day.isoformat(), "close": close,
-                        "source_id": "alpaca:iex:1Day:split:" + stamp})
+        values = {field: _positive_decimal(row.get(key), field)
+                  for field, key in (("open", "o"), ("high", "h"), ("low", "l"),
+                                     ("close", "c"), ("volume", "v"))}
+        if values["high"] < max(values["open"], values["close"]) or values["low"] > min(values["open"], values["close"]):
+            raise MarketDataUnavailable("inconsistent OHLC range")
+        results.append({"date": day.isoformat(), "timestamp": stamp, **{k: str(v) for k, v in values.items()},
+                        "ticker": ticker, "source_id": "alpaca:1Day:" + stamp})
     return results
 
 
-def fetch_alpaca_iex(
+def fetch_alpaca_history(
     ticker: str, start: str, end: str, *, key_id: str, secret: str,
-    open_url: Any = None,
+    feed: str = "iex", adjustment: str = "split", open_url: Any = None,
+    max_retries: int = 1, sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", ticker):
         raise MarketDataUnavailable("unsupported ticker")
     first, last = date.fromisoformat(start), date.fromisoformat(end)
     if first > last:
         raise MarketDataUnavailable("invalid date range")
+    if feed not in _ALLOWED_FEEDS or adjustment not in _ALLOWED_ADJUSTMENTS:
+        raise MarketDataUnavailable("unsupported feed or adjustment")
+    if not isinstance(max_retries, int) or isinstance(max_retries, bool) or not 0 <= max_retries <= 2:
+        raise MarketDataUnavailable("invalid retry budget")
     if not key_id or not secret:
         raise MarketDataUnavailable("missing market-data credentials")
     url = _ENDPOINT + "/" + ticker + "/bars"
@@ -88,24 +110,34 @@ def fetch_alpaca_iex(
     opener = open_url or urllib.request.urlopen
     for _ in range(_MAX_PAGES):
         params = {"timeframe": "1Day", "start": start, "end": end,
-                  "feed": "iex", "adjustment": "split", "limit": "10000"}
+                  "feed": feed, "adjustment": adjustment, "currency": "USD", "sort": "asc", "limit": "10000"}
         if token is not None:
             params["page_token"] = token
         req = urllib.request.Request(url + "?" + urllib.parse.urlencode(params), headers={
             "APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret,
             "Accept": "application/json",
         })
-        try:
-            with opener(req, timeout=20) as response:
-                raw = response.read(8_000_001)
-                if len(raw) > 8_000_000:
-                    raise MarketDataUnavailable("response too large")
-                payload = json.loads(raw)
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            raise MarketDataUnavailable("Alpaca market-data request failed") from exc
+        for attempt in range(max_retries + 1):
+            try:
+                with opener(req, timeout=20) as response:
+                    raw = response.read(8_000_001)
+                    if len(raw) > 8_000_000:
+                        raise MarketDataUnavailable("response too large")
+                    payload = json.loads(raw)
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code not in (429, 500, 502, 503) or attempt == max_retries:
+                    raise MarketDataUnavailable("Alpaca market-data request failed") from None
+                sleep(min(2 ** attempt, 2))
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                if attempt == max_retries:
+                    raise MarketDataUnavailable("Alpaca market-data request failed") from exc
+                sleep(min(2 ** attempt, 2))
+        else:
+            raise MarketDataUnavailable("Alpaca market-data request failed")
         if not isinstance(payload, dict):
             raise MarketDataUnavailable("invalid response")
-        records.extend(parse_bars(payload, cutoff=last))
+        records.extend(parse_bars(payload, cutoff=last, ticker=ticker))
         next_token = payload.get("next_page_token")
         if next_token is None:
             break
@@ -122,14 +154,31 @@ def fetch_alpaca_iex(
         raise MarketDataUnavailable("no historical IEX bars for requested range")
     records.sort(key=lambda row: row["date"])
     return {
-        "ticker": ticker, "currency": "USD",
-        "price_basis": "split_adjusted_close",
+        "ticker": ticker, "instrument_id": "US:" + ticker, "exchange": "NASDAQ",
+        "currency": "USD", "session": "REGULAR",
+        "price_basis": "split_adjusted_close" if adjustment == "split" else adjustment + "_close",
         "corporate_actions_verified": False,
-        "source": url,
-        "feed": "iex", "adjustment": "split",
+        "source": url, "source_identity": "alpaca_market_data_api",
+        "feed": feed, "adjustment": adjustment,
         "historical_price_validation": "PENDING",
         "research_only": True, "records": records,
     }
+
+
+def fetch_alpaca_iex(
+    ticker: str, start: str, end: str, *, key_id: str, secret: str,
+    open_url: Any = None,
+) -> dict[str, Any]:
+    return fetch_alpaca_history(ticker, start, end, key_id=key_id, secret=secret,
+                                feed="iex", adjustment="split", open_url=open_url)
+
+
+def fetch_alpaca_sip(
+    ticker: str, start: str, end: str, *, key_id: str, secret: str,
+    open_url: Any = None,
+) -> dict[str, Any]:
+    return fetch_alpaca_history(ticker, start, end, key_id=key_id, secret=secret,
+                                feed="sip", adjustment="split", open_url=open_url)
 
 
 def main() -> int:
