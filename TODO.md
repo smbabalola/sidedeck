@@ -75,8 +75,8 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   skipped, 3 warnings; Ruff passed; mypy passed across 110 source files;
   SQLite Alembic upgrade and frontend production build passed. PostgreSQL
   disposable migration/test coverage passed in CI. Exact-HEAD GitHub CI
-  `39556315725` passed on `55e31c095e4f9d6d2004fd4eb160b90c0294b6e3`:
-  https://github.com/smbabalola/sidedeck/actions/runs/39556315725. CI emitted
+  `39556465804` passed on `92656da39308fe757244e94f4a1841c5eb4d9049`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39556465804. CI emitted
   only Node 20 and ubuntu-latest migration warnings.
 - Next safe batch: continue offline R1/R2 evidence and accounting hardening;
   retain SD-004's valuation block until independent price/corporate-action/
