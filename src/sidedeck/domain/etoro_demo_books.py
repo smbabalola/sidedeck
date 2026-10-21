@@ -146,6 +146,10 @@ def reconcile_demo(snapshot: DemoPortfolioSnapshot, *, baseline: Iterable[Baseli
             discrepancies.append(f"pending {order.collection} order is not a SideDeck order")
     if snapshot.mirror_count:
         discrepancies.append("copy/mirror positions are present and are not supported")
+    for position in snapshot.positions:
+        if position.mirror_id:
+            discrepancies.append(f"position {position.position_id} belongs to a copy/mirror "
+                                 "(e.g. agent portfolio) and is not supported")
 
     books = {}
     for book, positions in members.items():

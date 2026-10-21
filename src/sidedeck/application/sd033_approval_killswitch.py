@@ -64,6 +64,14 @@ class ApprovalKillSwitch:
             raise ApprovalError("approval replay or intent already approved") from exc
         return digest
 
+    def is_approved(self, intent_id: str, scope: str) -> bool:
+        """True only for a verified, unexpired approval of exactly this intent and scope."""
+        if self.is_halted():
+            return False
+        row = self._db.execute("SELECT expires_at FROM paper_approvals WHERE intent_digest=?",
+                               (intent_digest(intent_id, scope),)).fetchone()
+        return row is not None and datetime.fromisoformat(row[0]) > datetime.now(timezone.utc)
+
     def is_halted(self) -> bool:
         return bool(self._db.execute("SELECT halted FROM paper_kill_switch WHERE singleton=1").fetchone()[0])
 

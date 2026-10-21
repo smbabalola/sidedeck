@@ -31,4 +31,16 @@ The `web` application is a loopback-only, sanitized view of the protected eToro 
 
 MSFT accounting evidence is filing-dated local evidence; valuation remains blocked until independent historical prices, corporate-action basis and share count reconciliation are proven. Fixture market data, simulated fills and offline agent contracts are not genuine market observations, model calls, trading performance or broker fills. Existing eToro Demo positions remain unattributed and protected.
 
+## Broker priority
+
+eToro **Demo** is the primary paper broker and Alpaca PAPER is secondary ([ADR-003](docs/ADR-003-etoro-demo-primary-broker.md)). eToro Real execution is permanently excluded.
+
+The eToro Demo order desk is offline only. It accepts only a deterministic simulator transport, and execution release is `NO_GO`. An offline rehearsal (no network, synthetic data) runs with:
+
+```powershell
+.venv\Scripts\python.exe -m sidedeck.application.sd036_etoro_demo_desk --rehearse
+```
+
+See [docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md](docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md).
+
 The live execution board and current blockers are maintained in [TODO.md](TODO.md), governed by [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md).

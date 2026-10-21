@@ -27,6 +27,7 @@ Build an auditable, practical SideDeck **research → strategy evaluation → co
 ## 2. Immutable boundaries: never cross autonomously
 
 - **No real-money orders, withdrawals, deposits, transfers, leveraged transactions or live execution.** Do not add a path that can silently unlock them.
+- **Broker priority (owner decision 2026-10-21, [ADR-003](docs/ADR-003-etoro-demo-primary-broker.md)):** eToro **Demo** is the PRIMARY paper broker; Alpaca PAPER is SECONDARY (retained, separation `UNVERIFIED`, authorizations exhausted). **eToro Real execution is permanently excluded**, including agent portfolios with Real scopes. Position ownership only via verified order→position lineage, never ticker. A priority change is not permission to trade.
 - **No paper/demo order submission, cancel, close, modify or automatic execution** unless the owner separately approves a *specific broker, environment, execution scope, order controls and release*. The presence of `ALPACA_API_KEY`/`ALPACA_API_KEY2` or eToro credentials is not authorization. Saxo P4 remains `NO-GO`, `SIM_SUBMISSION_RELEASED=False`.
 - Preserve the **four original eToro Demo positions** as immutable, unattributed baseline and protected from SideDeck closes. Never re-run baseline capture, reset or replace its SQLite database or attribute positions merely by ticker.
 - **No paid LLM/provider calls**, subscriptions, financial commitments or unattended spending without separately recorded, specific owner approval for provider/model, max calls, max USD, ticker, time period and single run. A CLI boolean is not sufficient evidence of independent owner authorization. Budget *validation* is not metering; implement enforceable runtime limits before releasing model calls.
@@ -83,7 +84,7 @@ Rules:
 
 **R5 — Dashboard and operators:** complete research comparison, evidence explorer, experiment results, protected portfolio reconciliation, statuses and expiry, loading/error/privacy states, sample-independent UI E2E. Never show invented live positions or account values.
 
-**R6 — Paper-trading release work (separate authorization):** isolated account mappings (eToro Demo vs Alpaca paper vs Saxo SIM), validated balances/cash, explicit virtual capital partitions, position/lot/order lifecycle, idempotency, risk limits, approval signatures and kill-switch. Only after audited permission can demo/paper sends be enabled; at least one month of supervised demo soak and documented kill criteria before further release. Keep existing four eToro positions untradeable by SideDeck.
+**R6 — Paper-trading release work (separate authorization):** eToro Demo first (offline desk SD-036; Alpaca PAPER secondary); isolated account mappings (eToro Demo vs Alpaca paper vs Saxo SIM), validated balances/cash, explicit virtual capital partitions, position/lot/order lifecycle, idempotency, risk limits, approval signatures and kill-switch. Only after audited permission can demo/paper sends be enabled; at least one month of supervised demo soak and documented kill criteria before further release. Keep existing four eToro positions untradeable by SideDeck.
 
 **R7 — Operational hardening and release:** observability/redaction, reconnect/replay, migrations on disposable SQLite/PostgreSQL, secure local API, watchdogs, backup/restore, dependency scans, audit trail, docs/runbook, operator UAT and explicit release decision.
 

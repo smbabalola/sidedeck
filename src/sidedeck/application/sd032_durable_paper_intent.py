@@ -135,6 +135,24 @@ class DurablePaperIntentStore:
             raise
         return self.get(intent_id)
 
+    def record_rejection(self, intent_id: str, reason: str) -> dict[str, Any]:
+        """Terminal no-fill outcome (broker rejected, cancelled, expired or never received)."""
+        if not reason.strip():
+            raise IntentError("a rejection reason is required")
+        row = self._row(intent_id)
+        if row["state"] not in {"CLAIMED", "SUBMITTED_SIMULATED", "ACKED_SIMULATED"}:
+            raise IntentError(f"invalid transition from {row['state']} to REJECTED_SIMULATED")
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            self._db.execute("UPDATE paper_intents SET state='REJECTED_SIMULATED' WHERE intent_id=?",
+                             (intent_id,))
+            self._append(intent_id, "REJECTED_SIMULATED", {"reason": reason})
+            self._db.execute("COMMIT")
+        except Exception:
+            self._rollback()
+            raise
+        return self.get(intent_id)
+
     def recover(self) -> list[dict[str, Any]]:
         """Return durable states after a process restart without side effects."""
         rows = self._db.execute("SELECT * FROM paper_intents ORDER BY created_at, intent_id").fetchall()

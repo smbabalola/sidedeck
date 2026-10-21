@@ -140,6 +140,7 @@ class DemoPosition:
     leverage: int
     opened_at: datetime
     unrealized_pnl: Decimal | None
+    mirror_id: int = 0          # non-zero: a copy-trade/agent-portfolio child, never direct
 
 
 @dataclass(frozen=True)
@@ -226,7 +227,9 @@ def _position(row: Any) -> DemoPosition:
         raise EtoroDemoDataError("position unrealised P&L is malformed")
     pnl = None if pnl_block is None else _optional_decimal(pnl_block, "pnL", "position P&L")
     order_id = row.get("orderID")
+    mirror = row.get("mirrorID")
     return DemoPosition(
+        mirror_id=0 if mirror in (None, 0) else _int(mirror, "mirrorID"),
         position_id=_int(row.get("positionID"), "positionID"),
         instrument_id=_int(row.get("instrumentID"), "instrumentID"),
         order_id=None if order_id in (None, 0) else _int(order_id, "orderID"),
