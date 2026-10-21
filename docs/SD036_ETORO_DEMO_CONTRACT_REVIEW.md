@@ -120,7 +120,7 @@ Verified lineage on the direct Demo account gives the isolation needed without t
 
 | ID | Risk | Mitigation / status |
 |---|---|---|
-| R1 | Baseline unchanged since 2026-10-20 is unverified | Bounded read (§7) |
+| R1 | Baseline unchanged since 2026-10-20 is unverified | **Closed (SD-038, 2026-10-21):** one authorized read; 4/4 MATCHED, no discrepancies or mirrors. See `SD038_ETORO_BASELINE_RECONCILIATION.md` |
 | R2 | Key environment (Demo/Real) and permission (Read/Write) unverified | Owner UI check in the eToro API portal, no API call. A Real or Write key must not be used for reads |
 | R3 | A lost **close** response cannot be recovered by order ID | **Partly mitigated (SD-037).** `recover_close_from_snapshot` resolves it from a fresh `/pnl` snapshot into not executed, partial or closed, and refuses contradictions. The kill-switch stays tripped. Close recovery via `orders:lookup` remains `CLOSE_LOOKUP_RECOVERY=NOT_VERIFIED` |
 | R4 | Shared write rate limit (20/60 s) not enforced client-side | **Mitigated (SD-037).** `DemoRateBudget` persists across restarts and enforces write 20/60 s, order-info 60/60 s and portfolio 60/60 s. It refuses rather than retries, and refuses on clock regression. Writes reserve budget before write-ahead |

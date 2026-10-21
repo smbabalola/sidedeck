@@ -43,8 +43,9 @@ from sidedeck.domain.etoro_demo_orders import (
 
 ETORO_DEMO_EXECUTION_RELEASE = "NO_GO"
 DESK_OPERATOR = "sidedeck-etoro-demo-desk"
-# Unresolved risks from docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md §6 (R4 mitigated by SD-037).
-ETORO_DEMO_OPEN_RISKS = ("R1_BASELINE_UNVERIFIED_SINCE_2026_10_20", "R2_KEY_SCOPE_UNVERIFIED",
+# Unresolved risks from docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md §6 (R4 mitigated by SD-037;
+# R1 closed by SD-038: baseline MATCHED 4/4 on 2026-10-21).
+ETORO_DEMO_OPEN_RISKS = ("R2_KEY_SCOPE_UNVERIFIED",
                          "R3_CLOSE_LOOKUP_UNVERIFIED", "R5_NO_RELEASED_TRANSPORT",
                          "R6_LIVE_SCHEMA_UNVERIFIED", "R8_NO_CAPITAL_ALLOCATED")
 
