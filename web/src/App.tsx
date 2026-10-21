@@ -5,6 +5,7 @@ import "./index.css";
 type Book = { id: string; title: string; positions: number; pnlStatus: "AVAILABLE" | "UNAVAILABLE"; allocation: string; description: string };
 type ResearchStatus = { status: "READY_OFFLINE" | "BLOCKED"; valuation: "VALIDATED" | "PENDING" | "BLOCKED"; agents: { id: string; status: string; evidence_count: number }[]; execution_enabled: false };
 type StrategyCatalogue = { id: string; version: string; parameters: Record<string, string>; holding_period: [number, number]; acceptance: string };
+type StrategyValidation = { ticker: string; observations: number; start: string; end: string; strategies: { id: string; status: string; metrics: { trade_count: number | null; profit_factor: string | null; max_drawdown: string | null } }[] };
 const initialBooks: Book[] = [
   { id: "tradingagents", title: "TradingAgents", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
   { id: "ai-trading", title: "AI-Trading", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
@@ -24,6 +25,7 @@ export default function App() {
   const [apiError, setApiError] = useState(false);
   const [research, setResearch] = useState<ResearchStatus | null>(null);
   const [strategies, setStrategies] = useState<StrategyCatalogue[]>([]);
+  const [validation, setValidation] = useState<StrategyValidation[]>([]);
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/demo/summary", { signal: controller.signal, cache: "no-store" })
@@ -34,6 +36,12 @@ export default function App() {
       })
       .catch(() => { if (!controller.signal.aborted) setApiError(true); });
     return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    fetch("/api/research/validation", { cache: "no-store" })
+      .then(response => response.ok ? response.json() : Promise.reject())
+      .then(data => { if (data.execution_enabled === false && Array.isArray(data.datasets)) setValidation(data.datasets); })
+      .catch(() => setValidation([]));
   }, []);
   useEffect(() => {
     fetch("/api/research/strategies", { cache: "no-store" })
@@ -71,6 +79,7 @@ export default function App() {
         <div className="mt-7 flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-sm text-amber-100"><CircleAlert size={18} className="mt-0.5 shrink-0 text-amber-300"/><p><strong>Local baseline, not live.</strong> {apiError ? "Backend unavailable. Start the local SideDeck service." : summary ? `Baseline captured ${summary.captured_at ?? "at an unknown time"}.` : "Loading baseline metadata."} {fresh ? `Fresh owner-authorized snapshot ${fresh.observed_at}. Reconciliation: ${fresh.reconciliation_status}.` : "No recent authorized snapshot. Current portfolio reconciliation, cash and P&L are unavailable."}</p></div>
         <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">M2 research readiness</h2><p className="mt-1 text-sm text-slate-400">Offline evidence only; provider calls and broker execution remain disabled.</p></div><StatusPill positive={research?.status === "READY_OFFLINE"}><ShieldCheck size={13}/> {research?.status ?? "LOADING"}</StatusPill></div><div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">TradingAgents</p><p className="mt-2 font-semibold">{research?.agents.find(a => a.id === "tradingagents")?.status ?? "NOT RUN"}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">BuffettAgent</p><p className="mt-2 font-semibold">{research?.agents.find(a => a.id === "ai-trading")?.status ?? "NOT RUN"}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Valuation</p><p className="mt-2 font-semibold text-amber-300">{research?.valuation ?? "PENDING"}</p></div></div></section>
         <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Strategy catalogue</h2><p className="mt-1 text-sm text-slate-400">Versioned proposal strategies; acceptance remains unassessed.</p></div><StatusPill><LockKeyhole size={13}/> Execution disabled</StatusPill></div><div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">{strategies.map(strategy => <div key={strategy.id} className="rounded-lg bg-raised p-4"><p className="text-sm font-semibold text-white">{strategy.id.split("_").join(" ")}</p><p className="mt-1 text-xs text-slate-500">v{strategy.version} · {strategy.holding_period[0]}–{strategy.holding_period[1]} day constraint</p><p className="mt-3 text-xs font-semibold text-amber-300">{strategy.acceptance}</p></div>)}</div></section>
+        <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Genuine strategy validation</h2><p className="mt-1 text-sm text-slate-400">Local SIP research summaries only; metrics are screening evidence, not trade authorization.</p></div><StatusPill><LockKeyhole size={13}/> Proposal-only</StatusPill></div><div className="mt-5 grid gap-4 lg:grid-cols-3">{validation.map(dataset => <div key={dataset.ticker} className="rounded-lg bg-raised p-4"><div className="flex items-center justify-between"><p className="font-semibold text-white">{dataset.ticker}</p><span className="text-xs text-slate-500">{dataset.observations} bars</span></div><p className="mt-1 text-xs text-slate-500">{dataset.start} → {dataset.end}</p><div className="mt-4 space-y-2">{dataset.strategies.map(item => <div key={item.id} className="flex items-center justify-between gap-3 text-xs"><span className="truncate text-slate-300">{item.id.split("_").join(" ")}</span><span className={item.status === "VERIFIED" ? "text-emerald-300" : "text-amber-300"}>{item.status}</span></div>)}</div></div>)}</div></section>
         <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Stat title="Protected positions" value={summary?.protected_positions?.toString() ?? "—"} detail="Saved holdings · unattributed" icon={ShieldCheck}/>
           <Stat title="Strategy positions" value={fresh ? String((fresh.books[0]?.positions ?? 0) + (fresh.books[1]?.positions ?? 0)) : "—"} detail={fresh ? "Owner-authorized snapshot" : "Current positions unavailable"} icon={BrainCircuit}/>

@@ -94,6 +94,15 @@ def test_sip_is_explicit_and_never_substituted_for_iex():
     assert result["feed"] == "sip" and result["instrument_id"] == "US:MSFT"
 
 
+def test_spy_uses_approved_exchange_identity():
+    result = fetch_alpaca_sip(
+        "SPY", "2025-02-01", "2025-02-05", key_id="x", secret="y",
+        open_url=lambda req, timeout: FakeResponse({"bars": [{"t": "2025-02-03T05:00:00Z",
+            "o": 12, "h": 13, "l": 11, "c": 12.5, "v": 100}], "next_page_token": None}),
+    )
+    assert result["exchange"] == "NYSE_ARCA"
+
+
 def test_missing_ohlcv_is_rejected():
     with pytest.raises(MarketDataUnavailable, match="invalid open"):
         parse_bars({"bars": [{"t": "2025-02-03T05:00:00Z", "c": 1}]}, cutoff=date(2025, 2, 5))

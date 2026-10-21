@@ -60,6 +60,8 @@ def run_backtest(
     previous = prices[ordered[0]]
     daily: list[dict[str, object]] = []
     trade_ledger: list[dict[str, object]] = []
+    trade_outcomes: list[Decimal] = []
+    entry_equity: Decimal | None = None
     for index, day in enumerate(ordered[1:], start=1):
         # Close-of-day signals cannot earn the return ending at that same close.
         # Apply the prior observation's signal to the following price interval.
@@ -81,6 +83,11 @@ def run_backtest(
                 "equity_before_cost": str(before_cost),
                 "equity_after_cost": str(equity),
             })
+            if target == Decimal("1"):
+                entry_equity = equity
+            elif entry_equity is not None:
+                trade_outcomes.append(equity / entry_equity - Decimal("1"))
+                entry_equity = None
         pnl = position * (prices[day] / previous - 1)
         equity *= Decimal("1") + pnl
         returns.append(pnl)
@@ -114,6 +121,7 @@ def run_backtest(
         "out_of_sample_days": len(oos),
         "results": daily,
         "trade_ledger": trade_ledger,
+        "trade_outcomes": [str(value) for value in trade_outcomes],
         "equity_path_check": "PASSED",
         "status": "RESEARCH_ONLY",
         "broker_execution": "DISABLED",

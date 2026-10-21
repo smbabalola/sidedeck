@@ -136,7 +136,53 @@ def strategy_catalogue_summary() -> dict[str, Any]:
     }
 
 
-def make_handler(db_path: str, snapshot_path: str | None = None, research_path: str | None = None) -> type[BaseHTTPRequestHandler]:
+def strategy_validation_summary(paths: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Expose sanitized local SD-021 metrics without equity paths or positions."""
+    result: dict[str, Any] = {
+        "schema_version": 1, "source": "LOCAL_STRATEGY_VALIDATION",
+        "status": "NOT_LOADED", "execution_enabled": False, "datasets": [],
+        "broker_execution": "DISABLED",
+    }
+    for raw_path in paths:
+        target = Path(raw_path)
+        if not target.is_file() or target.is_symlink() or target.stat().st_size > 512_000:
+            continue
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            if data.get("schema_version") != 1 or data.get("broker_execution") != "DISABLED":
+                continue
+            metrics = ("annualized_return", "max_drawdown", "profit_factor", "sharpe",
+                       "trade_count", "round_trip_count", "win_rate", "out_of_sample_days")
+            strategies = []
+            for strategy_id, evaluation in data.get("strategies", {}).items():
+                if not isinstance(strategy_id, str) or not isinstance(evaluation, dict):
+                    continue
+                source_metrics = evaluation.get("metrics", {})
+                strategies.append({
+                    "id": strategy_id,
+                    "status": data.get("acceptance", {}).get(strategy_id, {}).get("status", "NOT_ASSESSED"),
+                    "metrics": {key: source_metrics.get(key) for key in metrics},
+                })
+            dataset = data.get("data", {})
+            result["datasets"].append({
+                "ticker": data.get("ticker"), "instrument_id": data.get("instrument_id"),
+                "start": dataset.get("start"), "end": dataset.get("end"),
+                "observations": dataset.get("observations"), "provenance": dataset.get("provenance"),
+                "feed": dataset.get("feed"), "adjustment": dataset.get("adjustment"),
+                "source_bundle_sha256": data.get("source_bundle_sha256"),
+                "strategies": strategies,
+                "portfolio": {key: data.get("portfolio", {}).get(key)
+                              for key in ("ending_equity", "max_drawdown", "correlation_status")},
+            })
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    if result["datasets"]:
+        result["status"] = "RESEARCH_ONLY"
+    return result
+
+
+def make_handler(db_path: str, snapshot_path: str | None = None, research_path: str | None = None,
+                 strategy_paths: tuple[str, ...] = ()) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.headers.get("Host") not in ("127.0.0.1:8765", "localhost:8765") or urlsplit(self.path).query:
@@ -150,6 +196,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = research_summary(research_path)
                 elif route == "/api/research/strategies":
                     data = strategy_catalogue_summary()
+                elif route == "/api/research/validation":
+                    data = strategy_validation_summary(strategy_paths)
                 else:
                     self.send_error(404)
                     return
@@ -181,8 +229,10 @@ def main() -> int:
     p.add_argument("--db", required=True)
     p.add_argument("--snapshot", default=None)
     p.add_argument("--research", default=None)
+    p.add_argument("--strategy-research", action="append", default=[])
     a = p.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research))
+    server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research,
+                                                                     tuple(a.strategy_research)))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()

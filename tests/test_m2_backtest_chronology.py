@@ -38,6 +38,7 @@ def test_trade_ledger_records_next_observation_and_equity_check():
     assert report["trade_ledger"][0]["signal_date"] == "2026-01-05"
     assert report["trade_ledger"][0]["execution_date"] == "2026-01-06"
     assert report["trade_ledger"][1]["execution_date"] == "2026-01-07"
+    assert "trade_outcomes" in report
 
 
 @pytest.mark.parametrize("cost", [Decimal("NaN"), Decimal("Infinity"), Decimal("10000")])

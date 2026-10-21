@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -5,6 +6,7 @@ import pytest
 
 from sidedeck.application.p5_demo_dashboard_api import (
     baseline_summary, dashboard_summary, research_summary, strategy_catalogue_summary,
+    strategy_validation_summary,
 )
 
 
@@ -77,3 +79,23 @@ def test_strategy_catalogue_is_read_only_and_versioned():
         "channel_mean_reversion", "liquidity_sweep_reversal", "moving_average_trend", "buy_and_hold"
     }
     assert all(item["acceptance"] == "NOT_ASSESSED" for item in result["strategies"])
+
+
+def test_strategy_validation_summary_is_sanitized_and_read_only(tmp_path):
+    path = tmp_path / "research.json"
+    path.write_text(json.dumps({
+        "schema_version": 1, "broker_execution": "DISABLED", "ticker": "SPY",
+        "instrument_id": "US:SPY", "source_bundle_sha256": "abc",
+        "data": {"start": "2021-10-21", "end": "2026-10-20", "observations": 1254,
+                 "provenance": "alpaca_market_data_api", "feed": "sip", "adjustment": "split_adjusted"},
+        "strategies": {"channel_mean_reversion": {"metrics": {"trade_count": 122,
+                       "round_trip_count": 61, "profit_factor": "1.5"}}},
+        "acceptance": {"channel_mean_reversion": {"status": "VERIFIED"}},
+        "portfolio": {"ending_equity": "1.2", "max_drawdown": "0.1", "correlation_status": "VERIFIED"},
+        "equity_path_secret": "must not appear",
+    }), encoding="utf-8")
+    result = strategy_validation_summary((str(path),))
+    assert result["status"] == "RESEARCH_ONLY"
+    assert result["datasets"][0]["strategies"][0]["status"] == "VERIFIED"
+    assert "equity_path_secret" not in str(result)
+    assert result["execution_enabled"] is False

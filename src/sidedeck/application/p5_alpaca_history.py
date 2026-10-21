@@ -25,6 +25,7 @@ _ALLOWED_HOST = "data.alpaca.markets"
 _MAX_PAGES = 20
 _ALLOWED_FEEDS = frozenset(("iex", "sip"))
 _ALLOWED_ADJUSTMENTS = frozenset(("raw", "split", "dividend", "spin-off", "all"))
+_EXCHANGES = {"SPY": "NYSE_ARCA", "QQQ": "NASDAQ", "MSFT": "NASDAQ"}
 
 
 class MarketDataUnavailable(ValueError):
@@ -300,7 +301,8 @@ def fetch_alpaca_history(
                      for offset in range(1, (right - left).days)
                      for day in (left + timedelta(days=offset),) if day.weekday() < 5]
     return {
-        "ticker": ticker, "instrument_id": "US:" + ticker, "exchange": "NASDAQ",
+        "ticker": ticker, "instrument_id": "US:" + ticker,
+        "exchange": _EXCHANGES.get(ticker, "NASDAQ"),
         "currency": "USD", "session": "REGULAR",
         "price_basis": "split_adjusted_close" if adjustment == "split" else adjustment + "_close",
         "corporate_actions_verified": False,

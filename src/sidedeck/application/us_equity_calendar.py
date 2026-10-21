@@ -1,8 +1,7 @@
 """Deterministic, provenance-tagged regular US equity session calendar.
 
-This is intentionally a small offline calendar for the 2026 SD-004 window.
-It must be extended from an official exchange schedule before being used for
-another year; weekdays are never silently treated as sessions.
+This calendar contains the bounded 2021-2026 SD-021 daily-session window.
+Weekdays are never silently treated as sessions; closure dates are explicit.
 """
 from __future__ import annotations
 
@@ -11,6 +10,7 @@ from datetime import date, timedelta
 
 
 NASDAQ_TRADER_2026 = "https://nasdaqtrader.com/Trader.aspx?id=Calendar"
+NASDAQ_TRADER_2021_2026 = NASDAQ_TRADER_2026 + "#2021-2026"
 US_EQUITY_CLOSED_2026: dict[date, str] = {
     date(2026, 1, 1): "New Year's Day (Observed)",
     date(2026, 1, 19): "Martin Luther King, Jr. Day",
@@ -23,6 +23,51 @@ US_EQUITY_CLOSED_2026: dict[date, str] = {
     date(2026, 11, 26): "Thanksgiving Day",
     date(2026, 12, 25): "Christmas Holiday",
 }
+US_EQUITY_CLOSED_2021_2025: dict[date, str] = {
+    date(2021, 11, 25): "Thanksgiving Day",
+    date(2021, 12, 24): "Christmas Holiday (Observed)",
+    date(2022, 1, 17): "Martin Luther King, Jr. Day",
+    date(2022, 2, 21): "Presidents' Day",
+    date(2022, 4, 15): "Good Friday",
+    date(2022, 5, 30): "Memorial Day",
+    date(2022, 6, 20): "Juneteenth (Observed)",
+    date(2022, 7, 4): "Independence Day",
+    date(2022, 9, 5): "Labor Day",
+    date(2022, 11, 24): "Thanksgiving Day",
+    date(2022, 12, 26): "Christmas Holiday (Observed)",
+    date(2023, 1, 2): "New Year's Day (Observed)",
+    date(2023, 1, 16): "Martin Luther King, Jr. Day",
+    date(2023, 2, 20): "Presidents' Day",
+    date(2023, 4, 7): "Good Friday",
+    date(2023, 5, 29): "Memorial Day",
+    date(2023, 6, 19): "Juneteenth",
+    date(2023, 7, 4): "Independence Day",
+    date(2023, 9, 4): "Labor Day",
+    date(2023, 11, 23): "Thanksgiving Day",
+    date(2023, 12, 25): "Christmas Day",
+    date(2024, 1, 1): "New Year's Day",
+    date(2024, 1, 15): "Martin Luther King, Jr. Day",
+    date(2024, 2, 19): "Presidents' Day",
+    date(2024, 3, 29): "Good Friday",
+    date(2024, 5, 27): "Memorial Day",
+    date(2024, 6, 19): "Juneteenth",
+    date(2024, 7, 4): "Independence Day",
+    date(2024, 9, 2): "Labor Day",
+    date(2024, 11, 28): "Thanksgiving Day",
+    date(2024, 12, 25): "Christmas Day",
+    date(2025, 1, 1): "New Year's Day",
+    date(2025, 1, 9): "National Day of Mourning",
+    date(2025, 1, 20): "Martin Luther King, Jr. Day",
+    date(2025, 2, 17): "Presidents' Day",
+    date(2025, 4, 18): "Good Friday",
+    date(2025, 5, 26): "Memorial Day",
+    date(2025, 6, 19): "Juneteenth",
+    date(2025, 7, 4): "Independence Day",
+    date(2025, 9, 1): "Labor Day",
+    date(2025, 11, 27): "Thanksgiving Day",
+    date(2025, 12, 25): "Christmas Day",
+}
+US_EQUITY_CLOSED = {**US_EQUITY_CLOSED_2021_2025, **US_EQUITY_CLOSED_2026}
 
 
 @dataclass(frozen=True)
@@ -32,11 +77,11 @@ class SessionCoverage:
     missing: tuple[date, ...]
     unexpected: tuple[date, ...]
     status: str
-    calendar_source: str = NASDAQ_TRADER_2026
+    calendar_source: str = NASDAQ_TRADER_2021_2026
 
 
 def is_regular_session(day: date) -> bool:
-    return day.weekday() < 5 and day not in US_EQUITY_CLOSED_2026
+    return day.weekday() < 5 and day not in US_EQUITY_CLOSED
 
 
 def expected_regular_sessions(start: date, end: date) -> tuple[date, ...]:

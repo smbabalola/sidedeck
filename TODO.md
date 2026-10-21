@@ -28,7 +28,8 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-018 | P1 | VERIFIED | deps: SD-016, SD-017 | Acceptance framework.** Reports annualized return, drawdown, profit factor, Sharpe, win rate, exposure, OOS counts and explicit acceptance status; minimum-data gates remain fail-closed. **Evidence:** `sd014_strategy_engine.py`; `docs/SD014_STRATEGY_VALIDATION.md`; Batch G CI.
 - [x] **SD-019 | P2 | VERIFIED | deps: SD-014, SD-018 | Dashboard catalogue surface.** Read-only strategy metadata and acceptance status are exposed through a sanitized loopback endpoint and React view; no simulated broker holdings are implied. **Evidence:** `p5_demo_dashboard_api.py`, `web/src/App.tsx`, dashboard tests; Batch G CI.
 - [x] **SD-020 | P1 | VERIFIED | deps: SD-015, SD-018 | Five-year data inventory and bounded retrieval plan.** Read-only inventory found no SPY/QQQ history and no five-year MSFT series; it documented the existing 59-bar MSFT SIP and unrelated 701-bar SOFI IEX bundles without reading credentials or contacting providers. **Evidence:** `docs/SD020_FIVE_YEAR_DATA_PLAN.md`; local ignored-file inventory.
-- [ ] **SD-021 | P1 | BLOCKED_OWNER | deps: SD-020 | Approved five-year SPY/QQQ/MSFT SIP retrieval.** **Accept:** separate explicit owner authorization naming the exact Alpaca market-data endpoint, three tickers, 2021-10-21 through 2026-10-20 window, SIP/split-adjusted daily contract, maximum 20 requests per ticker, and local-only output. **Blocker:** prior MSFT retrieval authorization is exhausted; no new authenticated request is permitted. **Plan:** `docs/SD020_FIVE_YEAR_DATA_PLAN.md`.
+- [x] **SD-021 | P1 | VERIFIED | deps: SD-020 | Approved five-year SPY/QQQ/MSFT SIP retrieval and proposal-only validation.** Exact owner-authorized scope completed: 1,254 bars per ticker, 1 request per ticker, 3/60 global requests, offline admission, deterministic strategy evaluation and sanitized research reports. **Limit:** `ADMITTED_RESEARCH_ONLY`; independent corporate-action/dividend corroboration remains pending and SD-004 stays blocked. **Evidence:** `docs/SD021_RESULTS.md`, `src/sidedeck/application/p5_sd021_validation.py`, `src/sidedeck/application/p5_sd021_research.py`, ignored local manifests/bundles.
+- [ ] **SD-022 | P1 | READY | deps: SD-021 | Robustness and independent evidence review.** Re-run accepted screens across an independently licensed/corroborated price source or owner-supplied dataset, verify split/dividend treatment and OOS calculation independently, and preserve rejection/insufficient outcomes. No new authenticated provider request is implied.
 
 ## Session control and next autonomous batch
 
@@ -119,18 +120,24 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   or continue independent strategy-testing infrastructure; 59 sessions remain
   correctness evidence only.
 
-**Batch H preparation (2026-10-21; SD-020 verified, SD-021 blocked):**
+**Batch H (2026-10-21; SD-020 and SD-021 verified):**
 
 - Read-only local inventory found no SPY/QQQ history or five-year MSFT series.
   It found only the existing 59-bar MSFT SIP evidence and an unrelated
   701-bar SOFI IEX bundle. No raw data was copied or committed.
-- Prepared `docs/SD020_FIVE_YEAR_DATA_PLAN.md` with the exact dormant scope:
-  SPY, QQQ and MSFT; 2021-10-21 through 2026-10-20; daily SIP;
-  split-adjusted; USD; maximum 20 requests per ticker; local-only manifests.
-- No authenticated request, credential read, paid data/model call, account
-  endpoint or trading action occurred. Next action is either a lawful complete
-  owner-supplied dataset or the separately bounded owner authorization
-  described in SD-021; independent offline work remains available meanwhile.
+- Used the exact new authorization once: SPY, QQQ and MSFT; 2021-10-21 through
+  2026-10-20; daily SIP; split-adjusted; USD; maximum 20 requests per ticker;
+  local-only manifests. One HTTP 200/page per ticker consumed 3/60 requests.
+- Added crash-safe global/per-ticker budgets, redirect rejection, exchange
+  identity normalization, 2021–2026 session validation, sanitized admission
+  reports, closed-trade metric accounting and read-only dashboard summaries.
+- Ran four strategies per instrument with locked OOS, 9-cell parameter
+  surfaces, in-sample-only selection, four walk-forward windows and proposal
+  portfolio controls. Results and hashes: `docs/SD021_RESULTS.md`.
+- No account, portfolio, order, eToro, Saxo, paid model/data or paper/real
+  trading action occurred; credential values were not logged or exposed.
+  SD-004 remains blocked by independent valuation evidence; next safe batch is
+  SD-022 robustness/independent evidence review.
 
 **Batch F (verified; SD-004 Phase 4 corporate actions/share basis) — 2026-10-21**
 

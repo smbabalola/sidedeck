@@ -168,8 +168,11 @@ def _split_dates(bars: Sequence[StrategyBar], config: EvaluationConfig) -> tuple
 
 def _metrics(result: dict[str, Any], bars: Sequence[StrategyBar], oos_start: date | None) -> dict[str, Any]:
     returns = [Decimal(str(row["return"])) for row in result["results"]]
-    positive = [value for value in returns if value > 0]
-    negative = [abs(value) for value in returns if value < 0]
+    outcomes = [Decimal(str(value)) for value in result.get("trade_outcomes", [])]
+    outcome_positive = [value for value in outcomes if value > 0]
+    outcome_negative = [abs(value) for value in outcomes if value < 0]
+    positive = outcome_positive or [value for value in returns if value > 0]
+    negative = outcome_negative or [abs(value) for value in returns if value < 0]
     exposure = sum(1 for value in returns if value != 0) / len(returns) if returns else 0.0
     arithmetic = mean(float(value) for value in returns) if returns else 0.0
     deviation = (sum((float(value) - arithmetic) ** 2 for value in returns) / len(returns)) ** 0.5 if returns else 0.0
@@ -183,9 +186,10 @@ def _metrics(result: dict[str, Any], bars: Sequence[StrategyBar], oos_start: dat
         "annualized_return": str(annualized), "max_drawdown": result["max_drawdown"],
         "profit_factor": str(sum(positive, Decimal("0")) / sum(negative, Decimal("0"))) if negative else "UNDEFINED",
         "sharpe": str(Decimal(str(sharpe))), "trade_count": trade_count,
-        "win_rate": str(Decimal(len(positive)) / Decimal(len(returns))) if returns else "0",
-        "average_gain": str(sum(positive, Decimal("0")) / Decimal(len(positive))) if positive else "0",
-        "average_loss": str(sum(negative, Decimal("0")) / Decimal(len(negative))) if negative else "0",
+        "round_trip_count": len(outcomes),
+        "win_rate": str(Decimal(len(outcome_positive)) / Decimal(len(outcomes))) if outcomes else "UNDEFINED",
+        "average_gain": str(sum(outcome_positive, Decimal("0")) / Decimal(len(outcome_positive))) if outcome_positive else "UNDEFINED",
+        "average_loss": str(sum(outcome_negative, Decimal("0")) / Decimal(len(outcome_negative))) if outcome_negative else "UNDEFINED",
         "market_exposure": str(Decimal(str(exposure))), "out_of_sample_days": len(oos),
         "status": "INSUFFICIENT_DATA" if len(bars) < 252 * 4 or trade_count < 30 else "NOT_ASSESSED",
     }

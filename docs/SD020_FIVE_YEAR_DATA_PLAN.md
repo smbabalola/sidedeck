@@ -47,6 +47,7 @@ names and never secret values:
   --ticker SPY --start 2021-10-21 --end 2026-10-20 --cutoff-date 2026-10-20 `
   --feed sip --env-file .env --key-id-env <approved-key-id-name> `
   --secret-env <approved-secret-name> --budget-file data/sd020-spy-budget.json `
+  --global-budget-file data/sd021-global-budget.json `
   --output data/sd020-spy-sip.json
 ```
 
