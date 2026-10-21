@@ -54,7 +54,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - Full local regression for Batch D: `532 passed, 1 skipped, 3 warnings`; Ruff passed; mypy passed across 107 source files; Alembic upgrade and dashboard build passed. Exact-HEAD CI `39555238835` passed on `e662e4094d1ad8292cb3f96a499450832a72945a`.
 - Authorized retrieval correction: genuine Alpaca SIP evidence was acquired locally under the bounded 20-request approval: 1 HTTP request, status 200, 59 bars, one page, 2026-07-29 to 2026-10-20. Raw bundle and budget remain ignored/local; sanitized manifest only is described above. This does not constitute independent corroboration or valuation acceptance.
 
-**Batch E (in progress; SD-004 Phase 3 offline reconciliation) — 2026-10-21**
+**Batch E (verified; SD-004 Phase 3 offline reconciliation) — 2026-10-21**
 
 - Added the official-source 2026 Nasdaq session calendar boundary and tested
   that the 59-bar Jul 29-Oct 20 window is complete after excluding the Sep 7
@@ -71,9 +71,17 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   verified split/dividend basis, or compatible actual-share denominator.
   No new authenticated Alpaca call, account/portfolio/order endpoint, eToro
   request, paid data/model call, or trading action was performed.
-- Focused Phase 3 tests: 7 passed before final lint cleanup; final counts and
-  exact CI are pending. Next action after green CI: continue the next safe
-  offline R1/R2 work while retaining SD-004's valuation block.
+- Focused Phase 3 tests: 7 passed. Full local regression: 539 passed, 1
+  skipped, 3 warnings; Ruff passed; mypy passed across 110 source files;
+  SQLite Alembic upgrade and frontend production build passed. PostgreSQL
+  disposable migration/test coverage passed in CI. Exact-HEAD GitHub CI
+  `39556315725` passed on `55e31c095e4f9d6d2004fd4eb160b90c0294b6e3`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39556315725. CI emitted
+  only Node 20 and ubuntu-latest migration warnings.
+- Next safe batch: continue offline R1/R2 evidence and accounting hardening;
+  retain SD-004's valuation block until independent price/corporate-action/
+  share-basis proof exists. No owner approval is currently required for that
+  offline work.
 
 **Decision record:** MSFT is the first *candidate*, not an approved trade; SOFI is a second sector-specific case. SOFI borrowings-excluding-deposits is supplementary audit only; no generic Buffett D/E approval. No Financial Datasets subscription is required for locally supplied Buffett SEC inputs. Price/valuation remain NO-GO until proved.
 
