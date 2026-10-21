@@ -13,7 +13,7 @@ The owner's Demo **Read/Write** key permission (confirmed 2026-10-21) is a capab
 | P1 | Separate credentials: a Demo **Read-only** key for monitoring (`ETORO_API_KEY`/`ETORO_USER_KEY`) and the Demo Read/Write key under `ETORO_DEMO_TRADE_API_KEY`/`ETORO_DEMO_TRADE_USER_KEY`. `require_separated_execution_credentials` must pass (SD-042) | Owner (portal + local `.env`) | Not started |
 | P2 | IP whitelist and expiry set on the Read/Write key (closes the rest of R2) | Owner (portal UI) | Unverified |
 | P3 | Reviewed Demo write transport per `SD041_ETORO_DEMO_TRANSPORT_REVIEW.md`. It is only merged after the owner approves this pilot scope, because it replaces the SD-041 no-transport guard with a single-transport allowlist guard | Codex + owner code review | Not started |
-| P4 | Real signature verifier for SD-033 approvals (for example, an owner-held Ed25519 key with the public key in config). The test lambdas are not acceptable | Codex (offline) + owner key | SD-045 READY |
+| P4 | Real signature verifier for SD-033 approvals (for example, an owner-held Ed25519 key with the public key in config). The test lambdas are not acceptable | Codex (offline) + owner key | Verifier implemented (SD-045, OpenSSH `ssh-keygen -Y`); owner public key not yet provided |
 | P5 | Pilot capital: an explicit owner allocation of a small virtual Demo amount to **one** book (R8) | Owner decision | Not allocated |
 | P6 | Pre-flight `/pnl` read shows the baseline 4/4 MATCHED, with no pending orders | Within the pilot budget | — |
 
