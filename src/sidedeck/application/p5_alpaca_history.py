@@ -21,6 +21,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 _ENDPOINT = "https://data.alpaca.markets/v2/stocks"
+_ALLOWED_HOST = "data.alpaca.markets"
 _MAX_PAGES = 20
 _ALLOWED_FEEDS = frozenset(("iex", "sip"))
 _ALLOWED_ADJUSTMENTS = frozenset(("raw", "split", "dividend", "spin-off", "all"))
@@ -85,6 +86,36 @@ class PersistentRequestBudget:
     @property
     def requests_used(self) -> int:
         return int(self._state["requests_used"])
+
+
+def reserve_request(
+    budget: PersistentRequestBudget | None,
+    global_budget: PersistentRequestBudget | None,
+) -> None:
+    """Reserve every applicable crash-safe allowance before transmission."""
+    for candidate in (budget, global_budget):
+        if candidate is not None and (
+            candidate._state["completed"]
+            or candidate.requests_used >= candidate.maximum
+        ):
+            raise MarketDataUnavailable("historical request budget exhausted")
+    if budget is not None:
+        budget.reserve()
+    if global_budget is not None:
+        global_budget.reserve()
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        raise MarketDataUnavailable("redirect rejected for historical market-data request")
+
+
+def _safe_urlopen(request: urllib.request.Request, *, timeout: float) -> Any:
+    parsed = urllib.parse.urlsplit(request.full_url)
+    if parsed.scheme != "https" or parsed.netloc != _ALLOWED_HOST:
+        raise MarketDataUnavailable("historical request host is not allowlisted")
+    opener = urllib.request.build_opener(_RejectRedirects)
+    return opener.open(request, timeout=timeout)
 
 
 def write_evidence_manifest(raw_path: str | Path, manifest_path: str | Path) -> None:
@@ -185,7 +216,9 @@ def fetch_alpaca_history(
     ticker: str, start: str, end: str, *, key_id: str, secret: str,
     feed: str = "iex", adjustment: str = "split", open_url: Any = None,
     max_retries: int = 1, sleep: Callable[[float], None] = time.sleep,
-    budget: PersistentRequestBudget | None = None, cutoff: date | None = None,
+    budget: PersistentRequestBudget | None = None,
+    global_budget: PersistentRequestBudget | None = None,
+    cutoff: date | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", ticker):
         raise MarketDataUnavailable("unsupported ticker")
@@ -207,7 +240,7 @@ def fetch_alpaca_history(
     records: list[dict[str, Any]] = []
     seen_tokens: set[str] = set()
     status_codes: list[int] = []
-    opener = open_url or urllib.request.urlopen
+    opener = open_url or _safe_urlopen
     for _ in range(_MAX_PAGES):
         params = {"timeframe": "1Day", "start": start, "end": end,
                   "feed": feed, "adjustment": adjustment, "currency": "USD", "sort": "asc", "limit": "10000"}
@@ -218,8 +251,7 @@ def fetch_alpaca_history(
             "Accept": "application/json",
         })
         for attempt in range(max_retries + 1):
-            if budget is not None:
-                budget.reserve()
+            reserve_request(budget, global_budget)
             try:
                 with opener(req, timeout=20) as response:
                     status = getattr(response, "status", None)
@@ -277,6 +309,7 @@ def fetch_alpaca_history(
         "historical_price_validation": "PENDING",
         "research_only": True, "records": records,
         "request_count": budget.requests_used if budget is not None else len(status_codes),
+        "global_request_count": global_budget.requests_used if global_budget is not None else None,
         "http_statuses": status_codes, "pagination_pages": len(seen_tokens) + 1,
         "first_trading_date": records[0]["date"], "last_trading_date": records[-1]["date"],
         "weekday_gaps": weekday_gaps, "retrieved_at": datetime.now(timezone.utc).isoformat(),
@@ -286,19 +319,22 @@ def fetch_alpaca_history(
 def fetch_alpaca_iex(
     ticker: str, start: str, end: str, *, key_id: str, secret: str,
     open_url: Any = None, budget: PersistentRequestBudget | None = None,
+    global_budget: PersistentRequestBudget | None = None,
 ) -> dict[str, Any]:
     return fetch_alpaca_history(ticker, start, end, key_id=key_id, secret=secret,
-                                feed="iex", adjustment="split", open_url=open_url, budget=budget)
+                                feed="iex", adjustment="split", open_url=open_url, budget=budget,
+                                global_budget=global_budget)
 
 
 def fetch_alpaca_sip(
     ticker: str, start: str, end: str, *, key_id: str, secret: str,
     open_url: Any = None, budget: PersistentRequestBudget | None = None,
+    global_budget: PersistentRequestBudget | None = None,
     cutoff: date | None = None,
 ) -> dict[str, Any]:
     return fetch_alpaca_history(ticker, start, end, key_id=key_id, secret=secret,
                                 feed="sip", adjustment="split", open_url=open_url,
-                                budget=budget, cutoff=cutoff)
+                                budget=budget, global_budget=global_budget, cutoff=cutoff)
 
 
 def main() -> int:
@@ -309,6 +345,7 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--feed", choices=sorted(_ALLOWED_FEEDS), default="iex")
     parser.add_argument("--budget-file", required=True)
+    parser.add_argument("--global-budget-file", required=True)
     parser.add_argument("--cutoff-date", default="")
     parser.add_argument("--env-file", default="")
     parser.add_argument("--key-id-env", default="APCA_API_KEY_ID")
@@ -321,12 +358,19 @@ def main() -> int:
     secret = _credential(args.env_file, args.secret_env)
     scope = "|".join((args.ticker, args.start, args.end, args.feed, "split"))
     budget = PersistentRequestBudget(args.budget_file, scope=scope, maximum=20)
+    global_budget = PersistentRequestBudget(
+        args.global_budget_file,
+        scope="SD-021|2021-10-21|2026-10-20|SPY,QQQ,MSFT|sip|split",
+        maximum=60,
+    )
     cutoff = date.fromisoformat(args.cutoff_date) if args.cutoff_date else None
     result = fetch_alpaca_history(args.ticker, args.start, args.end, key_id=key, secret=secret,
-                                  feed=args.feed, adjustment="split", budget=budget, cutoff=cutoff)
+                                  feed=args.feed, adjustment="split", budget=budget,
+                                  global_budget=global_budget, cutoff=cutoff)
     target.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"HISTORICAL_{args.feed.upper()}_BARS={len(result['records'])}")
     print(f"REQUESTS_USED={budget.requests_used}; REQUEST_BUDGET=20")
+    print(f"GLOBAL_REQUESTS_USED={global_budget.requests_used}; GLOBAL_REQUEST_BUDGET=60")
     print("CORPORATE_ACTION_VERIFICATION=PENDING")
     print("BUFFETT_SNAPSHOT=NOT_READY; BROKER_EXECUTION=DISABLED")
     return 0

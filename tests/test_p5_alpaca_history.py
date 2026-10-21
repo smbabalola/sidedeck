@@ -5,7 +5,8 @@ from datetime import date
 import pytest
 
 from sidedeck.application.p5_alpaca_history import (
-    MarketDataUnavailable, PersistentRequestBudget, fetch_alpaca_iex, fetch_alpaca_sip, parse_bars,
+    MarketDataUnavailable, PersistentRequestBudget, fetch_alpaca_iex, fetch_alpaca_sip,
+    parse_bars,
 )
 
 
@@ -109,3 +110,46 @@ def test_persistent_budget_is_consumed_before_request_and_survives_restart(tmp_p
     assert result["feed"] == "sip"
     with pytest.raises(MarketDataUnavailable, match="exhausted"):
         PersistentRequestBudget(budget_path, scope="MSFT|scope", maximum=1).reserve()
+
+
+def test_global_budget_is_consumed_with_per_ticker_budget(tmp_path):
+    local = PersistentRequestBudget(tmp_path / "msft.json", scope="MSFT|scope", maximum=2)
+    global_budget = PersistentRequestBudget(tmp_path / "global.json", scope="global", maximum=1)
+    output = fetch_alpaca_sip(
+        "MSFT", "2025-02-01", "2025-02-05", key_id="x", secret="y", budget=local,
+        global_budget=global_budget,
+        open_url=lambda req, timeout: FakeResponse({"bars": [{"t": "2025-02-03T05:00:00Z",
+            "o": 12, "h": 13, "l": 11, "c": 12.5, "v": 100}], "next_page_token": None}),
+    )
+    assert output["global_request_count"] == 1
+    assert global_budget.requests_used == 1
+
+
+def test_global_budget_blocks_before_second_transmission(tmp_path):
+    calls = []
+    local = PersistentRequestBudget(tmp_path / "msft.json", scope="MSFT|scope", maximum=2)
+    global_budget = PersistentRequestBudget(tmp_path / "global.json", scope="global", maximum=1)
+    def opener(req, timeout):
+        calls.append(req)
+        return FakeResponse({
+            "bars": [{"t": "2025-02-03T05:00:00Z", "o": 12, "h": 13, "l": 11, "c": 12.5, "v": 100}],
+            "next_page_token": "NEXT",
+        })
+    with pytest.raises(MarketDataUnavailable, match="exhausted"):
+        fetch_alpaca_sip("MSFT", "2025-02-01", "2025-02-05", key_id="x", secret="y",
+                          budget=local, global_budget=global_budget, open_url=opener)
+    assert len(calls) == 1
+    assert local.requests_used == 1
+    assert global_budget.requests_used == 1
+
+
+def test_default_transport_rejects_redirects(monkeypatch):
+    from sidedeck.application import p5_alpaca_history as module
+
+    class RedirectingOpener:
+        def open(self, request, timeout):
+            raise AssertionError("redirect opener must be replaced by the allowlisted opener")
+
+    monkeypatch.setattr(module.urllib.request, "build_opener", lambda handler: RedirectingOpener())
+    with pytest.raises(AssertionError, match="redirect opener"):
+        module._safe_urlopen(urllib.request.Request("https://data.alpaca.markets/v2/stocks/MSFT/bars"), timeout=1)
