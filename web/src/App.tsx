@@ -6,6 +6,7 @@ type Book = { id: string; title: string; positions: number; pnlStatus: "AVAILABL
 type ResearchStatus = { status: "READY_OFFLINE" | "BLOCKED"; valuation: "VALIDATED" | "PENDING" | "BLOCKED"; agents: { id: string; status: string; evidence_count: number }[]; execution_enabled: false };
 type StrategyCatalogue = { id: string; version: string; parameters: Record<string, string>; holding_period: [number, number]; acceptance: string };
 type StrategyValidation = { ticker: string; observations: number; start: string; end: string; benchmark?: { convention: string; total_return: string; ending_equity: string | null; return: string | null; max_drawdown: string | null; corporate_action_status: string }; strategies: { id: string; status: string; metrics: { trade_count: number | null; profit_factor: string | null; max_drawdown: string | null } }[] };
+type ReleaseGate = { overall_status: "NO_GO"; engineering_rehearsal: string; paper_order_submission: "DISABLED"; human_approval: string; account_mapping: string; broker_reconciliation: string; kill_switch: string; protected_baseline: string; blocking_controls: string[]; rehearsal: { status: string; broker_execution: "DISABLED"; final_state?: string | null; event_count?: number | null } };
 const initialBooks: Book[] = [
   { id: "tradingagents", title: "TradingAgents", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
   { id: "ai-trading", title: "AI-Trading", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
@@ -26,6 +27,7 @@ export default function App() {
   const [research, setResearch] = useState<ResearchStatus | null>(null);
   const [strategies, setStrategies] = useState<StrategyCatalogue[]>([]);
   const [validation, setValidation] = useState<StrategyValidation[]>([]);
+  const [releaseGate, setReleaseGate] = useState<ReleaseGate>({ overall_status: "NO_GO", engineering_rehearsal: "LOADING", paper_order_submission: "DISABLED", human_approval: "REQUIRED_SEPARATE_OWNER_RELEASE", account_mapping: "UNVERIFIED", broker_reconciliation: "UNRELEASED", kill_switch: "UNRELEASED", protected_baseline: "PRESERVED", blocking_controls: ["RELEASE_GATE_NOT_LOADED"], rehearsal: { status: "UNAVAILABLE", broker_execution: "DISABLED" } });
   useEffect(() => {
     const controller = new AbortController();
     fetch("/api/demo/summary", { signal: controller.signal, cache: "no-store" })
@@ -50,6 +52,14 @@ export default function App() {
       .catch(() => setStrategies([]));
   }, []);
   useEffect(() => {
+    fetch("/api/research/release-gate", { cache: "no-store" })
+      .then(response => response.ok ? response.json() : Promise.reject())
+      .then(data => {
+        if (data.overall_status === "NO_GO" && data.release_enabled === false && data.paper_order_submission === "DISABLED" && data.broker_execution === "DISABLED" && Array.isArray(data.blocking_controls)) setReleaseGate(data);
+      })
+      .catch(() => setReleaseGate(current => ({ ...current, engineering_rehearsal: "UNAVAILABLE", blocking_controls: ["RELEASE_GATE_UNAVAILABLE"] })));
+  }, []);
+  useEffect(() => {
     fetch("/api/research/summary", { cache: "no-store" })
       .then(response => response.ok ? response.json() : Promise.reject())
       .then(data => setResearch(data))
@@ -60,6 +70,7 @@ export default function App() {
   const books = initialBooks.map(b => ({...b, positions: (fresh?.books ?? summary?.books)?.find(x => x.id === "etoro-demo:" + b.id)?.positions ?? null, pnlStatus: "UNAVAILABLE" }));
 
   const shown = activeBook === "all" ? books : books.filter(b => b.id === activeBook);
+  const releaseGatePanel = <section className="mt-5 rounded-2xl border border-amber-400/25 bg-amber-400/5 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Paper release gate</h2><p className="mt-1 text-sm text-slate-400">Sanitized local evidence only; a separate owner decision is still required.</p></div><StatusPill><CircleAlert size={13}/> {releaseGate.overall_status}</StatusPill></div><div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Order submission</p><p className="mt-2 font-semibold text-amber-300">{releaseGate.paper_order_submission}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Human approval</p><p className="mt-2 font-semibold text-amber-300">{releaseGate.human_approval}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Account mapping</p><p className="mt-2 font-semibold">{releaseGate.account_mapping}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Rehearsal</p><p className="mt-2 font-semibold">{releaseGate.rehearsal.status}</p></div></div><p className="mt-4 text-xs leading-5 text-amber-100">Broker execution is {releaseGate.rehearsal.broker_execution}. Reconciliation and kill-switch release remain {releaseGate.broker_reconciliation.toLowerCase()} / {releaseGate.kill_switch.toLowerCase()}; protected baseline: {releaseGate.protected_baseline}.</p></section>;
   return <div className="min-h-screen bg-ink text-slate-100">
     <div className="flex min-h-screen">
       <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800 bg-[#0C1625] px-5 py-7 lg:flex">
@@ -72,6 +83,7 @@ export default function App() {
         <div className="mt-auto rounded-xl border border-slate-700 bg-raised p-4"><div className="flex items-center gap-2 text-sm text-emerald-300"><ShieldCheck size={16}/> Execution locked</div><p className="mt-2 text-xs leading-5 text-slate-400">All broker order submission remains disabled. This screen contains no broker connectivity.</p></div>
       </aside>
       <main className="mx-auto w-full max-w-[1520px] px-5 py-7 sm:px-8 lg:px-12">
+        {releaseGatePanel}
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.16em] text-accent"><Moon size={13}/> Trading workspace <span className="text-slate-600">/</span> eToro Demo</div><h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Portfolio overview</h1><p className="mt-2 max-w-2xl text-sm text-slate-400">A protected baseline and three isolated books. No live connection or monetary balances are displayed in this preview.</p></div>
           <div className="flex flex-wrap gap-2"><StatusPill positive><CircleCheck size={13}/> {fresh ? "Fresh Demo snapshot" : "Saved baseline only"}</StatusPill><StatusPill><LockKeyhole size={13}/> Read-only</StatusPill></div>

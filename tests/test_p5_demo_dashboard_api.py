@@ -6,7 +6,7 @@ import pytest
 
 from sidedeck.application.p5_demo_dashboard_api import (
     baseline_summary, dashboard_summary, research_summary, strategy_catalogue_summary,
-    strategy_validation_summary,
+    strategy_validation_summary, release_gate_summary,
 )
 
 
@@ -121,3 +121,35 @@ def test_strategy_validation_summary_exposes_benchmark_convention_not_fake_total
     assert benchmark["corporate_action_status"] == "NOT_ASSESSED"
     assert "equity_path_secret" not in str(result)
     assert result["execution_enabled"] is False
+
+
+def test_release_gate_is_fail_closed_without_a_local_report(tmp_path):
+    result = release_gate_summary(str(tmp_path / "missing.json"))
+    assert result["overall_status"] == "NO_GO"
+    assert result["release_enabled"] is False
+    assert result["paper_order_submission"] == "DISABLED"
+    assert result["broker_execution"] == "DISABLED"
+    assert result["rehearsal"]["status"] == "UNAVAILABLE"
+
+
+def test_release_gate_is_sanitized_and_rejects_enabled_or_secret_payload(tmp_path):
+    path = tmp_path / "gate.json"
+    path.write_text(json.dumps({
+        "schema_version": 1, "gate": "PAPER_RELEASE", "overall_status": "NO_GO",
+        "engineering_rehearsal": "PASS", "release_enabled": False,
+        "paper_order_submission": "DISABLED", "blocking_controls": ["KILL_SWITCH_UNRELEASED"],
+        "broker_execution": "DISABLED",
+        "rehearsal": {"status": "REHEARSED", "final_state": "ROLLED_BACK", "event_count": 9,
+                       "broker_execution": "DISABLED", "account_id": "secret-account"},
+        "api_key": "secret-key",
+    }), encoding="utf-8")
+    result = release_gate_summary(str(path))
+    assert result["overall_status"] == "NO_GO"
+    assert result["engineering_rehearsal"] == "PASS"
+    assert result["blocking_controls"] == ["KILL_SWITCH_UNRELEASED"]
+    assert result["rehearsal"] == {"status": "REHEARSED", "broker_execution": "DISABLED",
+                                    "final_state": "ROLLED_BACK", "event_count": 9}
+    assert "secret" not in json.dumps(result)
+    path.write_text(json.dumps({"schema_version": 1, "gate": "PAPER_RELEASE",
+                                "overall_status": "GO", "release_enabled": True}), encoding="utf-8")
+    assert release_gate_summary(str(path))["overall_status"] == "NO_GO"

@@ -213,8 +213,62 @@ def strategy_validation_summary(paths: tuple[str, ...] = (), audit_paths: tuple[
     return result
 
 
+def release_gate_summary(path: str | None = None) -> dict[str, Any]:
+    """Expose only the fail-closed SD-030 paper-release decision."""
+    base: dict[str, Any] = {
+        "schema_version": 1,
+        "source": "LOCAL_PAPER_RELEASE_GATE",
+        "gate": "PAPER_RELEASE",
+        "overall_status": "NO_GO",
+        "engineering_rehearsal": "UNAVAILABLE",
+        "release_enabled": False,
+        "paper_order_submission": "DISABLED",
+        "human_approval": "REQUIRED_SEPARATE_OWNER_RELEASE",
+        "account_mapping": "UNVERIFIED",
+        "broker_reconciliation": "UNRELEASED",
+        "kill_switch": "UNRELEASED",
+        "protected_baseline": "PRESERVED",
+        "blocking_controls": ["RELEASE_GATE_NOT_LOADED"],
+        "rehearsal": {"status": "UNAVAILABLE", "broker_execution": "DISABLED"},
+        "broker_execution": "DISABLED",
+    }
+    if not path:
+        return base
+    target = Path(path)
+    if not target.is_file() or target.is_symlink() or target.stat().st_size > 32768:
+        return base
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if (data.get("schema_version") != 1 or data.get("gate") != "PAPER_RELEASE"
+                or data.get("overall_status") != "NO_GO"
+                or data.get("release_enabled") is not False
+                or data.get("paper_order_submission") != "DISABLED"
+                or data.get("broker_execution") not in (None, "DISABLED")):
+            return base
+        blocking = data.get("blocking_controls")
+        rehearsal = data.get("rehearsal")
+        if (not isinstance(blocking, list) or not all(isinstance(item, str) for item in blocking)
+                or not isinstance(rehearsal, dict)
+                or rehearsal.get("broker_execution") != "DISABLED"):
+            return base
+        return {
+            **base,
+            "engineering_rehearsal": data.get("engineering_rehearsal") if data.get("engineering_rehearsal") == "PASS" else "UNAVAILABLE",
+            "blocking_controls": sorted(set(blocking)) or ["RELEASE_GATE_NOT_LOADED"],
+            "rehearsal": {
+                "status": rehearsal.get("status") if rehearsal.get("status") == "REHEARSED" else "UNAVAILABLE",
+                "broker_execution": "DISABLED",
+                "final_state": rehearsal.get("final_state") if isinstance(rehearsal.get("final_state"), str) else None,
+                "event_count": rehearsal.get("event_count") if type(rehearsal.get("event_count")) is int and rehearsal["event_count"] >= 0 else None,
+            },
+        }
+    except (OSError, ValueError, TypeError, KeyError):
+        return base
+
+
 def make_handler(db_path: str, snapshot_path: str | None = None, research_path: str | None = None,
-                 strategy_paths: tuple[str, ...] = (), audit_paths: tuple[str, ...] = ()) -> type[BaseHTTPRequestHandler]:
+                 strategy_paths: tuple[str, ...] = (), audit_paths: tuple[str, ...] = (),
+                 release_gate_path: str | None = None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.headers.get("Host") not in ("127.0.0.1:8765", "localhost:8765") or urlsplit(self.path).query:
@@ -230,6 +284,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = strategy_catalogue_summary()
                 elif route == "/api/research/validation":
                     data = strategy_validation_summary(strategy_paths, audit_paths)
+                elif route == "/api/research/release-gate":
+                    data = release_gate_summary(release_gate_path)
                 else:
                     self.send_error(404)
                     return
@@ -263,9 +319,10 @@ def main() -> int:
     p.add_argument("--research", default=None)
     p.add_argument("--strategy-research", action="append", default=[])
     p.add_argument("--strategy-audit", action="append", default=[])
+    p.add_argument("--release-gate", default=None)
     a = p.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research,
-                                                                     tuple(a.strategy_research), tuple(a.strategy_audit)))
+                                                                     tuple(a.strategy_research), tuple(a.strategy_audit), a.release_gate))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()
