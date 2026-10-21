@@ -1,8 +1,8 @@
 # SD-004 historical market-data evidence plan
 
-Status: implementation verified; genuine MSFT valuation evidence remains
-`BLOCKED_EXTERNAL` as of 2026-10-21. No authenticated request, paid dataset or
-credential was used in this batch.
+Status: `ALPACA_SIP_ACQUIRED`; full genuine MSFT valuation remains
+`BLOCKED_EXTERNAL` as of 2026-10-21. One owner-authorized local authenticated
+request was used; no account, portfolio or trading endpoint was accessed.
 
 ## Provider findings
 
@@ -18,6 +18,24 @@ Nasdaq’s public MSFT historical page was reviewed and currently reports that
 data is unavailable. Nasdaq Data Link documents historical consolidated EOD
 data, but access and licensing/entitlement were not established locally. A
 Nasdaq parser exists for owner-supplied evidence only; it has no transport.
+
+## Authorized acquisition result
+
+The bounded local retrieval used only `GET /v2/stocks/MSFT/bars` with
+`feed=sip`, `timeframe=1Day`, `adjustment=split`, and the approved date window.
+It made 1 of 20 permitted requests and received HTTP 200. The ignored local
+bundle contains 59 bars from 2026-07-29 through 2026-10-20, one page, and a
+crash-safe budget file. The sanitized manifest records SHA-256 digest
+`20e1e97074cb133d2afb0a3ebe5bca65629c4587cd137a448e3ef50dab3b5284`.
+The 2026-09-07 weekday gap is retained as a potential US holiday gap, not
+silently treated as missing or filled; a verified exchange calendar is still
+required. Corporate-action verification remains pending.
+
+The local SEC reconstruction reports the latest 2026-06-30 period and a
+2026-07-29 filing date, with 10/12 latest metrics and 8 fully reconciled
+periods. A filing date is not a filing publication timestamp, so the first
+price cannot yet be admitted as point-in-time evidence. The Alpaca series is
+also not independent corroboration.
 
 ## Admission rules
 
@@ -36,9 +54,8 @@ market evidence.
 
 ## Remaining blocker and next action
 
-No local, independently corroborated MSFT price series is available in the
-approved checkout. SD-004 remains `BLOCKED_EXTERNAL`; do not mark it verified
-from the fixture adapters. A future bounded approval request should name the
-exact Alpaca data endpoint/feed, symbol, date range, request count and local
-credential use. Nasdaq evidence must separately establish lawful access,
-adjustment semantics and a genuinely independent source relationship.
+Independent corroborated MSFT prices, publication-time evidence, corporate
+action validation and share-basis compatibility remain unavailable. SD-004
+therefore remains `BLOCKED_EXTERNAL`; do not mark it verified from the single
+Alpaca source or fixture adapters. No further authenticated request is
+authorized by this phase.

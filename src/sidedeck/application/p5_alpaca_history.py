@@ -6,6 +6,7 @@ specific IEX bars and split-adjusted output require independent reconciliation.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -84,6 +85,41 @@ class PersistentRequestBudget:
     @property
     def requests_used(self) -> int:
         return int(self._state["requests_used"])
+
+
+def write_evidence_manifest(raw_path: str | Path, manifest_path: str | Path) -> None:
+    """Write sanitized provenance and a digest without copying raw bars into it."""
+    source = Path(raw_path)
+    target = Path(manifest_path)
+    if not source.is_file() or source.is_symlink() or target.exists() or target.is_symlink():
+        raise MarketDataUnavailable("evidence manifest path is invalid or already exists")
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise MarketDataUnavailable("historical evidence cannot be read") from exc
+    if not isinstance(payload, dict) or payload.get("research_only") is not True:
+        raise MarketDataUnavailable("evidence is not a research-only market bundle")
+    records = payload.get("records")
+    if not isinstance(records, list):
+        raise MarketDataUnavailable("evidence records are invalid")
+    manifest = {"schema_version": 1, "evidence_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "source": payload.get("source"), "source_identity": payload.get("source_identity"),
+                "endpoint_class": "ALPACA_MARKET_DATA_HISTORICAL_BARS",
+                "ticker": payload.get("ticker"), "instrument_id": payload.get("instrument_id"),
+                "feed": payload.get("feed"), "adjustment": payload.get("adjustment"),
+                "currency": payload.get("currency"), "session": payload.get("session"),
+                "request_count": payload.get("request_count"),
+                "http_statuses": payload.get("http_statuses"),
+                "pagination_pages": payload.get("pagination_pages"),
+                "first_trading_date": payload.get("first_trading_date"),
+                "last_trading_date": payload.get("last_trading_date"),
+                "bar_count": len(records), "weekday_gaps": payload.get("weekday_gaps"),
+                "corporate_actions_verified": payload.get("corporate_actions_verified"),
+                "retrieved_at": payload.get("retrieved_at"),
+                "historical_price_validation": payload.get("historical_price_validation"),
+                "broker_execution": "DISABLED"}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _credential(path: str, name: str) -> str:

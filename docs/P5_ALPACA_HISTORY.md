@@ -1,5 +1,11 @@
 # Alpaca historical price acquisition — research-only
 
+The adapter now supports explicitly selected historical `iex` and `sip` feeds
+with a persistent request budget. The 2026-10-21 authorized MSFT SIP retrieval
+used one request and produced 59 local bars; see `docs/SD004_MARKET_DATA_PLAN.md`.
+The raw bundle, budget and manifest are ignored local evidence and must not be
+committed.
+
 SideDeck has an opt-in downloader at `sidedeck.application.p5_alpaca_history` for the Alpaca **market-data** API `https://data.alpaca.markets/v2/stocks/{symbol}/bars`. It requests `timeframe=1Day`, `feed=iex`, `adjustment=split`, paginates bounded responses, validates positive closes, and refuses overwriting an output file. It **never calls trading/account/order endpoints**.
 
 Alpaca's IEX data represents a single exchange, not the consolidated US SIP tape. Its split-adjusted prices need independent validation against SEC EPS split/share conventions before any P/E is trusted. Accordingly the downloader sets `corporate_actions_verified=false`; this **does not pass** SideDeck's downstream historical P/E validation gate until separately reviewed. No source or trading completeness claims should be inferred from successful download.
