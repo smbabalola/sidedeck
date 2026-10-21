@@ -55,7 +55,10 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - Focused verification: 2 passed. Full local verification: 572 passed,
   1 skipped, 3 warnings; Ruff, mypy across 121 source files, SQLite Alembic
   upgrade and frontend build passed. No network, credential, paid-data/model,
-  account, broker or trading action occurred. Exact-head CI is pending.
+  account, broker or trading action occurred. Exact-head GitHub CI
+  `39587401345` passed on `369f54dc7c670c2591262eb1c0f8f4a244da17c5`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39587401345. CI emitted
+  only the existing Node 20 and ubuntu-latest migration warnings.
 - SD-029 is now the next READY package because SD-027 is verified.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
