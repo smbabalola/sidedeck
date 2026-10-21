@@ -30,7 +30,8 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 - [x] **SD-020 | P1 | VERIFIED | deps: SD-015, SD-018 | Five-year data inventory and bounded retrieval plan.** Read-only inventory found no SPY/QQQ history and no five-year MSFT series; it documented the existing 59-bar MSFT SIP and unrelated 701-bar SOFI IEX bundles without reading credentials or contacting providers. **Evidence:** `docs/SD020_FIVE_YEAR_DATA_PLAN.md`; local ignored-file inventory.
 - [x] **SD-021 | P1 | VERIFIED | deps: SD-020 | Approved five-year SPY/QQQ/MSFT SIP retrieval and proposal-only validation.** Exact owner-authorized scope completed: 1,254 bars per ticker, 1 request per ticker, 3/60 global requests, offline admission, deterministic strategy evaluation and sanitized research reports. **Limit:** `ADMITTED_RESEARCH_ONLY`; independent corporate-action/dividend corroboration remains pending and SD-004 stays blocked. **Evidence:** `docs/SD021_RESULTS.md`, `src/sidedeck/application/p5_sd021_validation.py`, `src/sidedeck/application/p5_sd021_research.py`, ignored local manifests/bundles.
 - [x] **SD-022 | P1 | VERIFIED | deps: SD-021 | Independent strategy robustness audit.** Recalculated metrics independently, changed the denominator to completed BUY→SELL trades, verified locked OOS/selection boundaries and portfolio weights/correlations, and reclassified the five prior screens to two robustness survivors, one OOS rejection and nine insufficient-data outcomes. **Evidence:** `docs/SD022_ROBUSTNESS_AUDIT.md`; `src/sidedeck/application/sd022_robustness_audit.py`; `tests/test_sd022_robustness_audit.py`.
-- [ ] **SD-023 | P1 | READY | deps: SD-022 | Independent corporate-action and benchmark evidence.** Use only lawful existing/public evidence or owner-supplied licensed data to corroborate split/dividend treatment and distinguish price-only from total-return benchmarks. Do not make new authenticated requests; preserve SD-004 valuation block until independent price/share-basis proof exists.
+- [x] **SD-023 | P1 | VERIFIED | deps: SD-022 | Independent corporate-action and benchmark evidence.** Independently recomputed price-only benchmarks from all three saved five-year bundles, reconciled ending equity to the research reports, verified the existing limited MSFT split/dividend record, and kept SPY/QQQ ETF actions and total-return figures `NOT_ASSESSED`/`UNAVAILABLE`. No authenticated requests; SD-004 remains blocked. **Evidence:** `docs/SD023_CORPORATE_ACTION_BENCHMARK_AUDIT.md`; `src/sidedeck/application/sd023_corporate_action_audit.py`; `tests/test_sd023_corporate_action_audit.py`.
+- [ ] **SD-024 | P1 | READY | deps: SD-023 | ETF distribution and benchmark evidence boundary.** Add an explicit owner-supplied/public-evidence importer and tests for SPY/QQQ distribution/split records, with ex-date/payment-date semantics and price-only versus total-return labels. Do not use authenticated or paid sources; preserve `NOT_ASSESSED` when complete lawful evidence is unavailable.
 
 ## Session control and next autonomous batch
 
@@ -141,6 +142,19 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   `05289068e40daa83c96dea3443c272290dd6f6bf`:
   https://github.com/smbabalola/sidedeck/actions/runs/39579019726. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
+
+**Batch J (2026-10-21; SD-023 verified):**
+
+- Added an offline independent benchmark audit that compounds the saved
+  close-to-close prices, calculates price-only drawdown, and reconciles each
+  SPY/QQQ/MSFT ending equity to the corresponding SD-021 research report with
+  zero delta.
+- Confirmed MSFT's limited existing split/dividend record is compatible with
+  the split-adjusted, dividend-excluded close basis. SPY/QQQ ETF corporate
+  actions remain `NOT_ASSESSED`; total-return values remain `UNAVAILABLE`.
+- Focused verification: 2 passed. No network, credential, paid-data/model,
+  account, broker or trading action occurred. Next safe batch: SD-024 ETF
+  distribution evidence boundary.
 - No account, portfolio, order, eToro, Saxo, paid model/data or paper/real
   trading action occurred; credential values were not logged or exposed.
   SD-004 remains blocked by independent valuation evidence; next safe batch is
