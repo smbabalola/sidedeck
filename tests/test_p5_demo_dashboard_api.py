@@ -3,7 +3,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sidedeck.application.p5_demo_dashboard_api import baseline_summary, dashboard_summary, research_summary
+from sidedeck.application.p5_demo_dashboard_api import (
+    baseline_summary, dashboard_summary, research_summary, strategy_catalogue_summary,
+)
 
 
 def test_read_only_saved_baseline_summary(tmp_path):
@@ -66,3 +68,12 @@ def test_research_summary_is_sanitized_and_fail_closed(tmp_path):
     assert result["agents"] == [{"id": "tradingagents", "status": "VERIFIED_OFFLINE", "evidence_count": 2}]
     assert "api_key" not in result and "secret" not in str(result)
     assert research_summary(str(tmp_path / "missing.json"))["status"] == "BLOCKED"
+
+
+def test_strategy_catalogue_is_read_only_and_versioned():
+    result = strategy_catalogue_summary()
+    assert result["execution_enabled"] is False
+    assert {item["id"] for item in result["strategies"]} == {
+        "channel_mean_reversion", "liquidity_sweep_reversal", "moving_average_trend", "buy_and_hold"
+    }
+    assert all(item["acceptance"] == "NOT_ASSESSED" for item in result["strategies"])

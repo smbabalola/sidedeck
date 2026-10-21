@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from sidedeck.application.sd014_strategy_engine import catalogue
+
 
 def baseline_summary(db_path: str) -> dict[str, Any]:
     path = Path(db_path).resolve(strict=True)
@@ -117,6 +119,23 @@ def research_summary(path: str | None) -> dict[str, Any]:
         return base
 
 
+def strategy_catalogue_summary() -> dict[str, Any]:
+    """Expose only versioned proposal metadata; no results or positions."""
+    return {
+        "schema_version": 1, "source": "LOCAL_STRATEGY_CATALOGUE",
+        "execution_enabled": False, "status": "RESEARCH_ONLY",
+        "strategies": [
+            {"id": item.strategy_id, "version": item.version,
+             "parameters": dict(item.parameters),
+             "holding_period": [item.holding_period_min, item.holding_period_max],
+             "execution_assumption": item.execution_assumption,
+             "acceptance": "NOT_ASSESSED"}
+            for item in catalogue()
+        ],
+        "broker_execution": "DISABLED",
+    }
+
+
 def make_handler(db_path: str, snapshot_path: str | None = None, research_path: str | None = None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -129,6 +148,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = dashboard_summary(db_path, snapshot_path)
                 elif route == "/api/research/summary":
                     data = research_summary(research_path)
+                elif route == "/api/research/strategies":
+                    data = strategy_catalogue_summary()
                 else:
                     self.send_error(404)
                     return
