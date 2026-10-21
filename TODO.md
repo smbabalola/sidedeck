@@ -199,6 +199,10 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   ignored counter-only budget `data/sd035-auth-budget.sqlite3`. Account
   separation remains unresolved and requires a new bounded authorization if
   another broker check is ever needed.
+- Exact-head GitHub CI `39595852824` passed on
+  `a79b726ad6f92fbf45bc7dcc0ddd1d5e2faa1d89`:
+  https://github.com/smbabalola/sidedeck/actions/runs/39595852824. CI emitted
+  only the existing Node 20 and ubuntu-latest migration warnings.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
