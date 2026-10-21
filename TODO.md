@@ -202,7 +202,7 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   return wording. It contains no recommendation, allocation or order control.
 - Frontend production build passed with Vite 6.4.4; the API and Python
   regression suite remain covered by the preceding CI-verified head. No
-  external access or trading action occurred. Exact-head CI is pending.
+  external access or trading action occurred. Exact-head CI is recorded below.
 - Next safe work is exhausted at the current evidence boundary: SD-004,
   SD-008, SD-011 and SD-013 remain blocked by independent data/provider or
   owner release gates. Preserve SD-027 as a future derived task for local
