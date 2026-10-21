@@ -9,11 +9,12 @@ import argparse
 import json
 import os
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
@@ -26,6 +27,63 @@ _ALLOWED_ADJUSTMENTS = frozenset(("raw", "split", "dividend", "spin-off", "all")
 
 class MarketDataUnavailable(ValueError):
     pass
+
+
+class PersistentRequestBudget:
+    """Crash-safe request ceiling shared by retries, pages and restarts."""
+
+    def __init__(self, path: str | Path, *, scope: str, maximum: int = 20):
+        if not isinstance(maximum, int) or isinstance(maximum, bool) or maximum <= 0:
+            raise MarketDataUnavailable("invalid persistent request budget")
+        self.path = Path(path)
+        self.scope = scope
+        self.maximum = maximum
+        self._state = self._load()
+
+    def _load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"schema_version": 1, "scope": self.scope, "maximum": self.maximum,
+                    "requests_used": 0, "completed": False}
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise MarketDataUnavailable("request budget cannot be read") from exc
+        if (not isinstance(data, dict) or data.get("schema_version") != 1
+                or data.get("scope") != self.scope or data.get("maximum") != self.maximum
+                or type(data.get("requests_used")) is not int
+                or not 0 <= data["requests_used"] <= self.maximum
+                or type(data.get("completed")) is not bool):
+            raise MarketDataUnavailable("request budget scope or state is invalid")
+        return data
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".sidedeck-budget-", dir=str(self.path.parent))
+        try:
+            if os.name != "nt":
+                os.chmod(temporary, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(self._state, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def reserve(self) -> None:
+        if self._state["completed"] or self._state["requests_used"] >= self.maximum:
+            raise MarketDataUnavailable("historical request budget exhausted")
+        self._state["requests_used"] += 1
+        self._save()
+
+    def complete(self) -> None:
+        self._state["completed"] = True
+        self._save()
+
+    @property
+    def requests_used(self) -> int:
+        return int(self._state["requests_used"])
 
 
 def _credential(path: str, name: str) -> str:
@@ -91,10 +149,15 @@ def fetch_alpaca_history(
     ticker: str, start: str, end: str, *, key_id: str, secret: str,
     feed: str = "iex", adjustment: str = "split", open_url: Any = None,
     max_retries: int = 1, sleep: Callable[[float], None] = time.sleep,
+    budget: PersistentRequestBudget | None = None, cutoff: date | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", ticker):
         raise MarketDataUnavailable("unsupported ticker")
-    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    try:
+        first, last = date.fromisoformat(start[:10]), date.fromisoformat(end[:10])
+    except ValueError as exc:
+        raise MarketDataUnavailable("invalid date range") from exc
+    cutoff = cutoff or last
     if first > last:
         raise MarketDataUnavailable("invalid date range")
     if feed not in _ALLOWED_FEEDS or adjustment not in _ALLOWED_ADJUSTMENTS:
@@ -107,6 +170,7 @@ def fetch_alpaca_history(
     token: str | None = None
     records: list[dict[str, Any]] = []
     seen_tokens: set[str] = set()
+    status_codes: list[int] = []
     opener = open_url or urllib.request.urlopen
     for _ in range(_MAX_PAGES):
         params = {"timeframe": "1Day", "start": start, "end": end,
@@ -118,8 +182,13 @@ def fetch_alpaca_history(
             "Accept": "application/json",
         })
         for attempt in range(max_retries + 1):
+            if budget is not None:
+                budget.reserve()
             try:
                 with opener(req, timeout=20) as response:
+                    status = getattr(response, "status", None)
+                    if isinstance(status, int):
+                        status_codes.append(status)
                     raw = response.read(8_000_001)
                     if len(raw) > 8_000_000:
                         raise MarketDataUnavailable("response too large")
@@ -137,7 +206,7 @@ def fetch_alpaca_history(
             raise MarketDataUnavailable("Alpaca market-data request failed")
         if not isinstance(payload, dict):
             raise MarketDataUnavailable("invalid response")
-        records.extend(parse_bars(payload, cutoff=last, ticker=ticker))
+        records.extend(parse_bars(payload, cutoff=cutoff, ticker=ticker))
         next_token = payload.get("next_page_token")
         if next_token is None:
             break
@@ -152,7 +221,16 @@ def fetch_alpaca_history(
         raise MarketDataUnavailable("duplicate trading dates")
     if not records:
         raise MarketDataUnavailable("no historical IEX bars for requested range")
+    records = [record for record in records if record["date"] <= cutoff.isoformat()]
+    if not records:
+        raise MarketDataUnavailable("no historical bars in authorized date window")
     records.sort(key=lambda row: row["date"])
+    if budget is not None:
+        budget.complete()
+    dates = [date.fromisoformat(record["date"]) for record in records]
+    weekday_gaps = [day.isoformat() for left, right in zip(dates, dates[1:])
+                     for offset in range(1, (right - left).days)
+                     for day in (left + timedelta(days=offset),) if day.weekday() < 5]
     return {
         "ticker": ticker, "instrument_id": "US:" + ticker, "exchange": "NASDAQ",
         "currency": "USD", "session": "REGULAR",
@@ -162,23 +240,29 @@ def fetch_alpaca_history(
         "feed": feed, "adjustment": adjustment,
         "historical_price_validation": "PENDING",
         "research_only": True, "records": records,
+        "request_count": budget.requests_used if budget is not None else len(status_codes),
+        "http_statuses": status_codes, "pagination_pages": len(seen_tokens) + 1,
+        "first_trading_date": records[0]["date"], "last_trading_date": records[-1]["date"],
+        "weekday_gaps": weekday_gaps, "retrieved_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
 def fetch_alpaca_iex(
     ticker: str, start: str, end: str, *, key_id: str, secret: str,
-    open_url: Any = None,
+    open_url: Any = None, budget: PersistentRequestBudget | None = None,
 ) -> dict[str, Any]:
     return fetch_alpaca_history(ticker, start, end, key_id=key_id, secret=secret,
-                                feed="iex", adjustment="split", open_url=open_url)
+                                feed="iex", adjustment="split", open_url=open_url, budget=budget)
 
 
 def fetch_alpaca_sip(
     ticker: str, start: str, end: str, *, key_id: str, secret: str,
-    open_url: Any = None,
+    open_url: Any = None, budget: PersistentRequestBudget | None = None,
+    cutoff: date | None = None,
 ) -> dict[str, Any]:
     return fetch_alpaca_history(ticker, start, end, key_id=key_id, secret=secret,
-                                feed="sip", adjustment="split", open_url=open_url)
+                                feed="sip", adjustment="split", open_url=open_url,
+                                budget=budget, cutoff=cutoff)
 
 
 def main() -> int:
@@ -187,6 +271,9 @@ def main() -> int:
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--feed", choices=sorted(_ALLOWED_FEEDS), default="iex")
+    parser.add_argument("--budget-file", required=True)
+    parser.add_argument("--cutoff-date", default="")
     parser.add_argument("--env-file", default="")
     parser.add_argument("--key-id-env", default="APCA_API_KEY_ID")
     parser.add_argument("--secret-env", default="APCA_API_SECRET_KEY")
@@ -196,9 +283,14 @@ def main() -> int:
         parser.error("refusing to overwrite output")
     key = _credential(args.env_file, args.key_id_env)
     secret = _credential(args.env_file, args.secret_env)
-    result = fetch_alpaca_iex(args.ticker, args.start, args.end, key_id=key, secret=secret)
+    scope = "|".join((args.ticker, args.start, args.end, args.feed, "split"))
+    budget = PersistentRequestBudget(args.budget_file, scope=scope, maximum=20)
+    cutoff = date.fromisoformat(args.cutoff_date) if args.cutoff_date else None
+    result = fetch_alpaca_history(args.ticker, args.start, args.end, key_id=key, secret=secret,
+                                  feed=args.feed, adjustment="split", budget=budget, cutoff=cutoff)
     target.write_text(json.dumps(result, indent=2), encoding="utf-8")
-    print(f"HISTORICAL_IEX_BARS={len(result['records'])}")
+    print(f"HISTORICAL_{args.feed.upper()}_BARS={len(result['records'])}")
+    print(f"REQUESTS_USED={budget.requests_used}; REQUEST_BUDGET=20")
     print("CORPORATE_ACTION_VERIFICATION=PENDING")
     print("BUFFETT_SNAPSHOT=NOT_READY; BROKER_EXECUTION=DISABLED")
     return 0

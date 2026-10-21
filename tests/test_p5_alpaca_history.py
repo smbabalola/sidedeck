@@ -5,7 +5,7 @@ from datetime import date
 import pytest
 
 from sidedeck.application.p5_alpaca_history import (
-    MarketDataUnavailable, fetch_alpaca_iex, fetch_alpaca_sip, parse_bars,
+    MarketDataUnavailable, PersistentRequestBudget, fetch_alpaca_iex, fetch_alpaca_sip, parse_bars,
 )
 
 
@@ -96,3 +96,16 @@ def test_sip_is_explicit_and_never_substituted_for_iex():
 def test_missing_ohlcv_is_rejected():
     with pytest.raises(MarketDataUnavailable, match="invalid open"):
         parse_bars({"bars": [{"t": "2025-02-03T05:00:00Z", "c": 1}]}, cutoff=date(2025, 2, 5))
+
+
+def test_persistent_budget_is_consumed_before_request_and_survives_restart(tmp_path):
+    budget_path = tmp_path / "request-budget.json"
+    budget = PersistentRequestBudget(budget_path, scope="MSFT|scope", maximum=1)
+    result = fetch_alpaca_sip(
+        "MSFT", "2025-02-01", "2025-02-05", key_id="x", secret="y", budget=budget,
+        open_url=lambda req, timeout: FakeResponse({"bars": [{"t": "2025-02-03T05:00:00Z",
+            "o": 12, "h": 13, "l": 11, "c": 12.5, "v": 100}], "next_page_token": None}),
+    )
+    assert result["feed"] == "sip"
+    with pytest.raises(MarketDataUnavailable, match="exhausted"):
+        PersistentRequestBudget(budget_path, scope="MSFT|scope", maximum=1).reserve()
