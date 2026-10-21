@@ -44,8 +44,9 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 
 - [ ] **SD-032 | P0 | READY | deps: SD-027, SD-029, SD-030 | Durable offline paper intent and idempotent dispatcher boundary.** Build transport-free, durable append-only order-intent state machine with tenant/broker/environment/account-scope identity, conflicting client-order rejection, atomic idempotency, partial fill replay, restart/recovery, and adversarial concurrency tests. No real broker client or authenticated call. **Accept:** deterministic crash/replay proof, no duplicate simulated submission, fail-closed state transitions and exact-HEAD CI. **Evidence target:** `docs/SD032_DURABLE_PAPER_INTENT.md`, tests.
-- [ ] **SD-033 | P0 | READY | deps: SD-032 | Independent signed approval and emergency-stop enforcement.** Add verifier-only human approval with an externally provisioned public key, scoped intent hash, expiry, approver/requester separation, replay prevention and auditable refusal; do not generate or hold owner signing secrets or self-approve. Persist kill-switch state across restart, require separate operator clearance and simulate cancellation uncertainty without broker requests. **Accept:** adversarial signature/identity/replay/kill-switch tests and explicit NO-GO for real execution. **Evidence target:** `docs/SD033_APPROVAL_KILLSWITCH.md`, tests.
-- [ ] **SD-034 | P1 | READY | deps: SD-032, SD-033 | Offline broker-reconciliation contract and bounded owner-read proposal.** Implement mock-only append-only acknowledgement, partial/full fill, cancel/reject, out-of-order event and position/exit attribution reconciliation with duplicate/missing-event detection. Prepare a separate *dormant* Alpaca paper account-identity/read-only verification plan that states endpoints, credential identity, call caps, no-cost requirement and privacy controls; do not execute authenticated reads. Independently review P4 remediation and identify residual blockers; do not merge P4 automatically. **Accept:** operator evidence, controlled-discrepancy tests, release gate remains NO_GO, order transport DISABLED. **Evidence target:** `docs/SD034_RECONCILIATION_RELEASE_EVIDENCE.md`, tests.
+- [x] **SD-032 | P0 | VERIFIED | deps: SD-027, SD-029, SD-030 | Durable offline paper intent and idempotent dispatcher boundary.** Added a SQLite-backed append-only intent/event store with tenant/broker/environment/account-scope identity, conflicting client-order rejection, atomic idempotency, partial/full simulated-fill replay and restart recovery. State transitions fail closed and the only acknowledgement is `offline-simulated`; no broker client or authenticated call exists. **Evidence:** `docs/SD032_DURABLE_PAPER_INTENT.md`; `src/sidedeck/application/sd032_durable_paper_intent.py`; `tests/test_sd032_durable_paper_intent.py`.
+- [x] **SD-033 | P0 | VERIFIED | deps: SD-032 | Independent signed approval and emergency-stop enforcement.** Added a verifier-only approval store using an externally supplied public-key/verifier boundary, scoped intent digest, expiry, requester/approver separation and replay prevention. Kill-switch state persists across restart and requires separate operator clearance; signing secrets are never generated or stored. **Evidence:** `docs/SD033_APPROVAL_KILLSWITCH.md`; `src/sidedeck/application/sd033_approval_killswitch.py`; `tests/test_sd033_approval_killswitch.py`.
+- [x] **SD-034 | P1 | VERIFIED | deps: SD-032, SD-033 | Offline broker-reconciliation contract and bounded owner-read proposal.** Added mock-only acknowledgement, partial/full fill, exit attribution and duplicate/missing/out-of-order/invalid-event detection, plus a dormant three-request Alpaca PAPER read-only proposal. No authenticated read was executed; release remains `NO_GO` and transport `DISABLED`. **Evidence:** `docs/SD034_RECONCILIATION_RELEASE_EVIDENCE.md`; `src/sidedeck/application/sd034_reconciliation_contract.py`; `tests/test_sd034_reconciliation_contract.py`.
 
 ## Session control and next autonomous batch
 
@@ -119,6 +120,26 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
   `54d0ba7841c8502fd901efd350a3515240b2dd14`:
   https://github.com/smbabalola/sidedeck/actions/runs/39588995875. CI emitted
   only the existing Node 20 and ubuntu-latest migration warnings.
+
+**Batch R (2026-10-21; SD-032 through SD-034 verified):**
+
+- Implemented durable offline paper-intent persistence, verifier-only scoped
+  approvals, restart-safe emergency stop and mock-only broker reconciliation.
+  Adversarial tests cover conflicting client IDs, invalid transitions,
+  partial-to-full fill replay, signature/identity/expiry/replay refusal,
+  kill-switch persistence and separate clearance, duplicate events, missing
+  sequence numbers, invalid ordering and exits beyond fills.
+- Added the dormant owner-read proposal only; it specifies three bounded
+  read-only Alpaca PAPER GETs but was not executed. No authenticated account
+  request, order, paid provider call, credential read or live/paper execution
+  occurred. Paper release remains `NO_GO`; broker transport remains disabled.
+- Full local verification: 586 passed, 1 skipped, 3 warnings; Ruff passed,
+  mypy passed across 126 source files, SQLite Alembic upgrade passed and the
+  frontend production build passed. PostgreSQL remains CI/container-only.
+- SD-004 remains `BLOCKED_EXTERNAL`; SD-008, SD-011 and SD-013 remain
+  `BLOCKED_OWNER`. Meaningful safe implementation work is exhausted at this
+  boundary; next action is a new independent evidence or owner-authorization
+  decision, not another authenticated request.
 
 **Batch A (verified):** SD-001 + SD-002 + SD-003 + SD-009 + SD-010. Exact-HEAD GitHub CI `39549008720` passed on `367a49bdfb9a7e01bb9ab8963d15d79f133bfb92`. No independent MSFT prices are present in the approved checkout, so SD-004 remains BLOCKED_EXTERNAL.
 
