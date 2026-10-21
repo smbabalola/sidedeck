@@ -97,5 +97,27 @@ def test_strategy_validation_summary_is_sanitized_and_read_only(tmp_path):
     result = strategy_validation_summary((str(path),))
     assert result["status"] == "RESEARCH_ONLY"
     assert result["datasets"][0]["strategies"][0]["status"] == "VERIFIED"
+
+
+def test_strategy_validation_summary_exposes_benchmark_convention_not_fake_total_return(tmp_path):
+    research = tmp_path / "research.json"
+    research.write_text(json.dumps({
+        "schema_version": 1, "broker_execution": "DISABLED", "ticker": "SPY",
+        "instrument_id": "US:SPY", "data": {"start": "2021-10-21", "end": "2026-10-20",
+        "observations": 1254, "provenance": "alpaca_market_data_api", "feed": "sip", "adjustment": "split_adjusted"},
+        "strategies": {}, "acceptance": {}, "portfolio": {},
+    }), encoding="utf-8")
+    audit = tmp_path / "audit.json"
+    audit.write_text(json.dumps({
+        "ticker": "SPY", "broker_execution": "DISABLED",
+        "benchmark": {"convention": "close_to_close_price_only_no_dividend_reinvestment",
+                      "total_return": "UNAVAILABLE", "ending_equity": "1.2", "return": "0.2", "max_drawdown": "0.1"},
+        "corporate_action_status": "NOT_ASSESSED",
+    }), encoding="utf-8")
+    result = strategy_validation_summary((str(research),), (str(audit),))
+    benchmark = result["datasets"][0]["benchmark"]
+    assert benchmark["convention"].startswith("close_to_close")
+    assert benchmark["total_return"] == "UNAVAILABLE"
+    assert benchmark["corporate_action_status"] == "NOT_ASSESSED"
     assert "equity_path_secret" not in str(result)
     assert result["execution_enabled"] is False

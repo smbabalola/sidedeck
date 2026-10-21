@@ -136,13 +136,40 @@ def strategy_catalogue_summary() -> dict[str, Any]:
     }
 
 
-def strategy_validation_summary(paths: tuple[str, ...] = ()) -> dict[str, Any]:
+def _read_benchmark_audits(paths: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    audits: dict[str, dict[str, Any]] = {}
+    for raw_path in paths:
+        target = Path(raw_path)
+        if not target.is_file() or target.is_symlink() or target.stat().st_size > 128_000:
+            continue
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            ticker = data.get("ticker")
+            benchmark = data.get("benchmark", {})
+            if (ticker not in ("SPY", "QQQ", "MSFT") or data.get("broker_execution") != "DISABLED"
+                    or not isinstance(benchmark, dict)):
+                continue
+            audits[ticker] = {
+                "convention": benchmark.get("convention") if isinstance(benchmark.get("convention"), str) else "UNAVAILABLE",
+                "total_return": benchmark.get("total_return") if benchmark.get("total_return") in ("UNAVAILABLE", "AVAILABLE") else "UNAVAILABLE",
+                "ending_equity": benchmark.get("ending_equity") if isinstance(benchmark.get("ending_equity"), str) else None,
+                "return": benchmark.get("return") if isinstance(benchmark.get("return"), str) else None,
+                "max_drawdown": benchmark.get("max_drawdown") if isinstance(benchmark.get("max_drawdown"), str) else None,
+                "corporate_action_status": data.get("corporate_action_status") if data.get("corporate_action_status") in ("VERIFIED", "NOT_ASSESSED", "REVIEW_REQUIRED") else "NOT_ASSESSED",
+            }
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    return audits
+
+
+def strategy_validation_summary(paths: tuple[str, ...] = (), audit_paths: tuple[str, ...] = ()) -> dict[str, Any]:
     """Expose sanitized local SD-021 metrics without equity paths or positions."""
     result: dict[str, Any] = {
         "schema_version": 1, "source": "LOCAL_STRATEGY_VALIDATION",
         "status": "NOT_LOADED", "execution_enabled": False, "datasets": [],
         "broker_execution": "DISABLED",
     }
+    benchmark_audits = _read_benchmark_audits(audit_paths)
     for raw_path in paths:
         target = Path(raw_path)
         if not target.is_file() or target.is_symlink() or target.stat().st_size > 512_000:
@@ -173,6 +200,11 @@ def strategy_validation_summary(paths: tuple[str, ...] = ()) -> dict[str, Any]:
                 "strategies": strategies,
                 "portfolio": {key: data.get("portfolio", {}).get(key)
                               for key in ("ending_equity", "max_drawdown", "correlation_status")},
+                "benchmark": benchmark_audits.get(str(data.get("ticker")), {
+                    "convention": "UNAVAILABLE", "total_return": "UNAVAILABLE",
+                    "ending_equity": None, "return": None, "max_drawdown": None,
+                    "corporate_action_status": "NOT_ASSESSED",
+                }),
             })
         except (OSError, ValueError, TypeError, KeyError):
             continue
@@ -182,7 +214,7 @@ def strategy_validation_summary(paths: tuple[str, ...] = ()) -> dict[str, Any]:
 
 
 def make_handler(db_path: str, snapshot_path: str | None = None, research_path: str | None = None,
-                 strategy_paths: tuple[str, ...] = ()) -> type[BaseHTTPRequestHandler]:
+                 strategy_paths: tuple[str, ...] = (), audit_paths: tuple[str, ...] = ()) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.headers.get("Host") not in ("127.0.0.1:8765", "localhost:8765") or urlsplit(self.path).query:
@@ -197,7 +229,7 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                 elif route == "/api/research/strategies":
                     data = strategy_catalogue_summary()
                 elif route == "/api/research/validation":
-                    data = strategy_validation_summary(strategy_paths)
+                    data = strategy_validation_summary(strategy_paths, audit_paths)
                 else:
                     self.send_error(404)
                     return
@@ -230,9 +262,10 @@ def main() -> int:
     p.add_argument("--snapshot", default=None)
     p.add_argument("--research", default=None)
     p.add_argument("--strategy-research", action="append", default=[])
+    p.add_argument("--strategy-audit", action="append", default=[])
     a = p.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research,
-                                                                     tuple(a.strategy_research)))
+                                                                     tuple(a.strategy_research), tuple(a.strategy_audit)))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()
