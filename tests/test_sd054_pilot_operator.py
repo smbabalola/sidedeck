@@ -175,7 +175,8 @@ def test_release_is_single_use(keys, tmp_path):
         rig.run()
 
 
-def test_main_run_is_locked_and_consumes_nothing(capsys):
+def test_main_run_is_locked_and_consumes_nothing(capsys, monkeypatch):
+    monkeypatch.setattr(transport_module, "UNLOCKED_PILOT_DIGEST", None)
     assert operator.main(["run", "--confirm-owner-release"]) == 5
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "REFUSED_LOCKED" and out["requests_sent"] == 0
@@ -380,7 +381,41 @@ def test_console_approval_command_checks_digest_and_drops_stale_signature(signed
 
 def test_production_factory_validate_refuses_while_locked():
     from sidedeck.application.sd036_etoro_demo_desk import BrokerExecutionDisabled
-    factory = transport_module.production_transport_factory(ENV)
+    factory = transport_module.production_transport_factory(ENV, "a" * 64)
     with pytest.raises(BrokerExecutionDisabled, match="locked"):
         factory.validate()
     assert "synthetic" not in repr(factory)
+
+
+
+# ---- release-bound unlock (SD-058 lock-lift design) ---------------------------------
+
+def test_unlock_is_bound_to_exactly_one_digest(monkeypatch):
+    assert transport_module.UNLOCKED_PILOT_DIGEST in (None, operator.PINNED_INTENT_DIGEST)
+    assert transport_module.NETWORK_TRANSPORT_ENABLED is False
+    monkeypatch.setattr(transport_module, "UNLOCKED_PILOT_DIGEST", "c" * 64)
+    assert transport_module.network_transport_enabled("c" * 64) is True
+    assert transport_module.network_transport_enabled("d" * 64) is False
+    assert transport_module.network_transport_enabled() is False
+    for wildcard in ("", "*", "c" * 63, 64):
+        monkeypatch.setattr(transport_module, "UNLOCKED_PILOT_DIGEST", wildcard)
+        assert transport_module.network_transport_enabled("c" * 64) is False
+
+
+def test_unlock_for_one_pilot_does_not_open_the_network_for_another(keys, tmp_path, monkeypatch):
+    """With another digest unlocked, this pilot's transport still refuses a real opener."""
+    from sidedeck.application.sd036_etoro_demo_desk import BrokerExecutionDisabled
+    rig = Rig(keys, tmp_path)
+    monkeypatch.setattr(transport_module, "UNLOCKED_PILOT_DIGEST", "e" * 64)
+
+    def real_factory(release, ledger):
+        return EtoroDemoHttpTransport(api_key=ENV["ETORO_DEMO_TRADE_API_KEY"],
+                                      user_key=ENV["ETORO_DEMO_TRADE_USER_KEY"],
+                                      release=release, ledger_path=ledger)
+    rig.factory = real_factory
+    with pytest.raises(BrokerExecutionDisabled, match="locked"):
+        rig.run()
+    factory = transport_module.production_transport_factory(ENV, "e" * 64)
+    factory.validate()                                   # unlocked digest + valid credentials
+    with pytest.raises(BrokerExecutionDisabled, match="differs"):
+        factory(type("R", (), {"digest": "f" * 64})(), str(tmp_path / "l.sqlite3"))

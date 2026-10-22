@@ -1,10 +1,21 @@
 # SD-057 — Consolidated release request: first eToro Demo MSFT trade
 
-**Status: DRAFT — not yet presentable.** Prerequisites outstanding: the owner's SSH signature
-over the pinned intent (SD-055). The independent transport review (SD-056) is closed:
-0 critical, 0 high; 5 medium and the actionable low findings fixed with tests.
+**Status: READY FOR THE OWNER'S DECISION (2026-10-22).** All offline prerequisites pass.
 This document is **not** an authorization. `ETORO_DEMO_EXECUTION_RELEASE=NO_GO`,
-`broker_execution=DISABLED`, `NETWORK_TRANSPORT_ENABLED=False`.
+`broker_execution=DISABLED`, `NETWORK_TRANSPORT_ENABLED=False`, `UNLOCKED_PILOT_DIGEST=None`.
+
+## Verified evidence
+
+| Check | Result |
+|---|---|
+| Owner release signature (SD-055) | **VALID** — SideDeck verifier `signature_valid: true`; independent `ssh-keygen -Y verify`: `Good "sidedeck-etoro-pilot-release" signature for owner@sidedeck with ED25519 key SHA256:7qb8dAz9c2/1X4jb+qlqI3O91Xfc3jbSmfNvrW3/rUI` |
+| Signed bytes | SHA-256(canonical intent) = digest file = pinned `71e111b3…9a62`; intent files unmodified since 2026-10-22 16:19 local; re-derived from code parameters on load |
+| Signer | `data/approval_allowed_signers` holds exactly the pinned key (SHA-256 of blob `600a7f7e…0f3`) |
+| Release state | not consumed (`data/sd054/` absent), 0 requests sent |
+| Instrument | MSFT = 1004 (SD-052), no protected-baseline conflict |
+| Independent security review (SD-056) | 0 critical / 0 high; all medium + actionable low findings fixed with tests |
+| Regression | 903 passed, 1 skipped; Ruff, mypy, Alembic, web build clean; exact-HEAD CI green |
+| Lock-lift simulation | full suite passes with `UNLOCKED_PILOT_DIGEST` set to the pilot digest in memory and sockets blocked |
 
 ## What the owner would be releasing
 
@@ -50,7 +61,9 @@ budget). No write retries; `x-request-id` = reference id; no redirects; proxies 
 
 ## Steps after the owner's release
 
-1. Reviewed lock-lift commit (sets `NETWORK_TRANSPORT_ENABLED = True`; nothing else), CI green.
+1. Reviewed one-line lock-lift commit: `UNLOCKED_PILOT_DIGEST = "71e111b3a8806dc9b8e59d96ce1ef6e6a0b64dc2b00363465244acccaad09a62"`
+   (global `NETWORK_TRANSPORT_ENABLED` stays False). Only this signed release can open a
+   network transport, and every request still requires the signed window; CI green.
 2. Inside the window the owner runs (host safety prevents Claude from doing so):
    ```powershell
    Set-Location "C:\Users\smbab\OneDrive\Documents\Projects\sidedeck\sidedeck"; .\.venv\Scripts\python.exe -m sidedeck.application.sd054_pilot_operator run --confirm-owner-release
@@ -58,5 +71,5 @@ budget). No write retries; `x-request-id` = reference id; no redirects; proxies 
    and signs each printed open (then close) approval in a second PowerShell window using the
    exact `sign_in_powershell` command the runner prints: it re-checks the digest file against
    the on-screen digest before signing (namespace `sidedeck-etoro-pilot-approval`).
-3. Immediately after: lock re-engaged by a follow-up commit; report, accounting and audit
+3. Immediately after (or at 11:30 ET, whichever is first): `UNLOCKED_PILOT_DIGEST = None` re-lock commit; report, accounting and audit
    recorded (SD-062).

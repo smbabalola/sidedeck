@@ -304,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
             result = verify_release_signature()
             print(json.dumps(result, indent=2))
             return 0 if result["signature_valid"] else 1
-        if not wt.network_transport_enabled():        # before secrets or the release
+        if not wt.network_transport_enabled(PINNED_INTENT_DIGEST):   # before secrets/release
             print(json.dumps({"status": "REFUSED_LOCKED", "reason": "order transport lock is "
                               "engaged; lifting it needs the reviewed lock-lift commit and the "
                               "owner's explicit execution authorization",
@@ -320,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
             intent=intent, release_signature=signature, principal=PRINCIPAL,
             signers_path=str(data / "approval_allowed_signers"), env=env, baseline=baseline,
             baseline_status=recorded_baseline_status(str(data / "sd038-auth-budget.sqlite3")),
-            transport_factory=wt.production_transport_factory(env),
+            transport_factory=wt.production_transport_factory(env, PINNED_INTENT_DIGEST),
             await_approval=console_approval, paths=OperatorPaths(data / "sd054"))
     except Exception as exc:
         report_path = _data_dir() / "sd054" / "report.json"

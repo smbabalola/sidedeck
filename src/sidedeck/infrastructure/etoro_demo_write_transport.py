@@ -52,6 +52,10 @@ from sidedeck.domain.etoro_demo_orders import (
 )
 
 NETWORK_TRANSPORT_ENABLED = False   # development lock (owner instruction 2026-10-22)
+# Release-bound unlock: the reviewed lock-lift commit sets this to exactly one owner-signed
+# pilot digest. Only a release with that digest gets a network opener, and every send still
+# requires the signed window. Never a wildcard; None means locked.
+UNLOCKED_PILOT_DIGEST: str | None = None
 ETORO_HOST = "https://public-api.etoro.com"
 USER_AGENT = "SideDeck/0.1 (eToro Demo pilot transport)"
 MAX_RESPONSE_BYTES = 1_000_000
@@ -129,7 +133,7 @@ class EtoroDemoHttpTransport:
             raise BrokerExecutionDisabled("real urllib openers cannot be injected")
         active: Any = opener
         if active is None:
-            if NETWORK_TRANSPORT_ENABLED is not True:
+            if not network_transport_enabled(release.digest):
                 raise BrokerExecutionDisabled("network transport is locked in this phase")
             active = build_opener(ProxyHandler({}), _NoRedirect())  # pragma: no cover
         self.__headers = {"x-api-key": api_key, "x-user-key": user_key}
@@ -241,9 +245,14 @@ class EtoroDemoHttpTransport:
                 closer()
 
 
-def network_transport_enabled() -> bool:
-    """Read-only view of the development lock (callers must not assign it)."""
-    return NETWORK_TRANSPORT_ENABLED is True
+def network_transport_enabled(release_digest: str | None = None) -> bool:
+    """Read-only view of the lock (callers must not assign it). True only for the single
+    release digest named by the reviewed lock-lift commit (or the global lock, never set)."""
+    if NETWORK_TRANSPORT_ENABLED is True:
+        return True
+    unlocked = UNLOCKED_PILOT_DIGEST
+    return (isinstance(unlocked, str) and len(unlocked) == 64
+            and isinstance(release_digest, str) and release_digest == unlocked)
 
 
 class ProductionTransportFactory:
@@ -251,22 +260,26 @@ class ProductionTransportFactory:
     ``validate`` has no side effects and runs before the single-use release is consumed.
     No opener is ever injected here."""
 
-    def __init__(self, env: Mapping[str, str]) -> None:
+    def __init__(self, env: Mapping[str, str], release_digest: str) -> None:
         self.__env = dict(env)
+        self._digest = release_digest
 
     def __repr__(self) -> str:
         return "ProductionTransportFactory(<credentials hidden>)"
 
     def validate(self) -> None:
-        if not network_transport_enabled():
+        if not network_transport_enabled(self._digest):
             raise BrokerExecutionDisabled("network transport is locked in this phase")
         require_execution_credentials(self.__env)
 
     def __call__(self, release: PilotRelease, ledger_path: str) -> EtoroDemoHttpTransport:
+        if release.digest != self._digest:
+            raise BrokerExecutionDisabled("release differs from the unlocked pilot digest")
         self.validate()
         return EtoroDemoHttpTransport.from_environment(self.__env, release=release,
                                                        ledger_path=ledger_path)
 
 
-def production_transport_factory(env: Mapping[str, str]) -> ProductionTransportFactory:
-    return ProductionTransportFactory(env)
+def production_transport_factory(env: Mapping[str, str],
+                                 release_digest: str) -> ProductionTransportFactory:
+    return ProductionTransportFactory(env, release_digest)
