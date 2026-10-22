@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sidedeck.application.sd042_etoro_credential_roles import (
+    CredentialRoleError, monitoring_credentials,
+)
 from sidedeck.domain.etoro_demo import field_type_issues, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import reconcile_demo
 from sidedeck.infrastructure.etoro_demo_client import EtoroDemoReadClient
@@ -75,10 +78,10 @@ def main() -> int:
     args = p.parse_args()
     if not args.confirm_owner_demo_read:
         p.error("explicit owner approval required; no request made")
-    key = os.environ.get("ETORO_API_KEY")
-    user_key = os.environ.get("ETORO_USER_KEY")
-    if not key or not user_key:
-        p.error("missing process environment credentials; no request made")
+    try:
+        key, user_key = monitoring_credentials(os.environ)
+    except CredentialRoleError as exc:
+        p.error(f"{exc}; no request made")
     store = EtoroDemoStore(args.db)
     if not store.baseline_captured():
         p.error("saved baseline required; no request made")

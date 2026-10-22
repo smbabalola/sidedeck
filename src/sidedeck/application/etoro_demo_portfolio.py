@@ -1,8 +1,9 @@
 """Local, owner-run eToro DEMO portfolio read and reconciliation (read-only).
 
-Inert unless ``--confirm-owner-demo-read`` is given. Reads ``ETORO_API_KEY`` and
-``ETORO_USER_KEY`` from the process environment (load them yourself; this
-command never opens ``.env``). Makes exactly one GET to the Demo portfolio
+Inert unless ``--confirm-owner-demo-read`` is given. Reads the single owner-accepted
+Demo pair ``ETORO_DEMO_TRADE_API_KEY`` / ``ETORO_DEMO_TRADE_USER_KEY`` (SD-042, ADR-004)
+from the process environment (load them yourself; this command never opens ``.env``)
+and uses it only through the GET-only read client. Makes exactly one GET to the Demo portfolio
 endpoint, then prints a SAFE summary: statuses, counts and field-type paths
 only. No balances, P&L values, position/instrument/order IDs or account
 identifiers are printed; those stay in the private local database.
@@ -19,6 +20,9 @@ import json
 import os
 from datetime import datetime, timezone
 
+from sidedeck.application.sd042_etoro_credential_roles import (
+    CredentialRoleError, monitoring_credentials,
+)
 from sidedeck.domain.etoro_demo import EtoroDemoDataError, field_type_issues, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import (
     DemoReconciliation, EtoroDemoBookError, reconcile_demo,
@@ -61,9 +65,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("requires --confirm-owner-demo-read (one read-only Demo GET); nothing sent")
     if args.capture_baseline and (args.expected_positions is None or args.expected_positions < 0):
         parser.error("--capture-baseline requires --expected-positions N; nothing sent")
-    api_key, user_key = os.environ.get("ETORO_API_KEY"), os.environ.get("ETORO_USER_KEY")
-    if not api_key or not user_key:
-        parser.error("ETORO_API_KEY and ETORO_USER_KEY must be set in the environment; nothing sent")
+    try:
+        api_key, user_key = monitoring_credentials(os.environ)
+    except CredentialRoleError as exc:
+        parser.error(f"{exc}; nothing sent")
     store = EtoroDemoStore(args.db)
     try:
         payload, request_id = EtoroDemoReadClient(api_key=api_key, user_key=user_key) \

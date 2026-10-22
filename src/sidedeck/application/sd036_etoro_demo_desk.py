@@ -46,8 +46,8 @@ DESK_OPERATOR = "sidedeck-etoro-demo-desk"
 # Unresolved risks from docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md §6 (R4 mitigated by SD-037;
 # R1 closed by SD-038: baseline MATCHED 4/4 on 2026-10-21).
 # R2: Demo environment + Read/Write permission owner-confirmed 2026-10-21; IP whitelist,
-# expiry and actual write capability remain unverified. R9: the monitoring key is Read/Write.
-ETORO_DEMO_OPEN_RISKS = ("R2_KEY_IP_EXPIRY_WRITE_UNVERIFIED", "R9_MONITORING_KEY_IS_READ_WRITE",
+# expiry owner-attested; write capability unverified. R9 owner-accepted (ADR-004).
+ETORO_DEMO_OPEN_RISKS = ("R2_KEY_IP_EXPIRY_OWNER_ATTESTED_WRITE_UNVERIFIED",
                          "R3_CLOSE_LOOKUP_UNVERIFIED", "R5_NO_RELEASED_TRANSPORT",
                          "R6_LIVE_SCHEMA_UNVERIFIED", "R8_NO_CAPITAL_ALLOCATED")
 
@@ -59,7 +59,9 @@ def etoro_demo_status() -> dict[str, Any]:
             "real_execution": ETORO_REAL_EXECUTION, "transport": "OFFLINE_SIMULATOR_ONLY",
             "baseline": "PROTECTED_UNATTRIBUTED", "ownership": "VERIFIED_LINEAGE_ONLY",
             "agent_portfolios": "NOT_ADOPTED_PENDING_EVIDENCE",
-            "open_risks": list(ETORO_DEMO_OPEN_RISKS)}
+            "open_risks": list(ETORO_DEMO_OPEN_RISKS),
+            # Owner decision 2026-10-22 (ADR-004): single Demo Read/Write pair.
+            "accepted_risks": ["R9_SHARED_DEMO_READ_WRITE_PAIR_OWNER_ACCEPTED"]}
 
 
 class BrokerExecutionDisabled(PermissionError):

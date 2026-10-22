@@ -348,16 +348,16 @@ def test_cli_sends_nothing_without_confirmation_or_keys(monkeypatch, tmp_path, c
     monkeypatch.setattr(etoro_demo_client, "build_opener", boom)
     with pytest.raises(SystemExit):
         cli.main(["--db", str(tmp_path / "x.sqlite")])
-    monkeypatch.delenv("ETORO_API_KEY", raising=False)
-    monkeypatch.delenv("ETORO_USER_KEY", raising=False)
+    monkeypatch.delenv("ETORO_DEMO_TRADE_API_KEY", raising=False)
+    monkeypatch.delenv("ETORO_DEMO_TRADE_USER_KEY", raising=False)
     with pytest.raises(SystemExit):
         cli.main(["--confirm-owner-demo-read", "--db", str(tmp_path / "x.sqlite")])
     assert "nothing sent" in capsys.readouterr().err
 
 
 def test_cli_end_to_end_with_synthetic_response_prints_only_counts(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("ETORO_API_KEY", "synthetic-api-key")
-    monkeypatch.setenv("ETORO_USER_KEY", "synthetic-user-key")
+    monkeypatch.setenv("ETORO_DEMO_TRADE_API_KEY", "synthetic-api-key")
+    monkeypatch.setenv("ETORO_DEMO_TRADE_USER_KEY", "synthetic-user-key")
     client_with(monkeypatch, FakeResponse(payload()))
     code = cli.main(["--confirm-owner-demo-read", "--db", str(tmp_path / "demo.sqlite"),
                      "--capture-baseline", "--expected-positions", "4"])
@@ -431,8 +431,8 @@ def test_failure_during_the_write_leaves_no_partial_baseline(tmp_path):
 
 
 def test_cli_capture_requires_expected_count_and_refuses_a_mismatch(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("ETORO_API_KEY", "synthetic-api-key")
-    monkeypatch.setenv("ETORO_USER_KEY", "synthetic-user-key")
+    monkeypatch.setenv("ETORO_DEMO_TRADE_API_KEY", "synthetic-api-key")
+    monkeypatch.setenv("ETORO_DEMO_TRADE_USER_KEY", "synthetic-user-key")
     _, opener = client_with(monkeypatch, FakeResponse(payload()))
     db = str(tmp_path / "cli.sqlite")
     with pytest.raises(SystemExit):
@@ -446,8 +446,8 @@ def test_cli_capture_requires_expected_count_and_refuses_a_mismatch(monkeypatch,
 
 
 def test_cli_stops_on_field_type_failure_without_writing(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("ETORO_API_KEY", "synthetic-api-key")
-    monkeypatch.setenv("ETORO_USER_KEY", "synthetic-user-key")
+    monkeypatch.setenv("ETORO_DEMO_TRADE_API_KEY", "synthetic-api-key")
+    monkeypatch.setenv("ETORO_DEMO_TRADE_USER_KEY", "synthetic-user-key")
     client_with(monkeypatch, FakeResponse(payload(credit="5000.25")))
     db = str(tmp_path / "types.sqlite")
     code = cli.main(["--confirm-owner-demo-read", "--db", db, "--capture-baseline",

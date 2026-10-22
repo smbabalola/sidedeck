@@ -1,51 +1,100 @@
-"""SD-042 credential roles and SD-043 sanitized response-shape diagnostics (offline)."""
+"""SD-042 single Demo credential policy and SD-043 response-shape diagnostics (offline)."""
+import ast
+import inspect
 import json
 import uuid
 from decimal import Decimal
 
 import pytest
 
+from sidedeck.application import etoro_demo_portfolio, p5_demo_refresh
 from sidedeck.application.sd036_etoro_demo_desk import OfflineEtoroDemoSimulator
 from sidedeck.application.sd042_etoro_credential_roles import (
-    CredentialRoleError, assess_roles, require_separated_execution_credentials,
+    POLICY, CredentialRoleError, assess_roles, monitoring_credentials,
+    require_execution_credentials,
 )
 from sidedeck.domain.etoro_demo_orders import (
     DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, DemoOpenRequest, response_shape_issues,
 )
+from sidedeck.infrastructure import etoro_demo_client
+from sidedeck.infrastructure.etoro_demo_client import EtoroDemoReadClient
 
-MONITOR = {"ETORO_API_KEY": "app-key-111", "ETORO_USER_KEY": "monitor-user-222"}
-TRADE = {"ETORO_DEMO_TRADE_API_KEY": "app-key-111", "ETORO_DEMO_TRADE_USER_KEY": "trade-user-333"}
+PAIR = {"ETORO_DEMO_TRADE_API_KEY": "app-key-111", "ETORO_DEMO_TRADE_USER_KEY": "demo-user-222"}
 
 
 @pytest.mark.parametrize("env,expected", [
-    (MONITOR, "EXECUTION_CREDENTIAL_NOT_CONFIGURED"),
-    ({**MONITOR, **TRADE, "ETORO_DEMO_TRADE_USER_KEY": "monitor-user-222"}, "SHARED_REFUSED"),
-    ({**MONITOR, **TRADE, "ETORO_DEMO_TRADE_USER_KEY": " monitor-user-222 "}, "SHARED_REFUSED"),
-    (TRADE, "MONITOR_CREDENTIAL_NOT_CONFIGURED"),
-    ({**MONITOR, **TRADE}, "SEPARATED_PERMISSIONS_UNVERIFIED"),
+    (PAIR, POLICY),
+    ({}, "DEMO_CREDENTIAL_NOT_CONFIGURED"),
+    ({"ETORO_DEMO_TRADE_API_KEY": "app-key-111"}, "DEMO_CREDENTIAL_NOT_CONFIGURED"),
+    ({**PAIR, "ETORO_DEMO_TRADE_USER_KEY": "   "}, "DEMO_CREDENTIAL_NOT_CONFIGURED"),
+    ({**PAIR, "ETORO_API_KEY": "app-key-111", "ETORO_USER_KEY": "demo-user-222"},
+     "EXTRA_CREDENTIAL_NAMES_REFUSED"),
+    ({**PAIR, "ETORO_USER_KEY": "other-user"}, "EXTRA_CREDENTIAL_NAMES_REFUSED"),
 ])
-def test_role_separation(env, expected):
+def test_single_pair_policy(env, expected):
     status = assess_roles(env)
-    assert status["separation"] == expected
+    assert status["status"] == expected and status["policy"] == POLICY
     assert status["execution_release"] == "NO_GO"
-    assert "R9_MONITORING_KEY_IS_READ_WRITE" in status["warnings"]
+    assert status["accepted_risks"] == ["R9_SHARED_DEMO_READ_WRITE_PAIR_OWNER_ACCEPTED"]
+    assert "MONITORING_GET_ONLY_SINGLE_PATH" in status["compensating_controls"]
     text = json.dumps(status)
-    assert not any(v.strip() in text for v in env.values())
+    assert not any(v.strip() and v.strip() in text for v in env.values())
 
 
-def test_execution_gate_refuses_shared_or_missing_roles():
-    with pytest.raises(CredentialRoleError, match="NOT_CONFIGURED"):
-        require_separated_execution_credentials(MONITOR)
-    with pytest.raises(CredentialRoleError, match="SHARED"):
-        require_separated_execution_credentials(
-            {**MONITOR, **TRADE, "ETORO_DEMO_TRADE_USER_KEY": "monitor-user-222"})
-    require_separated_execution_credentials({**MONITOR, **TRADE})
+def test_monitoring_and_execution_share_only_the_accepted_pair():
+    assert monitoring_credentials(PAIR) == ("app-key-111", "demo-user-222")
+    require_execution_credentials(PAIR)
+    for bad in ({}, {**PAIR, "ETORO_API_KEY": "x"}):
+        with pytest.raises(CredentialRoleError, match="refused"):
+            monitoring_credentials(bad)
+        with pytest.raises(CredentialRoleError, match="refused"):
+            require_execution_credentials(bad)
 
 
-def test_owner_record_marks_ip_and_expiry_unverified():
-    record = assess_roles(MONITOR)["monitor_key_owner_record"]
+def test_owner_record_and_controls():
+    status = assess_roles(PAIR)
+    record = status["owner_key_record"]
     assert record["environment"] == "DEMO" and record["permission"] == "READ_WRITE"
-    assert record["ip_whitelist"] == "UNVERIFIED" and record["expiry"] == "UNVERIFIED"
+    assert record["ip_whitelist"] == "OWNER_ATTESTED" and record["expiry"] == "OWNER_ATTESTED"
+    assert "REAL_ROUTES_PERMANENTLY_REFUSED" in status["compensating_controls"]
+
+
+def test_write_capable_pair_reaches_monitoring_only_through_get_only_client(monkeypatch):
+    def no_network(*args, **kwargs):
+        raise AssertionError("network must not be touched")
+
+    monkeypatch.setattr(etoro_demo_client, "build_opener", no_network)
+    client = EtoroDemoReadClient(*(), api_key=monitoring_credentials(PAIR)[0],
+                                 user_key=monitoring_credentials(PAIR)[1])
+    for path in ("/api/v2/trading/execution/demo/orders",
+                 "/api/v1/trading/execution/demo/market-close-orders/positions/5",
+                 "/api/v2/trading/execution/orders", "/api/v1/trading/info/real/pnl"):
+        with pytest.raises(PermissionError):
+            client._get(path)
+    assert "demo-user-222" not in repr(client)
+    for module in (etoro_demo_portfolio, p5_demo_refresh):
+        tree = ast.parse(inspect.getsource(module))
+        called = {n.func.attr for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        assert "read_demo_portfolio" in called
+        assert not called & {"submit_open", "submit_close", "send", "post", "delete"}
+        assert "ETORO_API_KEY" not in inspect.getsource(module)
+
+
+def test_monitoring_cli_refuses_legacy_names_without_network(monkeypatch, tmp_path, capsys):
+    def no_network(*args, **kwargs):
+        raise AssertionError("network must not be touched")
+
+    monkeypatch.setattr(etoro_demo_client, "build_opener", no_network)
+    for name in ("ETORO_DEMO_TRADE_API_KEY", "ETORO_DEMO_TRADE_USER_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ETORO_API_KEY", "legacy-app")
+    monkeypatch.setenv("ETORO_USER_KEY", "legacy-user")
+    with pytest.raises(SystemExit):
+        etoro_demo_portfolio.main(["--confirm-owner-demo-read", "--db", str(tmp_path / "x.db")])
+    err = capsys.readouterr().err
+    assert "DEMO_CREDENTIAL_NOT_CONFIGURED" in err and "nothing sent" in err
+    assert "legacy-user" not in err
 
 
 def test_simulator_responses_match_documented_shapes():

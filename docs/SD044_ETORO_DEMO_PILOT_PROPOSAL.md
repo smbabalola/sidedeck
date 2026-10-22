@@ -10,7 +10,7 @@ The owner's Demo **Read/Write** key permission (confirmed 2026-10-21) is a capab
 
 | # | Prerequisite | Owner / work | Status |
 |---|---|---|---|
-| P1 | Separate credentials: a Demo **Read-only** key for monitoring (`ETORO_API_KEY`/`ETORO_USER_KEY`) and the Demo Read/Write key under `ETORO_DEMO_TRADE_API_KEY`/`ETORO_DEMO_TRADE_USER_KEY`. `require_separated_execution_credentials` must pass (SD-042) | Owner (portal + local `.env`) | **Partial (2026-10-21 offline check):** Demo Read/Write pair present under `ETORO_DEMO_TRADE_*`. The Demo Read-only monitoring pair has not been created yet, so the gate reports `MONITOR_CREDENTIAL_NOT_CONFIGURED`. Owner decision: Demo only; no Real key needed |
+| P1 | Credentials: **one** Demo Read/Write pair under `ETORO_DEMO_TRADE_API_KEY`/`ETORO_DEMO_TRADE_USER_KEY` for GET-only monitoring and approved execution ([ADR-004](ADR-004-single-etoro-demo-credential-pair.md)); legacy `ETORO_API_KEY`/`ETORO_USER_KEY` not set; R9 owner-accepted | Owner (local `.env`) | **Not yet satisfied (2026-10-22 offline check):** the `ETORO_DEMO_TRADE_*` pair is present, but the legacy names also hold a **different** pair (`.env` edited 2026-10-22 11:44), so the policy refuses with `EXTRA_CREDENTIAL_NAMES_REFUSED`. The owner must keep only the Demo Read/Write pair, under `ETORO_DEMO_TRADE_*` |
 | P2 | IP whitelist and expiry set on the Read/Write key (closes the rest of R2) | Owner (portal UI) | Unverified |
 | P3 | Reviewed Demo write transport per `SD041_ETORO_DEMO_TRANSPORT_REVIEW.md`. It is only merged after the owner approves this pilot scope, because it replaces the SD-041 no-transport guard with a single-transport allowlist guard | Codex + owner code review | Not started |
 | P4 | Real signature verifier for SD-033 approvals. Use a **dedicated** SSH signing key (not the GitHub key) so it can be rotated or revoked independently. The private key stays with the owner. Its public key goes in the git-ignored `data/approval_allowed_signers` as `<principal> <public key>` | Codex (offline) + owner key | Verifier implemented (SD-045, OpenSSH `ssh-keygen -Y`); owner public key not yet configured |
@@ -19,7 +19,7 @@ The owner's Demo **Read/Write** key permission (confirmed 2026-10-21) is a capab
 
 After the owner reports P1, P2 and P4 done, Codex checks the local configuration **without contacting eToro**:
 
-- `require_separated_execution_credentials` passes, checked by presence and distinctness only; no values are printed;
+- `require_execution_credentials` passes under the single-pair policy (ADR-004), checked by presence only; no values are printed;
 - the signers file parses;
 - a locally signed test digest verifies.
 
