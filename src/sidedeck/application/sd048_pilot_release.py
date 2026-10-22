@@ -33,7 +33,7 @@ from sidedeck.application.sd042_etoro_credential_roles import POLICY as CREDENTI
 from sidedeck.application.sd042_etoro_credential_roles import assess_roles
 from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifier
 from sidedeck.application.sd046_etoro_demo_pilot import (
-    MAX_LIMIT_PREMIUM, MAX_NOTIONAL_USD, ROUTE_CAPS, PilotError, PilotScope,
+    MAX_NOTIONAL_USD, MAX_PLANNING_HEADROOM, ROUTE_CAPS, PilotError, PilotScope,
 )
 from sidedeck.domain.etoro_demo_books import BaselinePosition
 
@@ -59,7 +59,7 @@ class PilotIntent:
     strategy: str
     instrument_id: int
     units: Decimal
-    limit_rate: Decimal
+    max_limit_rate: Decimal          # ceiling; the actual limit is <= +0.5 % over a fresh ask
     reference_price: Decimal
     max_notional_usd: Decimal
     not_before: datetime
@@ -71,19 +71,19 @@ class PilotIntent:
     def canonical(self) -> bytes:
         document = {"broker": self.broker, "pilot_id": self.pilot_id, "strategy": self.strategy,
                     "instrument_id": self.instrument_id, "units": str(self.units),
-                    "limit_rate": str(self.limit_rate),
+                    "max_limit_rate": str(self.max_limit_rate),
                     "reference_price": str(self.reference_price),
                     "max_notional_usd": str(self.max_notional_usd),
                     "not_before": _utc(self.not_before, "not_before").isoformat(),
                     "expires_at": _utc(self.expires_at, "expires_at").isoformat(),
-                    "request_caps": dict(self.request_caps), "schema": "sidedeck-pilot-intent/1"}
+                    "request_caps": dict(self.request_caps), "schema": "sidedeck-pilot-intent/2"}
         return json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     def digest(self) -> str:
         return hashlib.sha256(self.canonical()).hexdigest()
 
     def scope(self) -> PilotScope:
-        return PilotScope(self.strategy, self.instrument_id, self.units, self.limit_rate,
+        return PilotScope(self.strategy, self.instrument_id, self.units, self.max_limit_rate,
                           self.reference_price)
 
 
@@ -187,18 +187,18 @@ def _check_intent(intent: PilotIntent, now: datetime) -> None:
     caps = dict(intent.request_caps)
     if set(caps) != set(ROUTE_CAPS) or any(caps[k] > ROUTE_CAPS[k] or caps[k] < 0 for k in caps):
         raise PilotReleaseRefused("request caps exceed the SD-044 plan")
-    if caps["open"] + caps["close"] > 2 or sum(caps.values()) > 11:
-        raise PilotReleaseRefused("request caps exceed 11 requests / 2 writes")
-    for name in ("units", "limit_rate", "reference_price", "max_notional_usd"):
+    if caps["open"] + caps["close"] > 2 or sum(caps.values()) > 12:
+        raise PilotReleaseRefused("request caps exceed 12 requests / 2 writes")
+    for name in ("units", "max_limit_rate", "reference_price", "max_notional_usd"):
         value = getattr(intent, name)
         if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
             raise PilotReleaseRefused(f"{name} must be a positive Decimal")
     if intent.max_notional_usd > MAX_NOTIONAL_USD:
         raise PilotReleaseRefused("notional cap exceeds USD 50")
-    if intent.units * intent.limit_rate > intent.max_notional_usd:
-        raise PilotReleaseRefused("units x limit exceeds the signed notional cap")
-    if intent.limit_rate > intent.reference_price * (1 + MAX_LIMIT_PREMIUM):
-        raise PilotReleaseRefused("limit exceeds 0.5 % over the reference price")
+    if intent.units * intent.max_limit_rate > intent.max_notional_usd:
+        raise PilotReleaseRefused("units x max limit exceeds the signed notional cap")
+    if intent.max_limit_rate > intent.reference_price * (1 + MAX_PLANNING_HEADROOM):
+        raise PilotReleaseRefused("max limit exceeds the 5 % planning headroom over reference")
     start, end = _utc(intent.not_before, "not_before"), _utc(intent.expires_at, "expires_at")
     if not start < end or end - start > MAX_WINDOW:
         raise PilotReleaseRefused("signed window must be positive and at most 8 hours")

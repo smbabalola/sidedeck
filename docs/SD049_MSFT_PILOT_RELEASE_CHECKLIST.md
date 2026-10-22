@@ -1,6 +1,6 @@
 # SD-049 — MSFT eToro Demo pilot: release checklist and blockers (2026-10-22)
 
-**Status: NOT READY — 4 blockers.** `ETORO_DEMO_EXECUTION_RELEASE=NO_GO`, `broker_execution=DISABLED`, `NETWORK_TRANSPORT_ENABLED=False`. This checklist was prepared fully offline. The owner's selection of MSFT is not authorization to send an order.
+**Status: NOT READY.** Updated 2026-10-22 after SD-050/SD-051: B3 and B4 are now automated pre-order gates; B1, B5 and the owner's intent signature remain. `ETORO_DEMO_EXECUTION_RELEASE=NO_GO`, `broker_execution=DISABLED`, `NETWORK_TRANSPORT_ENABLED=False`. This checklist was prepared fully offline. The owner's selection of MSFT is not authorization to send an order.
 
 ## Owner-selected configuration
 
@@ -44,3 +44,15 @@ C9 (capital) is closed by the owner's configuration. C10 is partially closed: MS
 4. **Pick B5:** a date in the recommended window.
 
 After these, Codex prepares the canonical MSFT `PilotIntent` (exact units, limit, window) and its digest for the owner to sign. The final, separate step is the explicit pilot authorization together with the reviewed lock-lift commit.
+
+## Update 2026-10-22 (SD-050 / SD-051)
+
+| # | Status |
+|---|---|
+| B1 instrument ID | **OPEN.** The authorized SD-050 lookup returned HTTP 200 but SideDeck's type check rejected the candidate; the ID is not retained and not guessed. **The owner must authorize one new lookup**, which is enabled only by a reviewed commit with a new id and a temporary lock lift, or supply the ID |
+| B2 baseline conflict | Automatic once B1 resolves |
+| B3 fresh reference | **Implemented (SD-051):** a realtime rates read in the preflight (≤ 60 s); limit = min(signed max, ask × 1.005); re-checked by the desk |
+| B4 minimum and fractional | **Implemented as a pre-order gate (SD-051):** a Demo eligibility read in the preflight. If fractional units, minimum size, units-based orders or a long 1× real-stock configuration are not allowed, the pilot aborts **before any order**. No separate request is needed |
+| B5 window | **OPEN.** Owner to pick a date; 10:00–11:30 ET recommended |
+| Intent signature | Pending B1 and B5: Codex will prepare the canonical schema-v2 intent and digest for the owner to sign (namespace `sidedeck-etoro-pilot-release`) |
+| Request plan | 12 requests / 2 writes (owner ceiling), enforced by the signed caps, the transport ledger and the pilot budget |

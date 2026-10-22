@@ -9,7 +9,7 @@ from sidedeck.application.sd032_durable_paper_intent import DurablePaperIntentSt
 from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch, intent_digest
 from sidedeck.application.sd036_etoro_demo_desk import (
     SYNTHETIC_BASELINE_ROWS, BrokerExecutionDisabled, DemoDeskPolicy, DemoRateBudget,
-    EtoroDemoDesk, EtoroDemoLineage, OfflineEtoroDemoSimulator, open_scope,
+    EtoroDemoDesk, EtoroDemoLineage, OfflineEtoroDemoSimulator,
 )
 from sidedeck.application.sd046_etoro_demo_pilot import (
     UNRESOLVED, EtoroDemoPilot, PilotBudget, PilotBudgetExhausted, PilotError, PilotScope,
@@ -17,7 +17,7 @@ from sidedeck.application.sd046_etoro_demo_pilot import (
 )
 from sidedeck.domain.etoro_demo import parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import BaselinePosition
-from sidedeck.domain.etoro_demo_orders import DEMO_PNL_PATH, DemoOpenRequest
+from sidedeck.domain.etoro_demo_orders import DEMO_PNL_PATH
 
 BOOK = "etoro-demo:tradingagents"
 PILOT_INSTRUMENT = 2002          # not in the synthetic baseline (all 1001)
@@ -64,10 +64,12 @@ class Rig:
                               f"pk:{digest}", datetime.now(timezone.utc) + timedelta(minutes=10))
 
     def open(self):
-        request = DemoOpenRequest(str(uuid.uuid4()), PILOT_INSTRUMENT, self.scope.units,
-                                  self.scope.limit_rate)
-        self.approve("pilot-open", open_scope(BOOK, request))
-        return self.pilot.open_phase(intent_id="pilot-open", request=request)
+        pre = self.pilot.preflight()
+        if pre["result"] != "READY_FOR_OPEN_APPROVAL":
+            return pre
+        _, scope = self.pilot.open_approval_scope()
+        self.approve("pilot-open", scope)
+        return self.pilot.open_phase(intent_id="pilot-open")
 
     def close(self):
         request, scope = self.pilot.close_request(str(uuid.uuid4()))
@@ -80,7 +82,8 @@ class Rig:
             store.close()
 
     def writes(self):
-        return [c for c in self.sim.calls if c[0] == "POST"]
+        """Order writes only; the eligibility POST is a read-only check."""
+        return [c for c in self.sim.calls if c[0] == "POST" and not c[1].endswith("/eligibility")]
 
 
 @pytest.fixture
@@ -96,15 +99,16 @@ def test_complete_pilot_within_caps(rig):
     assert opened["sidedeck_open_positions"] == 1
     result = rig.close()
     assert result["result"] == "COMPLETE" and result["sidedeck_open_positions"] == 0
-    assert result["writes"] == 2 and result["requests_total"] <= 11
-    assert result["requests_used"]["pnl"] == 3 and result["kill_switch"] == "CLEAR"
+    assert result["writes"] == 2 and result["requests_total"] <= 12
+    assert result["requests_used"]["pnl"] == 3
+    assert result["requests_used"]["rates"] == 1 and result["requests_used"]["eligibility"] == 1 and result["kill_switch"] == "CLEAR"
     assert result["baseline_matched"] == 4 and result["execution_release"] == "NO_GO"
     assert len(rig.writes()) == 2
 
 
 @pytest.mark.parametrize("scope,match", [
     (PilotScope("tradingagents", 2002, Decimal("1"), Decimal("100.5"), Decimal("100")), "USD 50"),
-    (PilotScope("tradingagents", 2002, Decimal("0.4"), Decimal("100.6"), Decimal("100")), "0.5"),
+    (PilotScope("tradingagents", 2002, Decimal("0.4"), Decimal("106"), Decimal("100")), "5 %"),
     (PilotScope("tradingagents", 1001, Decimal("0.4"), Decimal("100.5"), Decimal("100")),
      "baseline"),
     (PilotScope("unknown", 2002, Decimal("0.4"), Decimal("100.5"), Decimal("100")), "strategy"),
@@ -114,12 +118,48 @@ def test_scope_violations_refused_before_any_request(tmp_path, scope, match):
         Rig(tmp_path, scope)
 
 
-def test_open_request_must_equal_scope(rig):
-    request = DemoOpenRequest(str(uuid.uuid4()), PILOT_INSTRUMENT, Decimal("0.3"),
-                              SCOPE.limit_rate)
-    with pytest.raises(PilotError, match="scope"):
-        rig.pilot.open_phase(intent_id="x", request=request)
+def test_open_requires_preflight_first(rig):
+    with pytest.raises(PilotError, match="preflight"):
+        rig.pilot.open_phase(intent_id="x")
+    with pytest.raises(PilotError, match="preflight"):
+        rig.pilot.open_approval_scope()
     assert rig.sim.calls == []
+
+
+def test_derived_limit_is_within_half_percent_of_fresh_ask(rig):
+    rig.sim.ask = Decimal("100.20")
+    assert rig.pilot.preflight()["result"] == "READY_FOR_OPEN_APPROVAL"
+    request, _ = rig.pilot.open_approval_scope()
+    assert request.limit_rate == Decimal("100.50")          # min(signed max, 100.701)
+    rig.sim.ask = Decimal("99.90")
+
+
+@pytest.mark.parametrize("setup,reason", [
+    (lambda s: setattr(s, "ask", Decimal("100.6")), "above the signed maximum"),
+    (lambda s: setattr(s, "quote_type", "delayed"), "not realtime"),
+    (lambda s: setattr(s, "quote_age_seconds", 120), "stale"),
+    (lambda s: s.eligibility.update(unitsQuantityType="whole"), "fractional"),
+    (lambda s: s.eligibility.update(minPositionExposure=60), "minimum"),
+    (lambda s: s.eligibility.update(allowOpenPosition=False), "opening and closing"),
+    (lambda s: s.eligibility.update(allowedOrderQuantityType="amountOnly"), "units-based"),
+])
+def test_preflight_gates_abort_before_any_write(rig, setup, reason):
+    setup(rig.sim)
+    result = rig.pilot.preflight()
+    assert result["result"] == "ABORTED_PREFLIGHT" and reason in result["reason"]
+    assert result["writes"] == 0 and rig.writes() == [] and result["kill_switch"] == "CLEAR"
+
+
+def test_old_quote_blocks_open_without_write(rig, monkeypatch):
+    assert rig.pilot.preflight()["result"] == "READY_FOR_OPEN_APPROVAL"
+    _, scope = rig.pilot.open_approval_scope()
+    rig.approve("pilot-open", scope)
+    import dataclasses
+    from datetime import timedelta as td
+    quote = rig.pilot._quote
+    rig.pilot._quote = dataclasses.replace(quote, observed_at=quote.observed_at - td(minutes=6))
+    result = rig.pilot.open_phase(intent_id="pilot-open")
+    assert result["result"] == "ABORTED_PREFLIGHT" and rig.writes() == []
 
 
 def test_changed_baseline_aborts_preflight_without_writes(rig):
@@ -167,7 +207,7 @@ def test_unconfirmed_close_is_never_complete(rig, setup, reason):
     assert result["result"] == UNRESOLVED and result["reason"] == reason
     assert result["kill_switch"] == "HALTED"
     assert result["sidedeck_open_positions"] == 1          # kept OPEN for the operator
-    assert result["writes"] == 2 and result["requests_total"] <= 11
+    assert result["writes"] == 2 and result["requests_total"] <= 12
 
 
 def test_final_reconciliation_mismatch_is_unresolved(rig):

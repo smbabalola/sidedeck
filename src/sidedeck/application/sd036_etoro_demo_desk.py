@@ -35,7 +35,8 @@ from sidedeck.domain.etoro_demo_books import (
     STRATEGY_BOOKS, BaselinePosition, EtoroDemoBookError, OrderAttribution, reconcile_demo,
 )
 from sidedeck.domain.etoro_demo_orders import (
-    DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, DEMO_PNL_PATH,
+    DEMO_CLOSE_INFO_PATH, DEMO_ELIGIBILITY_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
+    DEMO_PNL_PATH, MARKET_DATA_RATES_PATH,
     ETORO_REAL_EXECUTION,
     NO_FILL_TERMINAL, ZERO, CloseAcceptance, DemoCloseRequest, DemoOpenRequest,
     DemoOrderOutcome, EtoroDemoOrderError, parse_close_acceptance, parse_close_info,
@@ -334,7 +335,8 @@ class EtoroDemoDesk:
             raise EtoroDemoOrderError("kill-switch is active; no eToro Demo writes")
 
     # ---- open ---------------------------------------------------------------
-    def submit_open(self, *, intent_id: str, strategy: str, request: DemoOpenRequest) -> str:
+    def submit_open(self, *, intent_id: str, strategy: str, request: DemoOpenRequest,
+                    quote: Any = None, eligibility: Any = None) -> str:
         self._require_live()
         book = STRATEGY_BOOKS.get(strategy)
         if book is None:
@@ -352,9 +354,11 @@ class EtoroDemoDesk:
         if self._pilot_release is not None:
             self._pilot_release.require_active()
             signed = self._pilot_release.intent
-            if (strategy, request.instrument_id, request.units, request.limit_rate) != (
-                    signed.strategy, signed.instrument_id, signed.units, signed.limit_rate):
+            if ((strategy, request.instrument_id, request.units) != (
+                    signed.strategy, signed.instrument_id, signed.units)
+                    or request.limit_rate > signed.max_limit_rate):
                 raise EtoroDemoOrderError("open differs from the signed pilot intent")
+            self._require_preflight_evidence(request, quote, eligibility)
         self._budget.acquire("write")
         self._outbox.enqueue(PaperIntent(
             intent_id, request.reference_id, "sidedeck", "etoro", "paper", "etoro-demo", book,
@@ -384,6 +388,27 @@ class EtoroDemoDesk:
         self._lineage.set_state(request.reference_id, "ACCEPTED", order_id=acceptance.order_id)
         self._outbox.acknowledge(intent_id)
         return "ACCEPTED"
+
+    @staticmethod
+    def _require_preflight_evidence(request: DemoOpenRequest, quote: Any,
+                                    eligibility: Any) -> None:
+        """Signed-release opens must carry fresh broker evidence (SD-051), re-checked here."""
+        from sidedeck.domain.etoro_demo_orders import Eligibility, FreshQuote
+        if not isinstance(quote, FreshQuote) or not isinstance(eligibility, Eligibility):
+            raise EtoroDemoOrderError("fresh quote and eligibility evidence are required")
+        if (quote.instrument_id != request.instrument_id
+                or eligibility.instrument_id != request.instrument_id):
+            raise EtoroDemoOrderError("preflight evidence is for a different instrument")
+        if datetime.now(timezone.utc) - quote.observed_at > timedelta(minutes=5):
+            raise EtoroDemoOrderError("reference quote is older than 5 minutes")
+        ceiling = (quote.ask * Decimal("1.005")).quantize(Decimal("0.01"),
+                                                          rounding="ROUND_DOWN")
+        if not quote.ask <= request.limit_rate <= ceiling:
+            raise EtoroDemoOrderError("limit is not within 0.5 % above the fresh ask")
+        if request.units * request.limit_rate < eligibility.min_position_usd:
+            raise EtoroDemoOrderError("order notional is below eToro's minimum")
+        if not eligibility.fractional and request.units != request.units.to_integral_value():
+            raise EtoroDemoOrderError("fractional units are not allowed")
 
     def _open_request(self, row: sqlite3.Row) -> DemoOpenRequest:
         return DemoOpenRequest(row["reference_id"], row["instrument_id"], Decimal(row["units"]),
@@ -597,6 +622,11 @@ class OfflineEtoroDemoSimulator:
         self.drop_next_request = False        # never reaches the broker (lookup -> 404)
         self.force_position_id: int | None = None
         self.baseline_rows: list[dict[str, Any]] = []   # served by the simulated /pnl GET
+        self.ask: Decimal = fill_price               # simulated realtime ask (rates GET)
+        self.quote_type = "realtime"
+        self.quote_age_seconds = 0
+        self.eligibility: dict[str, Any] = {"unitsQuantityType": "fractional",
+                                            "minPositionExposure": 10, "minPositionAmount": 10}
         self.calls: list[tuple[str, str]] = []
         self._orders: dict[str, dict[str, Any]] = {}
         self._close_orders: dict[int, dict[str, Any]] = {}
@@ -613,6 +643,25 @@ class OfflineEtoroDemoSimulator:
             raise TransportOutcomeUnknown("simulated connection reset before delivery")
         if method == "GET" and path == DEMO_PNL_PATH:
             return self.pnl_payload(self.baseline_rows)
+        if method == "GET" and path == MARKET_DATA_RATES_PATH:
+            stamp = datetime.now(timezone.utc) - timedelta(seconds=self.quote_age_seconds)
+            return {"results": [{"instrumentId": int((query or {})["instrumentIds"]),
+                                 "bid": float(self.ask - Decimal("0.05")),
+                                 "ask": float(self.ask), "date": stamp.isoformat(),
+                                 "quoteType": self.quote_type}]}
+        if method == "POST" and path == DEMO_ELIGIBILITY_PATH:
+            e = self.eligibility
+            return {"currency": "USD", "eligibilities": [{
+                "instrumentId": (body or {})["instrumentIds"][0], "symbol": "SIM",
+                "minPositionExposure": e["minPositionExposure"], "maxUnitsPerOrder": 1000,
+                "allowOpenPosition": e.get("allowOpenPosition", True),
+                "allowClosePosition": True, "unitsQuantityType": e["unitsQuantityType"],
+                "allowedOrderQuantityType": e.get("allowedOrderQuantityType", "all"),
+                "tradeUnitType": "units",
+                "leverageConfigs": [{"settlementType": "real", "direction": "long",
+                                     "leverageValues": [1], "isPotential": False,
+                                     "minPositionAmount": e["minPositionAmount"]}]}],
+                "notFoundInstrumentIds": [], "notFoundSymbols": []}
         if method == "POST" and path == DEMO_OPEN_PATH:
             result = self._open(reference_id, body or {})
         elif method == "GET" and path == DEMO_ORDER_LOOKUP_PATH:

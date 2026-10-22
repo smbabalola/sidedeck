@@ -34,7 +34,9 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.error import HTTPError
 from urllib.parse import urlencode
-from urllib.request import HTTPRedirectHandler, OpenerDirector, Request, build_opener
+from urllib.request import (
+    HTTPRedirectHandler, OpenerDirector, ProxyHandler, Request, build_opener,
+)
 
 from sidedeck.application.sd036_etoro_demo_desk import (
     BrokerExecutionDisabled, TransportNotFound, TransportOutcomeUnknown,
@@ -45,7 +47,8 @@ from sidedeck.application.sd042_etoro_credential_roles import (
 from sidedeck.application.sd046_etoro_demo_pilot import route_for
 from sidedeck.application.sd048_pilot_release import PilotRelease
 from sidedeck.domain.etoro_demo_orders import (
-    DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, require_demo_route,
+    DEMO_ELIGIBILITY_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, MARKET_DATA_RATES_PATH,
+    require_demo_route,
 )
 
 NETWORK_TRANSPORT_ENABLED = False   # development lock (owner instruction 2026-10-22)
@@ -128,7 +131,7 @@ class EtoroDemoHttpTransport:
         if active is None:
             if not NETWORK_TRANSPORT_ENABLED:
                 raise BrokerExecutionDisabled("network transport is locked in this phase")
-            active = build_opener(_NoRedirect())  # pragma: no cover - locked
+            active = build_opener(ProxyHandler({}), _NoRedirect())  # pragma: no cover
         self.__headers = {"x-api-key": api_key, "x-user-key": user_key}
         self._opener: Any = active
         self._release = release
@@ -156,13 +159,20 @@ class EtoroDemoHttpTransport:
 
     def _require_signed_body(self, path: str, body: dict[str, Any]) -> None:
         intent = self._release.intent
+        if path == DEMO_ELIGIBILITY_PATH:
+            if body != {"instrumentIds": [intent.instrument_id], "currency": "USD"}:
+                raise EtoroDemoTransportError("ELIGIBILITY_DIFFERS_FROM_SIGNED_INTENT")
+            return
         if path == DEMO_OPEN_PATH:
-            expected = {"action": "open", "transaction": "buy",
-                        "instrumentId": intent.instrument_id, "orderType": "limitIOC",
-                        "limitRate": float(intent.limit_rate), "units": float(intent.units),
-                        "leverage": 1, "orderCurrency": "usd"}
-            if body != expected or Decimal(repr(body["units"])) != intent.units \
-                    or Decimal(repr(body["limitRate"])) != intent.limit_rate:
+            fixed = {"action": "open", "transaction": "buy",
+                     "instrumentId": intent.instrument_id, "orderType": "limitIOC",
+                     "units": float(intent.units), "leverage": 1, "orderCurrency": "usd"}
+            limit = body.get("limitRate")
+            if (set(body) != set(fixed) | {"limitRate"}
+                    or any(body[k] != v for k, v in fixed.items())
+                    or Decimal(repr(body["units"])) != intent.units
+                    or type(limit) is not float
+                    or not Decimal("0") < Decimal(repr(limit)) <= intent.max_limit_rate):
                 raise EtoroDemoTransportError("BODY_DIFFERS_FROM_SIGNED_INTENT")
         elif body != {"InstrumentID": intent.instrument_id, "UnitsToDeduct": None}:
             raise EtoroDemoTransportError("CLOSE_DIFFERS_FROM_SIGNED_INTENT")
@@ -173,7 +183,11 @@ class EtoroDemoHttpTransport:
         self._release.require_active()
         route, _shape = route_for(method, path)
         url = ETORO_HOST + path
-        if query is not None:
+        if path == MARKET_DATA_RATES_PATH:
+            if query != {"instrumentIds": str(self._release.intent.instrument_id)}:
+                raise EtoroDemoTransportError("QUERY_REFUSED")
+            url += "?" + urlencode(query)
+        elif query is not None:
             if path != DEMO_ORDER_LOOKUP_PATH or len(query) != 1 or not set(query) <= _QUERY_KEYS:
                 raise EtoroDemoTransportError("QUERY_REFUSED")
             url += "?" + urlencode(query)

@@ -24,7 +24,8 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timezone
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any
 
 ETORO_REAL_EXECUTION = "PERMANENTLY_EXCLUDED"
@@ -34,6 +35,10 @@ DEMO_OPEN_PATH = "/api/v2/trading/execution/demo/orders"
 DEMO_ORDER_LOOKUP_PATH = "/api/v2/trading/info/demo/orders:lookup"
 DEMO_CLOSE_PATH = "/api/v1/trading/execution/demo/market-close-orders/positions/{position_id}"
 DEMO_CLOSE_INFO_PATH = "/api/v1/trading/info/demo/close-orders/{order_id}"
+DEMO_ELIGIBILITY_PATH = "/api/v2/trading/info/demo/eligibility"
+# Market data has no Demo/Real split; only this exact read is allowed outside /demo/.
+MARKET_DATA_RATES_PATH = "/api/v2/market-data/rates"
+MARKET_DATA_READ_PATHS = frozenset({MARKET_DATA_RATES_PATH})
 
 # (method, regex) pairs; the only shapes SideDeck may ever address.
 _DEMO_ROUTES = (
@@ -42,6 +47,8 @@ _DEMO_ROUTES = (
     ("GET", re.compile(r"^/api/v2/trading/info/demo/orders:lookup$")),
     ("POST", re.compile(r"^/api/v1/trading/execution/demo/market-close-orders/positions/[1-9][0-9]{0,18}$")),
     ("GET", re.compile(r"^/api/v1/trading/info/demo/close-orders/[1-9][0-9]{0,18}$")),
+    ("POST", re.compile(r"^/api/v2/trading/info/demo/eligibility$")),
+    ("GET", re.compile(r"^/api/v2/market-data/rates$")),
 )
 
 # status.id (v2 lookup) and statusID (v1 close info) share these numbers.
@@ -75,8 +82,16 @@ _CLOSE_ACCEPT_SPEC: dict[str, Any] = {"orderForClose": {"positionID": "int", "in
                                                         "orderID": "int"}}
 _CLOSE_INFO_SPEC: dict[str, Any] = {"orderID": "int", "statusID": "int",
                                     "positions": [{"positionID": "int", "units": "number"}]}
+_RATES_SPEC: dict[str, Any] = {"results": [{"instrumentId": "int", "bid": "number",
+                                            "ask": "number", "date": "str", "quoteType": "str"}]}
+_ELIGIBILITY_SPEC: dict[str, Any] = {"eligibilities": [{
+    "instrumentId": "int", "minPositionExposure": "number", "allowOpenPosition": "bool",
+    "allowClosePosition": "bool", "unitsQuantityType": "str", "allowedOrderQuantityType": "str",
+    "tradeUnitType": "str", "leverageConfigs": [{"direction": "str", "leverageValues": ["int"],
+                                                  "minPositionAmount": "number"}]}]}
 RESPONSE_SPECS = {"open_acceptance": _OPEN_ACCEPT_SPEC, "order_lookup": _LOOKUP_SPEC,
-                  "close_acceptance": _CLOSE_ACCEPT_SPEC, "close_info": _CLOSE_INFO_SPEC}
+                  "close_acceptance": _CLOSE_ACCEPT_SPEC, "close_info": _CLOSE_INFO_SPEC,
+                  "rates": _RATES_SPEC, "eligibility": _ELIGIBILITY_SPEC}
 
 
 def _kind(value: Any) -> str:
@@ -123,7 +138,7 @@ def response_shape_issues(kind: str, payload: Any) -> tuple[str, ...]:
 
 def require_demo_route(method: str, path: str) -> None:
     """Refuse every route except the documented Demo allowlist (checked pre-network)."""
-    if "/demo/" not in path:
+    if "/demo/" not in path and path not in MARKET_DATA_READ_PATHS:
         raise RealExecutionExcluded("eToro Real endpoints are permanently excluded from SideDeck")
     if not any(method == m and pattern.fullmatch(path) for m, pattern in _DEMO_ROUTES):
         raise RealExecutionExcluded("eToro endpoint is not on the SideDeck Demo allowlist")
@@ -381,3 +396,96 @@ def parse_close_info(payload: Any, *, acceptance: CloseAcceptance) -> CloseOutco
     if status_id in NO_FILL_TERMINAL and closed:
         raise EtoroDemoOrderError("a rejected/cancelled close reports closed units")
     return CloseOutcome(acceptance.order_id, status_id, ORDER_STATUS[status_id], closed)
+
+
+# ---- SD-051 fresh reference price and eligibility (pre-order gates) ----------------
+
+MAX_QUOTE_AGE_SECONDS = 60
+MAX_QUOTE_SKEW_SECONDS = 5
+
+
+@dataclass(frozen=True)
+class FreshQuote:
+    instrument_id: int
+    bid: Decimal
+    ask: Decimal
+    observed_at: datetime
+
+
+def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime) -> FreshQuote:
+    """Exactly one realtime, fresh, sane bid/ask for the instrument; otherwise fail closed."""
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise EtoroDemoOrderError("rates response lacks results")
+    mine = [r for r in rows if isinstance(r, dict) and r.get("instrumentId") == instrument_id]
+    if len(mine) != 1 or len(rows) != 1:
+        raise EtoroDemoOrderError("rates response must contain exactly the pilot instrument")
+    row = mine[0]
+    if row.get("quoteType") != "realtime":
+        raise EtoroDemoOrderError("reference quote is not realtime")
+    bid, ask = _dec(row.get("bid"), "bid"), _dec(row.get("ask"), "ask")
+    if bid <= 0 or ask <= 0 or ask < bid:
+        raise EtoroDemoOrderError("reference quote is not a sane bid/ask")
+    stamp = row.get("date")
+    try:
+        observed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        raise EtoroDemoOrderError("reference quote time is invalid") from None
+    if observed.tzinfo is None:
+        raise EtoroDemoOrderError("reference quote time must be timezone-aware")
+    age = (now - observed).total_seconds()
+    if age > MAX_QUOTE_AGE_SECONDS or age < -MAX_QUOTE_SKEW_SECONDS:
+        raise EtoroDemoOrderError("reference quote is stale or future-dated")
+    return FreshQuote(instrument_id, bid, ask, observed.astimezone(timezone.utc))
+
+
+def derive_limit(ask: Decimal, signed_max: Decimal, premium: Decimal) -> Decimal:
+    """Limit = min(signed max, ask x (1+premium)) rounded down to cents; refuse if < ask."""
+    limit = min(signed_max, (ask * (1 + premium)).quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+    if limit < ask:
+        raise EtoroDemoOrderError("fresh ask is above the signed maximum limit; no order")
+    return limit
+
+
+@dataclass(frozen=True)
+class Eligibility:
+    instrument_id: int
+    fractional: bool
+    min_position_usd: Decimal
+
+
+def parse_eligibility(payload: Any, *, instrument_id: int, units: Decimal,
+                      notional_usd: Decimal) -> Eligibility:
+    """eToro Demo eligibility must allow this exact long, 1x, units-based open and close."""
+    if not isinstance(payload, dict) or payload.get("currency") != "USD":
+        raise EtoroDemoOrderError("eligibility response is not USD")
+    rows = payload.get("eligibilities")
+    if not isinstance(rows, list):
+        raise EtoroDemoOrderError("eligibility response lacks eligibilities")
+    mine = [r for r in rows if isinstance(r, dict) and r.get("instrumentId") == instrument_id]
+    if len(mine) != 1:
+        raise EtoroDemoOrderError("eligibility must contain exactly the pilot instrument")
+    row = mine[0]
+    if row.get("allowOpenPosition") is not True or row.get("allowClosePosition") is not True:
+        raise EtoroDemoOrderError("eToro does not allow opening and closing this instrument")
+    if row.get("tradeUnitType") != "units" or row.get("allowedOrderQuantityType") not in (
+            "unitsOnly", "all"):
+        raise EtoroDemoOrderError("units-based orders are not allowed for this instrument")
+    fractional = row.get("unitsQuantityType") == "fractional"
+    if not fractional and units != units.to_integral_value():
+        raise EtoroDemoOrderError("fractional units are not allowed for this instrument")
+    max_units = row.get("maxUnitsPerOrder")
+    if max_units is not None and units > _dec(max_units, "maxUnitsPerOrder"):
+        raise EtoroDemoOrderError("units exceed eToro maxUnitsPerOrder")
+    minimum = _dec(row.get("minPositionExposure"), "minPositionExposure")
+    long_1x = [c for c in row.get("leverageConfigs") or [] if isinstance(c, dict)
+               and c.get("direction") == "long" and c.get("settlementType") == "real"
+               and any(type(v) is int and v == 1 for v in c.get("leverageValues") or [])
+               and c.get("isPotential") is not True]
+    if not long_1x:
+        raise EtoroDemoOrderError("no long 1x real-stock configuration is available")
+    floor = max([minimum] + [_dec(c.get("minPositionAmount"), "minPositionAmount")
+                             for c in long_1x])
+    if notional_usd < floor:
+        raise EtoroDemoOrderError("pilot notional is below eToro's minimum position size")
+    return Eligibility(instrument_id, fractional, floor)

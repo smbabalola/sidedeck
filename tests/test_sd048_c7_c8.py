@@ -23,7 +23,7 @@ from sidedeck.application.sd036_etoro_demo_desk import (
 from sidedeck.application.sd042_etoro_credential_roles import POLICY
 from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifier
 from sidedeck.application.sd046_etoro_demo_pilot import (
-    UNRESOLVED, EtoroDemoPilot, PilotBudget, PilotError, PilotTransport,
+    UNRESOLVED, EtoroDemoPilot, PilotBudget, PilotTransport,
 )
 from sidedeck.application.sd048_pilot_release import (
     PILOT_NAMESPACE, PilotIntent, PilotRelease, PilotReleaseRefused, PilotReleaseStore, ReleaseGates,
@@ -69,7 +69,7 @@ def sign(root, digest, key="owner", namespace=PILOT_NAMESPACE):
 def intent(**changes):
     now = datetime.now(timezone.utc)
     values = dict(pilot_id=str(uuid.uuid4()), strategy="tradingagents", instrument_id=INSTRUMENT,
-                  units=Decimal("0.4"), limit_rate=Decimal("100.5"),
+                  units=Decimal("0.4"), max_limit_rate=Decimal("100.5"),
                   reference_price=Decimal("100"), max_notional_usd=Decimal("50"),
                   not_before=now - timedelta(minutes=1), expires_at=now + timedelta(hours=2))
     values.update(changes)
@@ -105,7 +105,7 @@ def test_valid_signature_and_gates_issue_single_use_release(keys, tmp_path):
 
 
 @pytest.mark.parametrize("mutate", [
-    {"units": Decimal("0.3")}, {"limit_rate": Decimal("100.4")}, {"instrument_id": 2003},
+    {"units": Decimal("0.3")}, {"max_limit_rate": Decimal("100.4")}, {"instrument_id": 2003},
     {"max_notional_usd": Decimal("49")},
     {"expires_at": datetime.now(timezone.utc) + timedelta(hours=3)},
 ])
@@ -150,7 +150,7 @@ def test_valid_signature_alone_is_not_enough(keys, tmp_path, gates, label):
 @pytest.mark.parametrize("changes,match", [
     ({"max_notional_usd": Decimal("51")}, "USD 50"),
     ({"units": Decimal("1")}, "notional"),
-    ({"limit_rate": Decimal("100.6")}, "0.5"),
+    ({"max_limit_rate": Decimal("106")}, "5 %"),
     ({"instrument_id": 1001}, "baseline"),
     ({"broker": "etoro-real"}, "Demo"),
     ({"request_caps": (("close", 1), ("close_info", 3), ("lookup", 3), ("open", 2),
@@ -365,10 +365,13 @@ class HttpRig:
         self.controls.approve(f"a-{intent_id}", intent_id, scope, "sidedeck", "owner", "pk",
                               f"pk:{digest}", datetime.now(timezone.utc) + timedelta(minutes=10))
 
-    def open(self, units=Decimal("0.4")):
-        request = DemoOpenRequest(str(uuid.uuid4()), INSTRUMENT, units, Decimal("100.5"))
-        self.approve("open", open_scope("etoro-demo:tradingagents", request))
-        return self.pilot.open_phase(intent_id="open", request=request)
+    def open(self):
+        pre = self.pilot.preflight()
+        if pre["result"] != "READY_FOR_OPEN_APPROVAL":
+            return pre
+        _, scope = self.pilot.open_approval_scope()
+        self.approve("open", scope)
+        return self.pilot.open_phase(intent_id="open")
 
     def close(self):
         request, scope = self.pilot.close_request(str(uuid.uuid4()))
@@ -402,7 +405,7 @@ def test_full_pilot_through_transport_code_completes(keys, tmp_path):
         assert rig.open()["result"] == "OPEN_FILLED_AWAITING_CLOSE_APPROVAL"
         result = rig.close()
         assert result["result"] == "COMPLETE" and result["writes"] == 2
-        assert result["requests_total"] <= 11
+        assert result["requests_total"] <= 12
         assert len(rig.opener.requests) == result["requests_total"]
     finally:
         rig.shutdown()
@@ -411,9 +414,14 @@ def test_full_pilot_through_transport_code_completes(keys, tmp_path):
 def test_open_must_equal_signed_intent(keys, tmp_path):
     rig = HttpRig(keys, tmp_path)
     try:
-        with pytest.raises(PilotError):
-            rig.open(units=Decimal("0.3"))
-        assert rig.posts() == []
+        rig.pilot.preflight()
+        for units, limit in ((Decimal("0.3"), Decimal("100.5")), (Decimal("0.4"), Decimal("100.6"))):
+            request = DemoOpenRequest(str(uuid.uuid4()), INSTRUMENT, units, limit)
+            rig.approve(f"open-{units}-{limit}", open_scope("etoro-demo:tradingagents", request))
+            with pytest.raises(Exception, match="signed pilot intent"):
+                rig.desk.submit_open(intent_id=f"open-{units}-{limit}", strategy="tradingagents",
+                                     request=request)
+        assert rig.posts(DEMO_OPEN_PATH) == []
     finally:
         rig.shutdown()
 
@@ -624,7 +632,117 @@ def test_m4_unreadable_open_acceptance_halts_desk(keys, tmp_path):
         request = DemoOpenRequest(str(uuid.uuid4()), INSTRUMENT, Decimal("0.4"), Decimal("100.5"))
         rig.approve("open", open_scope("etoro-demo:tradingagents", request))
         assert rig.desk.submit_open(intent_id="open", strategy="tradingagents",
-                                    request=request) == "OUTCOME_UNKNOWN"
+                                    request=request, quote=_quote("100.25"),
+                                    eligibility=_elig()) == "OUTCOME_UNKNOWN"
         assert rig.controls.is_halted() and len(rig.posts(DEMO_OPEN_PATH)) == 1
     finally:
         rig.shutdown()
+
+
+# ---- SD-051 fresh-price / eligibility gates --------------------------------------------
+
+def test_sd051_market_data_exception_is_exact_get_only():
+    from sidedeck.domain.etoro_demo_orders import require_demo_route
+    require_demo_route("GET", "/api/v2/market-data/rates")
+    require_demo_route("POST", "/api/v2/trading/info/demo/eligibility")
+    for method, path in (("POST", "/api/v2/market-data/rates"),
+                         ("GET", "/api/v1/market-data/instruments/rates"),
+                         ("GET", "/api/v2/market-data/instruments"),
+                         ("POST", "/api/v2/trading/info/real/eligibility")):
+        with pytest.raises(RealExecutionExcluded):
+            require_demo_route(method, path)
+
+
+def test_sd051_quote_and_eligibility_parsers_fail_closed():
+    from sidedeck.domain.etoro_demo_orders import (
+        EtoroDemoOrderError, parse_eligibility, parse_fresh_quote,
+    )
+    now = datetime.now(timezone.utc)
+    row = {"instrumentId": INSTRUMENT, "bid": 100.0, "ask": 100.1, "date": now.isoformat(),
+           "quoteType": "realtime"}
+    assert parse_fresh_quote({"results": [row]}, instrument_id=INSTRUMENT, now=now).ask         == Decimal("100.1")
+    for bad in ({"results": [row, {**row, "instrumentId": 1}]},
+                {"results": [{**row, "date": (now + timedelta(seconds=30)).isoformat()}]},
+                {"results": [{**row, "bid": 100.2}]}, {"results": [{**row, "ask": None}]},
+                {"results": [{**row, "date": "2026-10-22T10:00:00"}]}):
+        with pytest.raises(EtoroDemoOrderError):
+            parse_fresh_quote(bad, instrument_id=INSTRUMENT, now=now)
+    good = {"currency": "USD", "eligibilities": [{
+        "instrumentId": INSTRUMENT, "minPositionExposure": 10, "allowOpenPosition": True,
+        "allowClosePosition": True, "unitsQuantityType": "fractional",
+        "allowedOrderQuantityType": "all", "tradeUnitType": "units",
+        "leverageConfigs": [{"direction": "long", "leverageValues": [1],
+                             "settlementType": "real", "minPositionAmount": 10}]}]}
+    assert parse_eligibility(good, instrument_id=INSTRUMENT, units=Decimal("0.4"),
+                             notional_usd=Decimal("40")).fractional
+    for change in ({"currency": "EUR"},
+                   {"eligibilities": [{**good["eligibilities"][0], "leverageConfigs": [
+                       {"direction": "short", "leverageValues": [1], "minPositionAmount": 1}]}]},
+                   {"eligibilities": [{**good["eligibilities"][0], "tradeUnitType": "contracts"}]}):
+        with pytest.raises(EtoroDemoOrderError):
+            parse_eligibility({**good, **change}, instrument_id=INSTRUMENT, units=Decimal("0.4"),
+                              notional_usd=Decimal("40"))
+
+
+def test_sd051_transport_pins_rates_query_and_eligibility_body(keys, tmp_path):
+    transport, opener, _ = make_transport(keys, tmp_path)
+    with pytest.raises(EtoroDemoTransportError, match="QUERY_REFUSED"):
+        transport.send("GET", "/api/v2/market-data/rates", reference_id="r",
+                       query={"instrumentIds": "2002,1001"})
+    with pytest.raises(EtoroDemoTransportError, match="ELIGIBILITY"):
+        transport.send("POST", "/api/v2/trading/info/demo/eligibility", reference_id="r",
+                       body={"instrumentIds": [1001], "currency": "USD"})
+    assert opener.requests == []
+
+
+
+def _quote(ask, age_seconds=0, instrument=INSTRUMENT):
+    from sidedeck.domain.etoro_demo_orders import FreshQuote
+    return FreshQuote(instrument, Decimal(ask) - Decimal("0.05"), Decimal(ask),
+                      datetime.now(timezone.utc) - timedelta(seconds=age_seconds))
+
+
+def _elig(minimum="10", fractional=True, instrument=INSTRUMENT):
+    from sidedeck.domain.etoro_demo_orders import Eligibility
+    return Eligibility(instrument, fractional, Decimal(minimum))
+
+
+@pytest.mark.parametrize("kwargs,match", [
+    ({}, "evidence are required"),
+    ({"quote": _quote("100.25", age_seconds=400), "eligibility": _elig()}, "older than 5"),
+    ({"quote": _quote("99.00"), "eligibility": _elig()}, "0.5 %"),
+    ({"quote": _quote("100.60"), "eligibility": _elig()}, "0.5 %"),
+    ({"quote": _quote("100.25", instrument=2003), "eligibility": _elig()}, "different"),
+    ({"quote": _quote("100.25"), "eligibility": _elig(minimum="60")}, "minimum"),
+    ({"quote": _quote("100.25"), "eligibility": _elig(fractional=False)}, "fractional"),
+])
+def test_review2_desk_enforces_preflight_evidence_for_signed_opens(keys, tmp_path, kwargs, match):
+    rig = HttpRig(keys, tmp_path)
+    try:
+        request = DemoOpenRequest(str(uuid.uuid4()), INSTRUMENT, Decimal("0.4"), Decimal("100.5"))
+        rig.approve("open", open_scope("etoro-demo:tradingagents", request))
+        with pytest.raises(Exception, match=match):
+            rig.desk.submit_open(intent_id="open", strategy="tradingagents", request=request,
+                                 **kwargs)
+        assert rig.posts(DEMO_OPEN_PATH) == []
+    finally:
+        rig.shutdown()
+
+
+def test_review2_eligibility_requires_real_settlement_and_int_leverage():
+    from sidedeck.domain.etoro_demo_orders import EtoroDemoOrderError, parse_eligibility
+    row = {"instrumentId": INSTRUMENT, "minPositionExposure": 10, "allowOpenPosition": True,
+           "allowClosePosition": True, "unitsQuantityType": "fractional",
+           "allowedOrderQuantityType": "all", "tradeUnitType": "units"}
+    for config in ({"direction": "long", "leverageValues": [1], "settlementType": "cfd",
+                    "minPositionAmount": 10},
+                   {"direction": "long", "leverageValues": [True], "settlementType": "real",
+                    "minPositionAmount": 10}):
+        with pytest.raises(EtoroDemoOrderError, match="real-stock"):
+            parse_eligibility({"currency": "USD", "eligibilities": [{**row, "leverageConfigs":
+                                                                      [config]}]},
+                              instrument_id=INSTRUMENT, units=Decimal("0.4"),
+                              notional_usd=Decimal("40"))
+    with pytest.raises(EtoroDemoOrderError, match="USD"):
+        parse_eligibility({"eligibilities": []}, instrument_id=INSTRUMENT, units=Decimal("0.4"),
+                          notional_usd=Decimal("40"))

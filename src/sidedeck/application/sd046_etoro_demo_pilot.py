@@ -1,43 +1,53 @@
-"""SD-046 eToro Demo pilot runner (SD-044 plan), exercised OFFLINE against the simulator.
+"""SD-046/SD-051 eToro Demo pilot runner, exercised OFFLINE against the simulator.
 
-Orchestrates the proposal exactly: pre-flight ``/pnl`` -> one open -> up to 3 lookups
--> (separately signed close approval) -> post-open ``/pnl`` -> one close -> up to 3
-close-outcome reads -> final ``/pnl``. Hard caps: 11 requests, 2 writes, no write
-retries, every response shape-checked (SD-043).
+Plan (12 requests, 2 writes, no write retries, every response shape-checked):
 
-Outcome rule: ``COMPLETE`` only when the close is FILLED **and** the final snapshot
-shows zero open SideDeck positions **and** the protected baseline is MATCHED.
-Anything unconfirmed -> ``UNRESOLVED_OPERATOR_INTERVENTION_REQUIRED``, kill-switch
-tripped, position kept OPEN in lineage, no further request.
+1. ``preflight``: ``/pnl`` (baseline MATCHED, nothing pending, no SideDeck positions)
+   -> Demo eligibility (open/close allowed, units-based, fractional if needed,
+   notional >= eToro minimum) -> realtime rates (fresh <= 60 s). The limit is
+   ``min(signed max, ask x 1.005)`` and is refused if the ask is above the signed
+   max. Produces the exact open request for the owner's separate approval signature.
+2. ``open_phase``: refuses a quote older than 5 minutes; one open; up to 3 lookups.
+3. ``close_phase`` (separately approved): ``/pnl`` -> one full close -> up to 2
+   close-outcome reads -> final ``/pnl``.
 
-The runner talks to brokers only through ``EtoroDemoDesk``, which accepts only an
-offline-simulation transport while ``ETORO_DEMO_EXECUTION_RELEASE`` is ``NO_GO``.
-Nothing here enables a network transport.
+``COMPLETE`` only when the close is FILLED, the final snapshot is MATCHED and no
+SideDeck position remains. Anything unconfirmed -> ``UNRESOLVED_OPERATOR_INTERVENTION_
+REQUIRED``, kill-switch tripped, position kept OPEN, no further request.
+
+Brokers are reached only through ``EtoroDemoDesk`` and ``PilotTransport``; the desk
+accepts only the offline simulator or a matching, owner-signed SD-048 release.
 """
 from __future__ import annotations
 
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch
 from sidedeck.application.sd036_etoro_demo_desk import (
-    EtoroDemoDesk, EtoroDemoLineage, EtoroDemoTransport, close_scope,
+    EtoroDemoDesk, EtoroDemoLineage, EtoroDemoTransport, close_scope, open_scope,
 )
 from sidedeck.domain.etoro_demo import DemoPortfolioSnapshot, field_type_issues, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import STRATEGY_BOOKS, BaselinePosition, reconcile_demo
 from sidedeck.domain.etoro_demo_orders import (
-    DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, DEMO_PNL_PATH, NO_FILL_TERMINAL, DemoCloseRequest,
-    DemoOpenRequest, require_demo_route, response_shape_issues,
+    DEMO_ELIGIBILITY_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, DEMO_PNL_PATH,
+    MARKET_DATA_RATES_PATH, NO_FILL_TERMINAL, DemoCloseRequest, DemoOpenRequest, Eligibility,
+    FreshQuote,
+    derive_limit, parse_eligibility, parse_fresh_quote, require_demo_route,
+    response_shape_issues,
 )
 
-ROUTE_CAPS = {"pnl": 3, "open": 1, "lookup": 3, "close": 1, "close_info": 3}   # 11 total
+ROUTE_CAPS = {"pnl": 3, "eligibility": 1, "rates": 1, "open": 1, "lookup": 3, "close": 1,
+              "close_info": 2}                                           # 12 total, 2 writes
 MAX_NOTIONAL_USD = Decimal("50")
-MAX_LIMIT_PREMIUM = Decimal("0.005")
+MAX_LIMIT_PREMIUM = Decimal("0.005")      # over the FRESH reference, enforced at preflight
+MAX_PLANNING_HEADROOM = Decimal("0.05")   # signed max limit vs the signed planning reference
+MAX_QUOTE_AGE_AT_OPEN = timedelta(minutes=5)
 PILOT_OPERATOR = "sidedeck-etoro-demo-pilot"
 UNRESOLVED = "UNRESOLVED_OPERATOR_INTERVENTION_REQUIRED"
 _CLOSE_TERMINAL = {"FILLED", "REJECTED", "CANCELED", "EXPIRED", "CANCELED_PARTIALLY_FILLED",
@@ -56,9 +66,13 @@ class PilotShapeError(PilotError):
     pass
 
 
-def _route(method: str, path: str) -> tuple[str, str | None]:
+def route_for(method: str, path: str) -> tuple[str, str | None]:
     if method == "GET" and path == DEMO_PNL_PATH:
         return "pnl", None
+    if method == "POST" and path == DEMO_ELIGIBILITY_PATH:
+        return "eligibility", "eligibility"
+    if method == "GET" and path == MARKET_DATA_RATES_PATH:
+        return "rates", "rates"
     if method == "POST" and path == DEMO_OPEN_PATH:
         return "open", "open_acceptance"
     if method == "GET" and path == DEMO_ORDER_LOOKUP_PATH:
@@ -68,9 +82,6 @@ def _route(method: str, path: str) -> tuple[str, str | None]:
     if method == "GET" and "/close-orders/" in path:
         return "close_info", "close_info"
     raise PilotError("route is outside the pilot plan")
-
-
-route_for = _route   # public alias used by the C7 transport ledger
 
 
 class PilotBudget:
@@ -115,7 +126,7 @@ class PilotTransport:
     def send(self, method: str, path: str, *, reference_id: str,
              body: dict[str, Any] | None = None, query: dict[str, str] | None = None) -> Any:
         require_demo_route(method, path)
-        route, shape = _route(method, path)
+        route, shape = route_for(method, path)
         self._budget.reserve(route)
         result = self._inner.send(method, path, reference_id=reference_id, body=body, query=query)
         issues = field_type_issues(result) if shape is None else response_shape_issues(shape, result)
@@ -129,7 +140,7 @@ class PilotScope:
     strategy: str
     instrument_id: int
     units: Decimal
-    limit_rate: Decimal
+    max_limit_rate: Decimal
     reference_price: Decimal
 
     def validate(self, baseline: tuple[BaselinePosition, ...]) -> None:
@@ -137,11 +148,12 @@ class PilotScope:
             raise PilotError("pilot book must be a SideDeck strategy book")
         if any(b.instrument_id == self.instrument_id for b in baseline):
             raise PilotError("pilot instrument must not be held in the protected baseline")
-        if not self.reference_price.is_finite() or self.reference_price <= 0:
-            raise PilotError("reference price must be positive")
-        if self.limit_rate > self.reference_price * (1 + MAX_LIMIT_PREMIUM):
-            raise PilotError("limit exceeds the 0.5 % premium over reference")
-        if self.units * self.limit_rate > MAX_NOTIONAL_USD:
+        for value in (self.units, self.max_limit_rate, self.reference_price):
+            if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+                raise PilotError("units, max limit and reference must be positive Decimals")
+        if self.max_limit_rate > self.reference_price * (1 + MAX_PLANNING_HEADROOM):
+            raise PilotError("signed max limit exceeds the 5 % planning headroom")
+        if self.units * self.max_limit_rate > MAX_NOTIONAL_USD:
             raise PilotError("notional exceeds the USD 50 pilot cap")
 
 
@@ -156,6 +168,9 @@ class EtoroDemoPilot:
         self._desk, self._transport, self._budget = desk, transport, budget
         self._controls, self._lineage = controls, lineage
         self._baseline, self._scope = baseline, scope
+        self._quote: FreshQuote | None = None
+        self._eligibility: Eligibility | None = None
+        self._open_request: DemoOpenRequest | None = None
         self._position_id: int | None = None
 
     # -- helpers ---------------------------------------------------------------
@@ -179,28 +194,63 @@ class EtoroDemoPilot:
                 "writes": usage["open"] + usage["close"],
                 "sidedeck_open_positions": self._sidedeck_open(),
                 "kill_switch": "HALTED" if self._controls.is_halted() else "CLEAR",
-                "execution_release": "NO_GO", "evidence": "OFFLINE_SIMULATED", **extra}
+                "execution_release": "NO_GO", **extra}
 
     def _unresolved(self, phase: str, reason: str) -> dict[str, Any]:
         if not self._controls.is_halted():
             self._controls.trip(PILOT_OPERATOR, f"pilot unresolved: {reason}")
         return self._result(UNRESOLVED, phase, reason=reason)
 
-    # -- open phase --------------------------------------------------------------
-    def open_phase(self, *, intent_id: str, request: DemoOpenRequest) -> dict[str, Any]:
+    # -- preflight -----------------------------------------------------------------
+    def preflight(self) -> dict[str, Any]:
+        """Read-only gates. On success, the exact open request awaits the owner's approval."""
         s = self._scope
-        if (request.instrument_id, request.units, request.limit_rate) != (
-                s.instrument_id, s.units, s.limit_rate):
-            raise PilotError("open request differs from the approved pilot scope")
         try:
-            pre = self._snapshot()
-            matched = self._baseline_matched(pre)
-        except Exception as exc:
-            return self._result("ABORTED_PREFLIGHT", "preflight", reason=type(exc).__name__)
-        if not matched or pre.pending_orders or self._sidedeck_open():
-            return self._result("ABORTED_PREFLIGHT", "preflight", reason="baseline not MATCHED")
+            snapshot = self._snapshot()
+            if (not self._baseline_matched(snapshot) or snapshot.pending_orders
+                    or self._sidedeck_open()):
+                return self._result("ABORTED_PREFLIGHT", "preflight",
+                                    reason="baseline not MATCHED or positions/orders pending")
+            eligibility = parse_eligibility(
+                self._transport.send("POST", DEMO_ELIGIBILITY_PATH, reference_id=str(uuid.uuid4()),
+                                     body={"instrumentIds": [s.instrument_id], "currency": "USD"}),
+                instrument_id=s.instrument_id, units=s.units,
+                notional_usd=s.units * s.max_limit_rate)
+            now = datetime.now(timezone.utc)
+            quote = parse_fresh_quote(
+                self._transport.send("GET", MARKET_DATA_RATES_PATH, reference_id=str(uuid.uuid4()),
+                                     query={"instrumentIds": str(s.instrument_id)}),
+                instrument_id=s.instrument_id, now=now)
+            limit = derive_limit(quote.ask, s.max_limit_rate, MAX_LIMIT_PREMIUM)
+        except Exception as exc:  # no write has happened; abort cleanly
+            return self._result("ABORTED_PREFLIGHT", "preflight",
+                                reason=f"{type(exc).__name__}: {exc}")
+        if s.units * limit < eligibility.min_position_usd:
+            return self._result("ABORTED_PREFLIGHT", "preflight",
+                                reason="order notional below eToro minimum at the derived limit")
+        self._quote, self._eligibility = quote, eligibility
+        self._open_request = DemoOpenRequest(str(uuid.uuid4()), s.instrument_id, s.units, limit)
+        return self._result("READY_FOR_OPEN_APPROVAL", "preflight",
+                            fractional=eligibility.fractional)
+
+    def open_approval_scope(self) -> tuple[DemoOpenRequest, str]:
+        """The exact open request and the SD-033 scope the owner must sign."""
+        if self._open_request is None:
+            raise PilotError("run a successful preflight first")
+        return self._open_request, open_scope(STRATEGY_BOOKS[self._scope.strategy],
+                                              self._open_request)
+
+    # -- open phase --------------------------------------------------------------
+    def open_phase(self, *, intent_id: str) -> dict[str, Any]:
+        request, quote = self._open_request, self._quote
+        if request is None or quote is None:
+            raise PilotError("run a successful preflight first")
+        if datetime.now(timezone.utc) - quote.observed_at > MAX_QUOTE_AGE_AT_OPEN:
+            return self._result("ABORTED_PREFLIGHT", "open", reason="reference quote too old")
         try:
-            self._desk.submit_open(intent_id=intent_id, strategy=s.strategy, request=request)
+            self._desk.submit_open(intent_id=intent_id, strategy=self._scope.strategy,
+                                   request=request, quote=quote,
+                                   eligibility=self._eligibility)
             outcome = None
             for _ in range(ROUTE_CAPS["lookup"]):
                 outcome = self._desk.refresh_open(request.reference_id)
@@ -209,7 +259,7 @@ class EtoroDemoPilot:
         except Exception as exc:  # any kill criterion after a write attempt
             return self._unresolved("open", type(exc).__name__)
         if outcome is None:
-            return self._unresolved("open", "order not received by broker")
+            return self._unresolved("open", "order not found after submission")
         if not outcome.terminal:
             return self._unresolved("open", "open outcome not terminal within budget")
         if outcome.status_id in NO_FILL_TERMINAL:
