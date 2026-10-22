@@ -1,6 +1,6 @@
 import { useResource } from "../lib/api";
-import { isDemoSummary, isMarketTracks, isReleaseGate } from "../lib/contracts";
-import { ago, when, words } from "../lib/format";
+import { isAuthorizationLedger, isDemoSummary, isMarketTracks, isReleaseGate, isTrackLedgers, TRACKS } from "../lib/contracts";
+import { ago, price, tone, when, words } from "../lib/format";
 import { Badge, KeyValues, Metric, Panel, StateBlock } from "../components/ui";
 
 const BOOK_NAMES: Record<string, string> = {
@@ -9,8 +9,10 @@ const BOOK_NAMES: Record<string, string> = {
 
 export function Portfolio() {
   const demo = useResource("/api/demo/summary", isDemoSummary);
+  const ledgers = useResource("/api/portfolio/ledgers", isTrackLedgers);
   return <div className="space-y-4">
-    <Panel title="Demo books" provenance={demo.state === "ready" ? "DEMO_BROKER" : "UNAVAILABLE"} subtitle="Positions are attributed only through verified order lineage, never by ticker.">
+    <Panel title="Demo books" provenance={demo.state === "ready" && demo.data.fresh_snapshot ? "DEMO_BROKER" : null}
+      actions={demo.state === "ready" && !demo.data.fresh_snapshot ? <Badge>Saved baseline</Badge> : undefined} subtitle="Positions are attributed only through verified order lineage, never by ticker.">
       <StateBlock resource={demo}>{d => {
         const books = d.fresh_snapshot?.books ?? d.books;
         return <>
@@ -31,8 +33,24 @@ export function Portfolio() {
       <Panel title="SideDeck orders, fills and exits" provenance="UNAVAILABLE">
         <p className="text-sm text-muted">No SideDeck-owned Demo orders exist yet. The first one is the owner-run MSFT pilot; its order, fill, close and reconciliation evidence will appear here with full lineage once recorded.</p>
       </Panel>
-      <Panel title="Simulated track ledgers" provenance="UNAVAILABLE">
-        <p className="text-sm text-muted">The DAY, SWING and POSITION simulation ledgers are not exposed by the service yet, so no simulated positions are shown.</p>
+      <Panel title="Simulated track ledgers" provenance={ledgers.state === "ready" && ledgers.data.status === "LOADED" ? "SIMULATION" : "UNAVAILABLE"}
+        subtitle="Local simulation only (fills are simulated, not broker fills). Each track keeps separate virtual capital.">
+        <StateBlock resource={ledgers} empty={l => (l.status === "LOADED" ? null : `No simulation ledgers: ${l.reason ?? "not configured"}.`)}>{l => <table className="w-full text-xs">
+          <caption className="sr-only">Simulated ledgers by track</caption>
+          <thead><tr className="border-b border-rule text-left text-muted"><th scope="col" className="py-1.5 font-medium">Track</th><th scope="col" className="py-1.5 text-right font-medium">Cash</th><th scope="col" className="py-1.5 text-right font-medium">Open</th><th scope="col" className="py-1.5 text-right font-medium">Realised P&amp;L</th><th scope="col" className="py-1.5 text-right font-medium">Fees</th></tr></thead>
+          <tbody>{TRACKS.map(id => {
+            const t = l.tracks.find(x => x.track === id);
+            if (!t || t.status !== "ACTIVE") return <tr key={id} className="border-b border-rule/60"><th scope="row" className="py-1.5 text-left font-medium">{words(id)}</th><td colSpan={4} className="py-1.5 text-right text-muted">{t ? words(t.status) : "Not reported"}</td></tr>;
+            const pnl = tone(t.realized_pnl);
+            return <tr key={id} className="border-b border-rule/60">
+              <th scope="row" className="py-1.5 text-left font-medium">{words(id)}</th>
+              <td className="py-1.5 text-right tabular-nums">{price(t.cash)}</td>
+              <td className="py-1.5 text-right tabular-nums">{t.open_positions}</td>
+              <td className={`py-1.5 text-right tabular-nums ${pnl === "gain" ? "text-gain" : pnl === "loss" ? "text-loss" : ""}`}>{price(t.realized_pnl)}</td>
+              <td className="py-1.5 text-right tabular-nums">{price(t.fees)}</td>
+            </tr>;
+          })}</tbody>
+        </table>}</StateBlock>
       </Panel>
     </div>
   </div>;
@@ -41,6 +59,7 @@ export function Portfolio() {
 export function Operations() {
   const gate = useResource("/api/research/release-gate", isReleaseGate);
   const tracks = useResource("/api/market/tracks", isMarketTracks);
+  const auths = useResource("/api/ops/authorizations", isAuthorizationLedger);
   return <div className="space-y-4">
     <div className="grid gap-4 xl:grid-cols-2">
       <Panel title="Release gate" provenance={null} subtitle="Fail-closed; the browser cannot change it.">
@@ -88,6 +107,13 @@ export function Operations() {
           ["Intraday data (Day track)", "No approved source"],
           ["Paid model calls", "Not authorized"],
         ]}/>}</StateBlock>
+        <h3 className="mt-4 text-xs font-semibold text-muted">Signed authorization usage</h3>
+        <StateBlock resource={auths} empty={a => (a.authorizations.length ? null : a.reason ? `${a.reason[0].toUpperCase()}${a.reason.slice(1)}.` : "No signed authorization has been used.")}>{a => <ul className="mt-2 divide-y divide-rule/60 text-xs">
+          {a.authorizations.map(x => <li key={x.digest_prefix} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
+            <span className="tabular-nums">Digest {x.digest_prefix}… · {x.requests} request{x.requests === 1 ? "" : "s"}</span>
+            <span className="flex flex-wrap gap-1">{Object.entries(x.outcomes).map(([k, v]) => <Badge key={k} tone={k === "OK" ? "gain" : k.startsWith("FAIL") ? "loss" : "neutral"}>{words(k)}: {v}</Badge>)}</span>
+          </li>)}
+        </ul>}</StateBlock>
       </Panel>
     </div>
   </div>;

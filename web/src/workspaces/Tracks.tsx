@@ -2,7 +2,7 @@ import { useResource } from "../lib/api";
 import { type MarketTrack, type ScanCandidate, type TrackId, isMarketTracks, isScanSnapshot, TRACKS } from "../lib/contracts";
 import { compactUsd, num, plainPct, when, words } from "../lib/format";
 import { href } from "../lib/router";
-import { Badge, type Column, DataTable, KeyValues, Panel, StateBlock, Tabs } from "../components/ui";
+import { Badge, type Column, DataTable, KeyValues, Panel, StateBlock, Tabs, tabId, tabPanelId } from "../components/ui";
 
 const PURPOSE: Record<TrackId, string> = {
   DAY: "Short-term moves inside one session. Positions are flat before the close; nothing carries overnight.",
@@ -87,9 +87,9 @@ export default function Tracks({ detail }: { detail: string | null }) {
   return <StateBlock resource={tracks}>{t => {
     const track = t.tracks.find(x => x.track === active);
     return <div className="space-y-4">
-      <Tabs label="Trading track" value={active} onChange={id => { window.location.hash = href("tracks", id); }}
+      <Tabs idPrefix="tracks" label="Trading track" value={active} onChange={id => { window.location.hash = href("tracks", id); }}
         tabs={TRACKS.map(id => ({ id, label: words(id), hint: t.tracks.find(x => x.track === id)?.data_status === "AVAILABLE" ? undefined : "data blocked" }))}/>
-      <div role="tabpanel" aria-label={`${words(active)} track`}>{track ? <TrackView track={track}/> : <p className="text-sm text-muted">Track not reported by the service.</p>}</div>
+      <div role="tabpanel" id={tabPanelId("tracks")} aria-labelledby={tabId("tracks", active)} tabIndex={0}>{track ? <TrackView track={track}/> : <p className="text-sm text-muted">Track not reported by the service.</p>}</div>
     </div>;
   }}</StateBlock>;
 }

@@ -116,6 +116,12 @@ def scan_snapshot_summary(path: str | None) -> dict[str, Any]:
         data = json.loads(target.read_text(encoding="utf-8"))
         if data.get("schema") != SCHEMA or data.get("provenance") not in PROVENANCES:
             return {**base, "reason": "snapshot schema or provenance not recognised"}
+        basis = str(data.get("data_basis", "")).upper()
+        if data["provenance"] == "REAL_DATA" and ("SYNTHETIC" in basis or "FIXTURE" in basis):
+            return {**base, "reason": "snapshot claims real data from a synthetic basis"}
+        duration = float(data["duration_seconds"])
+        if duration != duration or duration in (float("inf"), float("-inf")) or duration < 0:
+            return {**base, "reason": "snapshot has an invalid duration"}
         instruments = []
         for row in data["instruments"]:
             above = row["above_sma200"]
@@ -149,7 +155,7 @@ def scan_snapshot_summary(path: str | None) -> dict[str, Any]:
             "generated_at": str(data["generated_at"])[:40], "cutoff": str(data["cutoff"])[:10],
             "universe_size": int(data["universe_size"]), "scanned": int(data["scanned"]),
             "excluded": {str(k)[:32]: int(v) for k, v in data["excluded"].items()},
-            "duration_seconds": float(data["duration_seconds"]),
+            "duration_seconds": duration,
             "instruments": instruments, "tracks": tracks,
             "note": "Scores rank candidates; they are not forecasts or orders.",
         }

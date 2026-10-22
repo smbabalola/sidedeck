@@ -6,7 +6,9 @@ export type Provenance = "REAL_DATA" | "DEMO_BROKER" | "SIMULATION" | "SYNTHETIC
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStr = (v: unknown): v is string => typeof v === "string";
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
-const isNumStr = (v: unknown): v is string | null => v === null || (isStr(v) && v.length < 41 && Number.isFinite(Number(v)));
+const isNumStr = (v: unknown): v is string | null => v === null || (isStr(v) && v.trim() !== "" && v.length < 41 && Number.isFinite(Number(v)));
+const isCount = (v: unknown): v is number => isNum(v) && Number.isInteger(v) && v >= 0;
+const isCounts = (v: unknown): boolean => isObj(v) && Object.values(v).every(isCount);
 const isArr = Array.isArray;
 
 // --- /api/demo/summary ---------------------------------------------------------------
@@ -21,6 +23,26 @@ export type DemoSummary = {
 export function isDemoSummary(d: unknown): d is DemoSummary {
   return isObj(d) && d.schema_version === 1 && d.source === "LOCAL_BASELINE_ONLY" && d.execution_enabled === false
     && isArr(d.books) && d.books.every(b => isObj(b) && isStr(b.id) && (b.positions === null || isNum(b.positions)));
+}
+
+// --- /api/portfolio/ledgers (SD-079 simulated ledgers) ------------------------------
+export type TrackLedger =
+  | { track: TrackId; status: "NOT_STARTED" | "UNAVAILABLE" }
+  | { track: TrackId; status: "ACTIVE"; virtual_capital: string; cash: string; open_positions: number; open_cost_basis: string; realized_pnl: string; fees: string; entries: number; closes: number };
+export type TrackLedgers = { provenance: "SIMULATION"; fill_basis: "SIMULATED_LOCAL"; execution_enabled: false; status: string; reason?: string; tracks: TrackLedger[] };
+export function isTrackLedgers(d: unknown): d is TrackLedgers {
+  return isObj(d) && d.provenance === "SIMULATION" && d.fill_basis === "SIMULATED_LOCAL" && d.execution_enabled === false
+    && isStr(d.status) && isArr(d.tracks) && d.tracks.every(t => isObj(t) && TRACKS.includes(t.track as TrackId)
+      && (t.status !== "ACTIVE" || (["virtual_capital", "cash", "open_cost_basis", "realized_pnl", "fees"].every(k => isNumStr(t[k]))
+        && isCount(t.open_positions) && isCount(t.entries) && isCount(t.closes))));
+}
+
+// --- /api/ops/authorizations (SD-077 ledger) -----------------------------------------
+export type AuthorizationUse = { digest_prefix: string; requests: number; outcomes: Record<string, number>; first_at: number; last_at: number };
+export type AuthorizationLedger = { status: string; reason?: string; execution_enabled: false; authorizations: AuthorizationUse[] };
+export function isAuthorizationLedger(d: unknown): d is AuthorizationLedger {
+  return isObj(d) && d.execution_enabled === false && isStr(d.status) && isArr(d.authorizations)
+    && d.authorizations.every(a => isObj(a) && isStr(a.digest_prefix) && isCount(a.requests) && isCounts(a.outcomes) && isNum(a.first_at) && isNum(a.last_at));
 }
 
 // --- /api/research/summary -----------------------------------------------------------
@@ -110,7 +132,17 @@ export function isScanSnapshot(d: unknown): d is ScanSnapshot {
   if (d.status === "UNAVAILABLE") return isStr(d.reason);
   if (d.status !== "LOADED" || (d.provenance !== "REAL_DATA" && d.provenance !== "SYNTHETIC_FIXTURE")) return false;
   if (!isArr(d.instruments) || !isObj(d.tracks)) return false;
+  if (!isStr(d.cutoff) || !/^\d{4}-\d{2}-\d{2}$/.test(d.cutoff) || !isStr(d.generated_at) || !isStr(d.source_id)
+    || !isStr(d.data_basis) || !isNum(d.duration_seconds) || !isCount(d.scanned) || !isCount(d.universe_size)
+    || !isCounts(d.excluded) || !isStr(d.note)) return false;
   const tracks = d.tracks;
-  return d.instruments.every(i => isObj(i) && isStr(i.canonical_id) && isStr(i.exchange) && NUM_FIELDS.every(f => isNumStr(i[f])))
-    && TRACKS.every(t => isObj(tracks[t]) && isArr((tracks[t] as Record<string, unknown>).candidates));
+  const candidateOk = (c: unknown) => isObj(c) && isStr(c.canonical_id) && isCount(c.rank) && isNumStr(c.score)
+    && isObj(c.components) && Object.values(c.components).every(isNumStr) && isArr(c.missing) && c.missing.every(isStr)
+    && typeof c.research === "boolean";
+  return d.instruments.every(i => isObj(i) && isStr(i.canonical_id) && isStr(i.ticker) && isStr(i.exchange) && isCount(i.sessions)
+      && isStr(i.regime) && isArr(i.event_flags) && NUM_FIELDS.every(f => isNumStr(i[f])))
+    && TRACKS.every(t => {
+      const tr = tracks[t];
+      return isObj(tr) && isArr(tr.candidates) && tr.candidates.every(candidateOk) && isCounts(tr.filtered);
+    });
 }

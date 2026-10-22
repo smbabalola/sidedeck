@@ -1,3 +1,4 @@
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Shell } from "./components/Shell";
 import { useRoute } from "./lib/router";
 import { useTheme } from "./lib/theme";
@@ -20,5 +21,7 @@ export default function App() {
     portfolio: <Portfolio/>,
     operations: <Operations/>,
   } as const;
-  return <Shell active={route.workspace} theme={theme} onToggleTheme={toggleTheme}>{views[route.workspace]}</Shell>;
+  return <Shell active={route.workspace} theme={theme} onToggleTheme={toggleTheme}>
+    <ErrorBoundary resetKey={route.workspace + (route.detail ?? "")}>{views[route.workspace]}</ErrorBoundary>
+  </Shell>;
 }

@@ -8,14 +8,14 @@
 /* Theme tokens (space-separated RGB so Tailwind opacity modifiers work). */
 :root, [data-theme="dark"] {
   --canvas: 20 22 26; --panel: 27 30 35; --raised: 35 39 45; --rule: 46 51 58;
-  --ink: 228 231 235; --muted: 154 161 171; --faint: 110 117 128;
-  --accent: 122 167 232; --attention: 217 164 65; --gain: 63 182 139; --loss: 229 96 77;
+  --ink: 228 231 235; --muted: 166 172 182; --faint: 150 156 166;
+  --accent: 122 167 232; --attention: 217 164 65; --gain: 63 182 139; --loss: 240 112 94;
   color-scheme: dark;
 }
 [data-theme="light"] {
   --canvas: 241 242 244; --panel: 255 255 255; --raised: 246 247 249; --rule: 220 223 228;
-  --ink: 27 30 34; --muted: 87 94 104; --faint: 125 132 142;
-  --accent: 38 99 184; --attention: 158 106 10; --gain: 18 128 88; --loss: 191 54 36;
+  --ink: 27 30 34; --muted: 74 80 90; --faint: 95 102 112;
+  --accent: 31 88 168; --attention: 140 92 0; --gain: 10 112 76; --loss: 179 46 30;
   color-scheme: light;
 }
 html { background: rgb(var(--canvas)); }

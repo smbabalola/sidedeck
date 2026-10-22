@@ -1,0 +1,37 @@
+{
+ "execution_enabled": false,
+ "fill_basis": "SIMULATED_LOCAL",
+ "provenance": "SIMULATION",
+ "schema_version": 1,
+ "status": "LOADED",
+ "tracks": [
+  {
+   "cash": "500",
+   "closes": 0,
+   "entries": 0,
+   "fees": "0",
+   "open_cost_basis": "0",
+   "open_positions": 0,
+   "realized_pnl": "0",
+   "status": "ACTIVE",
+   "track": "DAY",
+   "virtual_capital": "500"
+  },
+  {
+   "cash": "892.68",
+   "closes": 0,
+   "entries": 1,
+   "fees": "0.5",
+   "open_cost_basis": "107.32",
+   "open_positions": 1,
+   "realized_pnl": "0",
+   "status": "ACTIVE",
+   "track": "SWING",
+   "virtual_capital": "1000"
+  },
+  {
+   "status": "NOT_STARTED",
+   "track": "POSITION"
+  }
+ ]
+}

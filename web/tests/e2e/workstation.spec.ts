@@ -53,8 +53,7 @@ test("markets search, sort and keyboard drilldown", async ({ page, pageErrors })
   await expect(table.getByRole("row")).not.toHaveCount(1);
   await page.getByLabel("Search").fill("SYN007");
   await expect(table.getByRole("row")).toHaveCount(2);
-  const row = table.getByRole("row").nth(1);
-  await row.focus();
+  await table.getByRole("button", { name: "Show details for US:SYN007" }).focus();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/#\/markets\/US%3ASYN007$/);
   await expect(page.getByText("US:SYN007 ·", { exact: false })).toBeVisible();
@@ -95,4 +94,30 @@ test("theme toggle switches and persists", async ({ page, pageErrors }) => {
   await expect(html).not.toHaveAttribute("data-theme", before ?? "");
   await page.reload();
   await expect(html).not.toHaveAttribute("data-theme", before ?? "");
+});
+
+
+test("skip link focuses content without changing the route", async ({ page, pageErrors }) => {
+  void pageErrors;
+  await page.goto("/#/tracks/SWING");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#\/tracks\/SWING$/);
+  await expect(page.locator("main")).toBeFocused();
+});
+
+test("malformed links do not blank the app", async ({ page, pageErrors }) => {
+  void pageErrors;
+  await page.goto("/#/markets/%E0%A4%A");
+  await expect(page.getByRole("heading", { level: 1, name: "Markets" })).toBeVisible();
+});
+
+test("simulated ledgers are labelled simulation and the saved baseline is not called a live read", async ({ page, pageErrors }) => {
+  void pageErrors;
+  await page.goto("/#/portfolio");
+  const ledgers = page.getByRole("region", { name: "Simulated track ledgers" });
+  await expect(ledgers.getByText("Simulation", { exact: true })).toBeVisible();
+  const books = page.getByRole("region", { name: "Demo books" });
+  await expect(books.getByText("Saved baseline", { exact: true })).toBeVisible();
+  await expect(books.getByText("Demo broker")).toHaveCount(0);
 });

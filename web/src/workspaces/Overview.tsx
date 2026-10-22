@@ -15,7 +15,7 @@ export default function Overview() {
 
   const events: { at: string; what: string; link: string; provenance: Provenance }[] = [];
   if (demo.state === "ready") {
-    if (demo.data.captured_at) events.push({ at: demo.data.captured_at, what: "Protected Demo baseline captured", link: href("portfolio"), provenance: "DEMO_BROKER" });
+    if (demo.data.captured_at) events.push({ at: demo.data.captured_at, what: "Protected Demo baseline captured (saved locally)", link: href("portfolio"), provenance: "DEMO_BROKER" });
     if (demo.data.fresh_snapshot) events.push({ at: demo.data.fresh_snapshot.observed_at, what: `Demo snapshot read (${words(demo.data.fresh_snapshot.reconciliation_status).toLowerCase()})`, link: href("portfolio"), provenance: "DEMO_BROKER" });
   }
   if (scan.state === "ready" && scan.data.status === "LOADED") events.push({ at: scan.data.generated_at, what: `Scanner run on the ${scan.data.cutoff} close`, link: href("markets"), provenance: scan.data.provenance });
@@ -39,7 +39,9 @@ export default function Overview() {
           <p className="mt-3 text-xs text-muted">The first MSFT Demo pilot runs only through the owner's signed release on the command line, never from this screen.</p>
         </>}</StateBlock>
       </Panel>
-      <Panel title="Demo account" provenance={demo.state === "ready" ? "DEMO_BROKER" : "UNAVAILABLE"} subtitle="Saved baseline metadata. Balances are never shown here.">
+      <Panel title="Demo account" provenance={demo.state === "ready" && demo.data.fresh_snapshot ? "DEMO_BROKER" : null}
+        actions={demo.state === "ready" && !demo.data.fresh_snapshot ? <Badge title="Saved locally when the baseline was captured; not a current broker read">Saved baseline</Badge> : undefined}
+        subtitle="Baseline metadata only. Balances are never shown here.">
         <StateBlock resource={demo}>{d => <>
           <dl className="grid grid-cols-2 gap-4">
             <Metric label="Protected positions" value={d.protected_positions ?? "—"} detail={d.captured_at ? `Captured ${when(d.captured_at)}` : "Baseline not captured"}/>

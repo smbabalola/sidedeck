@@ -18,14 +18,16 @@ describe("DataTable", () => {
     const ids = () => within(screen.getByRole("table")).getAllByRole("row").slice(1).map(r => r.textContent?.[0]);
     expect(ids()).toEqual(["c", "a", "b"]);
     expect(screen.getByRole("columnheader", { name: /Value/ })).toHaveAttribute("aria-sort", "descending");
+    await userEvent.click(screen.getByRole("button", { name: /^Id/ }));
+    expect(ids()).toEqual(["a", "b", "c"]);   // text sorts A to Z first
+    await userEvent.click(button);
     await userEvent.click(button);
     expect(ids()).toEqual(["a", "c", "b"]);
   });
   it("selects rows with the keyboard", async () => {
     const onSelect = vi.fn();
     render(<DataTable rows={rows} columns={cols} rowKey={r => r.id} caption="t" onRowSelect={onSelect}/>);
-    const row = within(screen.getByRole("table")).getAllByRole("row")[1];
-    row.focus();
+    screen.getByRole("button", { name: "Show details for a" }).focus();
     await userEvent.keyboard("{Enter}");
     expect(onSelect).toHaveBeenCalledWith(rows[0]);
   });
@@ -61,9 +63,13 @@ describe("Provenance and panels", () => {
 describe("Tabs", () => {
   it("moves with arrow keys", async () => {
     const onChange = vi.fn();
-    render(<Tabs label="t" value="A" onChange={onChange} tabs={[{ id: "A", label: "A" }, { id: "B", label: "B" }]}/>);
-    screen.getByRole("tab", { name: "A" }).focus();
+    render(<Tabs idPrefix="t" label="t" value="A" onChange={onChange} tabs={[{ id: "A", label: "A" }, { id: "B", label: "B" }, { id: "C", label: "C" }]}/>);
+    const a = screen.getByRole("tab", { name: "A" });
+    expect(a).toHaveAttribute("aria-controls", "t-panel");
+    a.focus();
     await userEvent.keyboard("{ArrowRight}");
-    expect(onChange).toHaveBeenCalledWith("B");
+    expect(onChange).toHaveBeenLastCalledWith("B");
+    await userEvent.keyboard("{End}");
+    expect(onChange).toHaveBeenLastCalledWith("C");
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type Resource<T> =
   | { state: "loading"; data: null; error: null; fetchedAt: null }
@@ -9,9 +9,14 @@ export type Resource<T> =
 export function useResource<T>(path: string, guard: (d: unknown) => d is T): Resource<T> & { reload: () => void } {
   const [resource, setResource] = useState<Resource<T>>({ state: "loading", data: null, error: null, fetchedAt: null });
   const [nonce, setNonce] = useState(0);
+  const lastPath = useRef(path);
   useEffect(() => {
     const controller = new AbortController();
-    setResource({ state: "loading", data: null, error: null, fetchedAt: null });
+    // A reload keeps the previous data on screen until the new response arrives.
+    if (lastPath.current !== path) {
+      lastPath.current = path;
+      setResource({ state: "loading", data: null, error: null, fetchedAt: null });
+    }
     fetch(path, { signal: controller.signal, cache: "no-store", headers: { Accept: "application/json" } })
       .then(async response => {
         if (!response.ok) throw new Error(`The local service answered ${response.status}.`);
@@ -21,8 +26,10 @@ export function useResource<T>(path: string, guard: (d: unknown) => d is T): Res
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        const message = error instanceof Error && error.message ? error.message : "Request failed.";
-        setResource({ state: "error", data: null, error: message.includes("fetch") ? "The local SideDeck service is not reachable." : message, fetchedAt: Date.now() });
+        // fetch() rejects with a TypeError only when the service cannot be reached.
+        const message = error instanceof TypeError ? "The local SideDeck service is not reachable."
+          : error instanceof Error && error.message ? error.message : "Request failed.";
+        setResource({ state: "error", data: null, error: message, fetchedAt: Date.now() });
       });
     return () => controller.abort();
   }, [path, guard, nonce]);

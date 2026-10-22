@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, useId, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Loader2, RefreshCw } from "lucide-react";
 import type { Provenance } from "../lib/contracts";
 import { ago } from "../lib/format";
@@ -70,9 +70,17 @@ export function KeyValues({ rows }: { rows: [string, ReactNode][] }) {
 }
 
 // --- Resource states --------------------------------------------------------------------
+/** Current time that re-renders the caller every ``intervalMs`` (for staleness checks). */
+export function useNow(intervalMs = 30_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), intervalMs); return () => clearInterval(t); }, [intervalMs]);
+  return now;
+}
+
 export function StateBlock<T>({ resource, empty, staleAfterMs, children }: {
   resource: Resource<T> & { reload: () => void }; empty?: (data: T) => string | null; staleAfterMs?: number; children: (data: T) => ReactNode;
 }) {
+  const now = useNow();
   if (resource.state === "loading") {
     return <p role="status" className="flex items-center gap-2 py-6 text-sm text-muted"><Loader2 size={15} className="animate-spin" aria-hidden/> Loading…</p>;
   }
@@ -84,7 +92,7 @@ export function StateBlock<T>({ resource, empty, staleAfterMs, children }: {
   }
   const message = empty?.(resource.data);
   if (message) return <p className="py-4 text-sm text-muted">{message}</p>;
-  const stale = staleAfterMs !== undefined && Date.now() - resource.fetchedAt > staleAfterMs;
+  const stale = staleAfterMs !== undefined && now - resource.fetchedAt > staleAfterMs;
   return <>
     {stale && <p role="status" className="mb-3 rounded border border-attention/40 bg-attention/10 px-3 py-2 text-xs text-attention">Data is older than expected (fetched {ago(new Date(resource.fetchedAt).toISOString())}). Reload before relying on it.</p>}
     {children(resource.data)}
@@ -118,10 +126,12 @@ export function DataTable<R>({ rows, columns, rowKey, caption, initialSort, onRo
     });
   }, [rows, columns, sort]);
   const shown = sorted.slice(0, maxRows);
-  const toggle = (key: string) => setSort(s => s?.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" });
-  const onKey = (event: KeyboardEvent<HTMLTableRowElement>, row: R) => {
-    if (onRowSelect && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onRowSelect(row); }
+  const firstDir = (key: string): "asc" | "desc" => {
+    const value = columns.find(c => c.key === key)?.sortValue;
+    const sample = value ? rows.map(value).find(v => v !== null) : undefined;
+    return typeof sample === "string" ? "asc" : "desc";   // text A to Z, numbers largest first
   };
+  const toggle = (key: string) => setSort(s => s?.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: firstDir(key) });
   return <div className="overflow-x-auto">
     <table className="w-full border-collapse text-xs">
       <caption className="sr-only">{caption}</caption>
@@ -143,10 +153,14 @@ export function DataTable<R>({ rows, columns, rowKey, caption, initialSort, onRo
         {shown.map(row => {
           const key = rowKey(row);
           const selected = selectedKey === key;
-          return <tr key={key} tabIndex={onRowSelect ? 0 : undefined} aria-selected={onRowSelect ? selected : undefined}
-            onClick={onRowSelect ? () => onRowSelect(row) : undefined} onKeyDown={e => onKey(e, row)}
-            className={`border-b border-rule/60 ${onRowSelect ? "cursor-pointer hover:bg-raised focus:bg-raised" : ""} ${selected ? "bg-accent/10" : ""}`}>
-            {columns.map(c => <td key={c.key} className={`whitespace-nowrap px-2 py-1.5 tabular-nums ${c.align === "right" ? "text-right" : ""} ${c.hideBelow ? HIDE[c.hideBelow] : ""} ${c.className ?? ""}`}>{c.render(row)}</td>)}
+          return <tr key={key} aria-current={selected ? "true" : undefined}
+            onClick={onRowSelect ? () => onRowSelect(row) : undefined}
+            className={`border-b border-rule/60 ${onRowSelect ? "cursor-pointer hover:bg-raised focus-within:bg-raised" : ""} ${selected ? "bg-accent/10" : ""}`}>
+            {columns.map((c, i) => <td key={c.key} className={`whitespace-nowrap px-2 py-1.5 tabular-nums ${c.align === "right" ? "text-right" : ""} ${c.hideBelow ? HIDE[c.hideBelow] : ""} ${c.className ?? ""}`}>
+              {i === 0 && onRowSelect
+                ? <button type="button" className="text-left hover:text-accent" aria-label={`Show details for ${key}`} onClick={e => { e.stopPropagation(); onRowSelect(row); }}>{c.render(row)}</button>
+                : c.render(row)}
+            </td>)}
           </tr>;
         })}
         {shown.length === 0 && <tr><td colSpan={columns.length} className="px-2 py-6 text-center text-muted">No rows match the current filters.</td></tr>}
@@ -157,20 +171,23 @@ export function DataTable<R>({ rows, columns, rowKey, caption, initialSort, onRo
 }
 
 // --- Tabs (WAI-ARIA tabs pattern) -------------------------------------------------------
-export function Tabs<T extends string>({ label, tabs, value, onChange }: { label: string; tabs: { id: T; label: string; hint?: string }[]; value: T; onChange: (id: T) => void }) {
+export const tabId = (prefix: string, id: string) => `${prefix}-tab-${id}`;
+export const tabPanelId = (prefix: string) => `${prefix}-panel`;
+
+export function Tabs<T extends string>({ label, tabs, value, onChange, idPrefix }: { label: string; tabs: { id: T; label: string; hint?: string }[]; value: T; onChange: (id: T) => void; idPrefix: string }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const onKey = (event: KeyboardEvent, index: number) => {
-    const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-    if (!delta) return;
+    const keys: Record<string, number> = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1 };
+    if (!(event.key in keys)) return;
     event.preventDefault();
-    const next = (index + delta + tabs.length) % tabs.length;
+    const next = (keys[event.key] + tabs.length) % tabs.length;
     onChange(tabs[next].id);
     refs.current[next]?.focus();
   };
   return <div role="tablist" aria-label={label} className="flex gap-1 overflow-x-auto border-b border-rule">
     {tabs.map((t, i) => {
       const active = t.id === value;
-      return <button key={t.id} ref={el => { refs.current[i] = el; }} type="button" role="tab" aria-selected={active} tabIndex={active ? 0 : -1}
+      return <button key={t.id} ref={el => { refs.current[i] = el; }} type="button" role="tab" id={tabId(idPrefix, t.id)} aria-controls={tabPanelId(idPrefix)} aria-selected={active} tabIndex={active ? 0 : -1}
         onClick={() => onChange(t.id)} onKeyDown={e => onKey(e, i)}
         className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm ${active ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink"}`}>
         {t.label}{t.hint && <span className="ml-1.5 text-xs text-faint">{t.hint}</span>}

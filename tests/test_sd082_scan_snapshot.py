@@ -83,3 +83,16 @@ def test_malformed_snapshots_are_unavailable(tmp_path: Path, field: str, value: 
 def test_missing_snapshot_is_unavailable(tmp_path: Path) -> None:
     assert scan_snapshot_summary(None)["status"] == "UNAVAILABLE"
     assert scan_snapshot_summary(str(tmp_path / "missing.json"))["status"] == "UNAVAILABLE"
+
+
+def test_hand_edited_real_data_claim_is_refused_on_read(tmp_path: Path) -> None:
+    path = tmp_path / "scan.json"
+    _write(path)
+    data = json.loads(path.read_text())
+    data["provenance"] = "REAL_DATA"
+    path.write_text(json.dumps(data))
+    assert scan_snapshot_summary(str(path))["status"] == "UNAVAILABLE"
+    data["provenance"] = "SYNTHETIC_FIXTURE"
+    data["duration_seconds"] = -1
+    path.write_text(json.dumps(data))
+    assert scan_snapshot_summary(str(path))["status"] == "UNAVAILABLE"

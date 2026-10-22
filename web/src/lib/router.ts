@@ -16,7 +16,10 @@ export type Route = { workspace: WorkspaceId; detail: string | null };
 export function parseRoute(hash: string): Route {
   const [first, ...rest] = hash.replace(/^#\/?/, "").split("/");
   const found = WORKSPACES.find(w => w.id === first);
-  const detail = rest.length ? decodeURIComponent(rest.join("/")) : null;
+  let detail: string | null = null;
+  if (rest.length) {
+    try { detail = decodeURIComponent(rest.join("/")); } catch { detail = null; }
+  }
   return { workspace: found ? found.id : "overview", detail: found ? detail : null };
 }
 
