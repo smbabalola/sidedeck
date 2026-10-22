@@ -172,6 +172,8 @@ class EtoroDemoPilot:
         self._eligibility: Eligibility | None = None
         self._open_request: DemoOpenRequest | None = None
         self._position_id: int | None = None
+        self._credit_start: Decimal | None = None
+        self._entry: dict[str, str] = {}
 
     # -- helpers ---------------------------------------------------------------
     def _snapshot(self) -> DemoPortfolioSnapshot:
@@ -207,6 +209,7 @@ class EtoroDemoPilot:
         s = self._scope
         try:
             snapshot = self._snapshot()
+            self._credit_start = snapshot.credit
             if (not self._baseline_matched(snapshot) or snapshot.pending_orders
                     or self._sidedeck_open()):
                 return self._result("ABORTED_PREFLIGHT", "preflight",
@@ -277,8 +280,18 @@ class EtoroDemoPilot:
         if len(owned) != 1:
             return self._unresolved("open", "expected exactly one verified pilot position")
         self._position_id = int(owned[0]["position_id"])
+        fills = [e for e in outcome.executions if e.position_id == self._position_id]
+        if len(fills) == 1:
+            fill = fills[0]
+            self._entry = {
+                "position_id": str(fill.position_id), "order_id": str(outcome.order_id),
+                "units": str(fill.units), "avg_price": str(fill.avg_price),
+                "fees": str(fill.fees), "notional_usd": str(fill.units * fill.avg_price),
+                "limit_rate": str(request.limit_rate), "fresh_ask": str(quote.ask),
+                "slippage_vs_ask_per_unit": str(fill.avg_price - quote.ask),
+                "source": "BROKER_REPORTED (orders:lookup positionExecutions)"}
         return self._result("OPEN_FILLED_AWAITING_CLOSE_APPROVAL", "open",
-                            open_status=outcome.status)
+                            open_status=outcome.status, entry=self._entry)
 
     def close_request(self, reference_id: str) -> tuple[DemoCloseRequest, str]:
         """The exact close request and the approval scope the owner must sign."""
@@ -308,9 +321,18 @@ class EtoroDemoPilot:
                     break
             if status != "FILLED":
                 return self._unresolved("close", f"close status {status or 'UNKNOWN'}")
-            report = self._desk.reconcile(self._snapshot(), datetime.now(timezone.utc))
+            final = self._snapshot()
+            report = self._desk.reconcile(final, datetime.now(timezone.utc))
         except Exception as exc:
             return self._unresolved("close", type(exc).__name__)
         if report["status"] != "MATCHED" or self._sidedeck_open():
             return self._unresolved("close", "final reconciliation not MATCHED")
-        return self._result("COMPLETE", "close", baseline_matched=len(self._baseline))
+        accounting: dict[str, Any] = {"entry": self._entry, "close_price": "NOT_REPORTED "
+                                      "(documented close-info has no price)"}
+        if self._credit_start is not None and final.credit is not None:
+            accounting["realized_pnl_usd"] = str(final.credit - self._credit_start)
+            accounting["realized_pnl_source"] = ("DERIVED: cash credit change between the "
+                                                 "preflight and final snapshots; valid only "
+                                                 "if no other account activity occurred")
+        return self._result("COMPLETE", "close", baseline_matched=len(self._baseline),
+                            accounting=accounting)

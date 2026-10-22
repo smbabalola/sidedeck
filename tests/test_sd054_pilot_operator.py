@@ -175,11 +175,98 @@ def test_release_is_single_use(keys, tmp_path):
         rig.run()
 
 
-def test_main_is_locked_and_consumes_nothing(capsys):
-    assert operator.main([]) == 5
+def test_main_run_is_locked_and_consumes_nothing(capsys):
+    assert operator.main(["run", "--confirm-owner-release"]) == 5
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "REFUSED_LOCKED" and out["requests_sent"] == 0
+    assert out["release_consumed"] is False
     assert transport_module.NETWORK_TRANSPORT_ENABLED is False
+    with pytest.raises(SystemExit):
+        operator.main(["run"])                       # confirmation flag is mandatory
+
+
+@pytest.fixture
+def signed_data(keys, tmp_path, monkeypatch):
+    from sidedeck.application import sd053_msft_pilot_intent as sd053
+    from sidedeck.infrastructure.etoro_demo_store import EtoroDemoStore
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "approval_allowed_signers").write_text(
+        (keys / "allowed_signers").read_text(encoding="utf-8"), encoding="utf-8")
+    EtoroDemoStore(str(data / "etoro_demo.sqlite3")).capture_baseline(
+        OfflineEtoroDemoSimulator(fill_price=Decimal(1)).pnl_payload(SYNTHETIC_BASELINE_ROWS),
+        observed_at=datetime.now(timezone.utc), expected_positions=len(SYNTHETIC_BASELINE_ROWS))
+    monkeypatch.setattr(operator, "_data_dir", lambda: data)
+    from sidedeck.application import sd050_msft_instrument_lookup as lookup
+    monkeypatch.setattr(lookup, "DATA_DIR", data)
+    monkeypatch.setattr(sd053, "INTENT_PATH", data / "sd053-msft-pilot-intent.json")
+    record = sd053.prepare(sd053.INTENT_PATH, frozenset())
+    monkeypatch.setattr(operator, "PINNED_INTENT_DIGEST", record["digest"])
+    return data, record
+
+
+def test_main_verify_checks_owner_signature_offline(keys, signed_data, capsys):
+    data, record = signed_data
+    assert operator.main(["verify"]) == 5                     # no signature yet
+    assert "signature file is missing" in capsys.readouterr().out
+    sig = data / "sd053-msft-pilot-intent.digest.sig"
+    sig.write_text(sign(keys, record["digest"], PILOT_NAMESPACE), encoding="utf-8")
+    assert operator.main(["verify"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["signature_valid"] is True and out["release_consumed"] is False
+    sig.write_text(sign(keys, record["digest"], PILOT_NAMESPACE, key="other"),
+                   encoding="utf-8")
+    assert operator.main(["verify"]) == 1
+    sig.write_text(sign(keys, record["digest"], "sidedeck-paper-approval"), encoding="utf-8")
+    assert operator.main(["verify"]) == 1
+
+
+def test_verify_refuses_a_digest_other_than_the_pinned_one(keys, signed_data, monkeypatch,
+                                                           capsys):
+    monkeypatch.setattr(operator, "PINNED_INTENT_DIGEST", "0" * 64)
+    assert operator.main(["verify"]) == 5
+    assert "differs from the reviewed" in capsys.readouterr().out
+
+
+# ---- failure modes through the full operator --------------------------------------
+
+def _rig(keys, tmp_path, **sim):
+    rig = Rig(keys, tmp_path)
+    for name, value in sim.items():
+        setattr(rig.sim, name, value)
+    return rig
+
+
+@pytest.mark.parametrize("sim,expected,writes", [
+    ({"mode": "REJECT"}, "OPEN_REJECTED_CLEAN", 1),
+    ({"mode": "PENDING"}, UNRESOLVED, 1),
+    ({"lose_next_response": True}, UNRESOLVED, 1),
+    ({"quote_age_seconds": 120}, "ABORTED_PREFLIGHT", 0),
+    ({"quote_type": "delayed"}, "ABORTED_PREFLIGHT", 0),
+    ({"close_mode": "PENDING"}, UNRESOLVED, 2),
+    ({"close_mode": "PARTIAL"}, UNRESOLVED, 2),
+])
+def test_failure_modes_never_report_complete_or_repeat_writes(keys, tmp_path, sim, expected,
+                                                             writes):
+    rig = _rig(keys, tmp_path, **sim)
+    report = rig.run()
+    assert report["result"] == expected
+    assert len(rig.posts()) == writes
+    paths = [urlsplit(r.full_url).path for r in rig.posts()]
+    assert paths.count(DEMO_OPEN_PATH) <= 1 and len(rig.opener.requests) <= 12
+
+
+def test_complete_run_budget_and_accounting(keys, tmp_path):
+    rig = Rig(keys, tmp_path)
+    report = rig.run()
+    final = report["steps"][-1]
+    used = final["requests_used"]
+    assert used["pnl"] == 3 and used["eligibility"] == 1 and used["rates"] == 1
+    assert used["open"] == 1 and used["close"] == 1 and used["lookup"] <= 3
+    assert used["close_info"] <= 2 and final["requests_total"] <= 12
+    entry = final["accounting"]["entry"]
+    assert entry["avg_price"] == "100.25" and Decimal(entry["units"]) == Decimal("0.4")
+    assert "DERIVED" in final["accounting"].get("realized_pnl_source", "DERIVED")
 
 
 def test_recorded_baseline_status_reads_sd038_ledger(tmp_path):
@@ -193,3 +280,11 @@ def test_recorded_baseline_status_reads_sd038_ledger(tmp_path):
     db.close()
     assert operator.recorded_baseline_status(str(path)) == "MATCHED"
     assert operator.recorded_baseline_status(str(tmp_path / "none")) == "UNKNOWN"
+
+
+def test_terminal_partial_ioc_fill_closes_exactly_the_filled_units(keys, tmp_path):
+    rig = _rig(keys, tmp_path, mode="PARTIAL")
+    report = rig.run()
+    assert report["result"] == "COMPLETE" and len(rig.posts()) == 2
+    entry = report["steps"][-1]["accounting"]["entry"]
+    assert Decimal(entry["units"]) == Decimal("0.2")

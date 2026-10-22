@@ -129,3 +129,43 @@ Return (1) branch/HEAD/commits and CI link/status, (2) workstream-by-workstream 
 **Immediate queue after SD-021:** SD-022 independent robustness review is READY. It must audit reported passing strategy screens against completed round trips rather than ambiguous transaction counts; independently reproduce IS/OOS equity, trade accounting, fees and benchmark conventions; check corporate-action/dividend provenance, SPY/QQQ overlap and risk controls. Record downgrade/rejection as a valid result. When completed, **self-generate and execute the next safe engineering work package** without awaiting another ChatGPT-to-Codex instruction.
 
 **Autonomy limitation:** Steering files direct a running Codex session; they do not schedule unattended execution or automatically start a new session. Never conceal that limit or report work not actually performed.
+
+## 10. First Demo Trade Completion and Autonomous Execution Transition (owner directive 2026-10-22)
+
+**Highest-priority current milestone:** SideDeck's first genuine broker-connected eToro **Demo**
+buy-and-close lifecycle — the reviewed SD-053 MSFT pilot — executed, reconciled and
+independently audited. Tracked as SD-055…SD-063 at the top of `TODO.md`.
+
+**Pinned pilot (never regenerated or altered silently):** eToro Demo only; MSFT instrument 1004;
+BUY 0.09 units; 1×; limit IOC; signed max limit USD 552.56; ≤ USD 50; actual limit
+min(signed max, fresh ask × 1.005) with the ask ≤ 60 s old; Fri 2026-10-23 10:00–11:30 ET;
+≤ 12 HTTP requests, ≤ 2 order writes, no write retries; close only the lineage-verified
+SideDeck position. Digest `71e111b3a8806dc9b8e59d96ce1ef6e6a0b64dc2b00363465244acccaad09a62`.
+
+**Owner signing:** key `$HOME\.ssh\sidedeck_approval`, principal `owner@sidedeck`; release
+namespace `sidedeck-etoro-pilot-release` over `data\sd053-msft-pilot-intent.digest`; per-order
+open/close approvals in `sidedeck-paper-approval`. Codex/Claude never create, hold or use the
+owner's private key and never bypass SSH verification. A signature alone does not enable trading.
+
+**Release boundary:** the order-network lock lift and any authenticated order request require one
+consolidated owner release covering broker/environment, instrument/account scope, notional,
+quantity, limit, leverage, date/expiry, endpoint allowlist, request/write budget, baseline
+invariant, kill-switch/recovery policy, signed-release verification and the exact start
+command. This section is **not** that authorization. Host (Claude/Codex) safety restrictions are
+never bypassed; the owner runs host-blocked commands personally.
+
+**Execution rules once released:** run only inside the signed window and scope; refuse on any
+failed gate (eligibility, currency, type, fractional size, minimum, fresh price); submit the open
+once; persist request id, acknowledgement and order identity; resolve uncertainty only through the
+approved lookup path; never repeat a write; any unresolved outcome trips the kill-switch and
+keeps the true outstanding state. If the window lapses, stay NO_GO and prepare a new
+owner-approved window — never roll authorization forward.
+
+**After the pilot (do not stop):** SideDeck agents → validated strategies → qualified signals →
+deterministic portfolio/risk engine → autonomous eToro Demo execution → exit management →
+reconciliation → performance feedback. AI assistants are development tools, never runtime trade
+deciders. Order-level signatures may be replaced only by a **separately reviewed and expressly
+owner-released bounded autonomous Demo policy** with deterministic risk checks, durable expiry,
+strategy admission, capital/drawdown limits, recovery, alerts and independent audit. No model
+approves its own permissions; unproven agents/strategies are never auto-promoted.
+

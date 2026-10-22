@@ -239,3 +239,17 @@ class EtoroDemoHttpTransport:
             closer = getattr(response, "close", None)
             if callable(closer):
                 closer()
+
+
+def network_transport_enabled() -> bool:
+    """Read-only view of the development lock (callers must not assign it)."""
+    return NETWORK_TRANSPORT_ENABLED is True
+
+
+def production_transport_factory(env: Mapping[str, str]) -> Any:
+    """The single production construction path (used only by the SD-054 operator).
+    While the lock is False the constructor refuses; no opener is ever injected here."""
+    def factory(release: PilotRelease, ledger_path: str) -> EtoroDemoHttpTransport:
+        return EtoroDemoHttpTransport.from_environment(env, release=release,
+                                                       ledger_path=ledger_path)
+    return factory

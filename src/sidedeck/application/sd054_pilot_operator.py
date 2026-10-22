@@ -14,10 +14,11 @@ Sequence (every step fails closed; nothing is retried):
    SideDeck position remains. Otherwise ``UNRESOLVED_OPERATOR_INTERVENTION_REQUIRED`` with
    the kill-switch tripped and the position left for the operator.
 
-**Locked in this phase.** The runner never constructs a network transport itself: it takes
-a ``transport_factory``. ``main()`` has no production factory, so it refuses before reading
-any secret or consuming the release. Installing the factory is part of the separate,
-reviewed lock-lift commit together with ``NETWORK_TRANSPORT_ENABLED``.
+**Locked in this phase.** ``run_pilot`` takes a ``transport_factory``; ``main run`` uses the
+transport module's single production factory, but first checks the order lock and refuses
+(``REFUSED_LOCKED``) before reading any secret or consuming the release. Lifting the lock is
+the separate, reviewed lock-lift commit plus the owner's explicit execution authorization.
+``main verify`` checks the owner's release signature offline and consumes nothing.
 """
 from __future__ import annotations
 
@@ -183,13 +184,105 @@ def recorded_baseline_status(ledger_path: str) -> str:
     return "UNKNOWN" if row is None else str(row[0])
 
 
+# ---- production entry point (SD-053 MSFT pilot) -------------------------------------
+PINNED_INTENT_DIGEST = "71e111b3a8806dc9b8e59d96ce1ef6e6a0b64dc2b00363465244acccaad09a62"
+PRINCIPAL = "owner@sidedeck"
+
+
+def _data_dir() -> Path:
+    from sidedeck.application import sd050_msft_instrument_lookup as lookup
+    return lookup.DATA_DIR
+
+
+def load_signed_intent() -> tuple[PilotIntent, str]:
+    """The reviewed SD-053 intent (never regenerated) and the owner's signature file."""
+    from sidedeck.application import sd050_msft_instrument_lookup as lookup
+    from sidedeck.application import sd053_msft_pilot_intent as sd053
+    data = _data_dir()
+    if not sd053.INTENT_PATH.is_file():
+        raise OperatorRefused("SD-053 intent file is missing; it is never regenerated here")
+    protected = lookup.baseline_instrument_ids(str(data / "etoro_demo.sqlite3"))
+    record = sd053.prepare(sd053.INTENT_PATH, protected)   # re-verifies reviewed parameters
+    if record["digest"] != PINNED_INTENT_DIGEST:
+        raise OperatorRefused("intent digest differs from the reviewed SD-053 digest")
+    intent = sd053.build_intent(record["pilot_id"])
+    signature_path = sd053.INTENT_PATH.with_suffix(".digest.sig")
+    if not signature_path.is_file():
+        raise OperatorRefused("owner signature file is missing")
+    return intent, signature_path.read_text(encoding="utf-8")
+
+
+def verify_release_signature() -> dict[str, Any]:
+    """Offline: the owner's signature over the pinned intent. Consumes nothing."""
+    intent, signature = load_signed_intent()
+    verifier = SshSignatureVerifier(str(_data_dir() / "approval_allowed_signers"), PRINCIPAL,
+                                    namespace=PILOT_NAMESPACE)
+    now = datetime.now(timezone.utc)
+    return {"intent_digest": intent.digest(), "principal": PRINCIPAL,
+            "namespace": PILOT_NAMESPACE,
+            "signature_valid": verifier(PRINCIPAL, intent.digest(), signature),
+            "window_utc": [intent.not_before.isoformat(), intent.expires_at.isoformat()],
+            "window_open_now": intent.not_before <= now < intent.expires_at,
+            "release_consumed": False, "requests_sent": 0, "execution_release": "NO_GO"}
+
+
+def console_approval(label: str, digest: str, scope: str) -> str:
+    """Write the exact approval digest; wait for the owner's separate SSH signature."""
+    folder = _data_dir() / "sd054"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{label}-approval.digest"
+    path.write_bytes(digest.encode("ascii"))
+    print(json.dumps({"approval": label, "scope": scope, "digest": digest,
+                      "sign_with": "ssh-keygen -Y sign -f \"$HOME\\.ssh\\sidedeck_approval\" "
+                                   f"-n sidedeck-paper-approval \"{path}\""}, indent=2))
+    answer = input(f"Sign the {label} digest, then press Enter (type NO to decline): ")
+    signature = path.with_name(path.name + ".sig")
+    if answer.strip().upper() == "NO" or not signature.is_file():
+        return ""
+    return signature.read_text(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
-    """No production transport factory exists in this phase: refuse before anything."""
-    print(json.dumps({"status": "REFUSED_LOCKED", "reason": "order transport wiring is not "
-                      "installed; it ships only with the reviewed lock-lift commit",
-                      "release_consumed": False, "requests_sent": 0,
-                      "execution_release": "NO_GO"}, indent=2))
-    return 5
+    import argparse
+
+    from sidedeck.application import sd050_msft_instrument_lookup as lookup
+    from sidedeck.infrastructure import etoro_demo_write_transport as wt
+    from sidedeck.infrastructure.etoro_demo_store import EtoroDemoStore
+
+    parser = argparse.ArgumentParser(description="SD-054 supervised eToro Demo MSFT pilot")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("verify", help="verify the owner's release signature (offline)")
+    run = commands.add_parser("run", help="execute the signed pilot (needs the lock lifted)")
+    run.add_argument("--confirm-owner-release", action="store_true", required=True)
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "verify":
+            result = verify_release_signature()
+            print(json.dumps(result, indent=2))
+            return 0 if result["signature_valid"] else 1
+        if not wt.network_transport_enabled():        # before secrets or the release
+            print(json.dumps({"status": "REFUSED_LOCKED", "reason": "order transport lock is "
+                              "engaged; lifting it needs the reviewed lock-lift commit and the "
+                              "owner's explicit execution authorization",
+                              "release_consumed": False, "requests_sent": 0,
+                              "execution_release": "NO_GO"}, indent=2))
+            return 5
+        intent, signature = load_signed_intent()
+        data = _data_dir()
+        env = lookup.load_local_credentials(str(data.parent / ".env"))
+        baseline = EtoroDemoStore(str(data / "etoro_demo.sqlite3")).baseline()
+        report = run_pilot(
+            intent=intent, release_signature=signature, principal=PRINCIPAL,
+            signers_path=str(data / "approval_allowed_signers"), env=env, baseline=baseline,
+            baseline_status=recorded_baseline_status(str(data / "sd038-auth-budget.sqlite3")),
+            transport_factory=wt.production_transport_factory(env),
+            await_approval=console_approval, paths=OperatorPaths(data / "sd054"))
+    except Exception as exc:
+        print(json.dumps({"status": "REFUSED", "reason": f"{type(exc).__name__}: {exc}",
+                          "execution_release": "NO_GO"}, indent=2))
+        return 5
+    print(json.dumps(report, indent=2, default=str))
+    return 0 if report["result"] == "COMPLETE" else 1
 
 
 if __name__ == "__main__":

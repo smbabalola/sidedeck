@@ -72,3 +72,18 @@ def test_existing_etoro_client_remains_single_get_portfolio_read():
                                                         .read_text(encoding="utf-8")))
                if isinstance(node, ast.FunctionDef)}
     assert not methods & {"post", "put", "delete", "submit", "send_order", "close_position"}
+
+
+def test_production_transport_factory_has_exactly_one_reviewed_caller():
+    from sidedeck.infrastructure import etoro_demo_write_transport as transport
+    assert transport.network_transport_enabled() is False
+    callers = set()
+    for path in SRC.rglob("*.py"):
+        if path.relative_to(SRC) == Path("infrastructure/etoro_demo_write_transport.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in (
+                    "production_transport_factory", "network_transport_enabled"):
+                callers.add(str(path.relative_to(SRC)).replace("\\", "/"))
+    assert callers == {"application/sd054_pilot_operator.py"}
