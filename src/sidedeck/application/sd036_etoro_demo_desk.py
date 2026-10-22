@@ -35,7 +35,8 @@ from sidedeck.domain.etoro_demo_books import (
     STRATEGY_BOOKS, BaselinePosition, EtoroDemoBookError, OrderAttribution, reconcile_demo,
 )
 from sidedeck.domain.etoro_demo_orders import (
-    DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, ETORO_REAL_EXECUTION,
+    DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, DEMO_PNL_PATH,
+    ETORO_REAL_EXECUTION,
     NO_FILL_TERMINAL, ZERO, CloseAcceptance, DemoCloseRequest, DemoOpenRequest,
     DemoOrderOutcome, EtoroDemoOrderError, parse_close_acceptance, parse_close_info,
     parse_open_acceptance, parse_order_lookup, require_demo_route,
@@ -549,10 +550,12 @@ class OfflineEtoroDemoSimulator:
         self.fill_price = fill_price
         self.next_position_id = first_position_id
         self.next_order_id = first_order_id
-        self.mode = "FILL"                    # FILL | PARTIAL | REJECT
+        self.mode = "FILL"                    # FILL | PARTIAL | REJECT | PENDING
+        self.close_mode = "FILL"              # FILL | PARTIAL | PENDING
         self.lose_next_response = False
         self.drop_next_request = False        # never reaches the broker (lookup -> 404)
         self.force_position_id: int | None = None
+        self.baseline_rows: list[dict[str, Any]] = []   # served by the simulated /pnl GET
         self.calls: list[tuple[str, str]] = []
         self._orders: dict[str, dict[str, Any]] = {}
         self._close_orders: dict[int, dict[str, Any]] = {}
@@ -567,6 +570,8 @@ class OfflineEtoroDemoSimulator:
         if self.drop_next_request:
             self.drop_next_request = False
             raise TransportOutcomeUnknown("simulated connection reset before delivery")
+        if method == "GET" and path == DEMO_PNL_PATH:
+            return self.pnl_payload(self.baseline_rows)
         if method == "POST" and path == DEMO_OPEN_PATH:
             result = self._open(reference_id, body or {})
         elif method == "GET" and path == DEMO_ORDER_LOOKUP_PATH:
@@ -595,7 +600,7 @@ class OfflineEtoroDemoSimulator:
                     "referenceId": reference_id}
         order_id = self._new_order_id()
         units = Decimal(str(body["units"]))
-        status, executions = 4, []
+        status, executions = (2 if self.mode == "PENDING" else 4), []
         if self.mode in ("FILL", "PARTIAL"):
             filled = units if self.mode == "FILL" else units / 2
             position_id = self.force_position_id or self.next_position_id
@@ -621,8 +626,13 @@ class OfflineEtoroDemoSimulator:
             already = sum((Decimal(str(p["units"])) for c in self._close_orders.values()
                            for p in c["positions"] if p["positionID"] == position_id), ZERO)
             units = float(opened - already)
-        self._close_orders[order_id] = {"orderID": order_id, "statusID": 3,
-                                        "positions": [{"positionID": position_id, "units": units}]}
+        if self.close_mode == "PENDING":
+            status, rows = 2, []
+        elif self.close_mode == "PARTIAL":
+            status, rows = 9, [{"positionID": position_id, "units": units / 2}]
+        else:
+            status, rows = 3, [{"positionID": position_id, "units": units}]
+        self._close_orders[order_id] = {"orderID": order_id, "statusID": status, "positions": rows}
         return {"orderForClose": {"positionID": position_id, "instrumentID": body["InstrumentID"],
                                   "orderID": order_id, "unitsToDeduct": units, "statusID": 1}}
 
