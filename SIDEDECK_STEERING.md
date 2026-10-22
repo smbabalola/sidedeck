@@ -169,3 +169,54 @@ owner-released bounded autonomous Demo policy** with deterministic risk checks, 
 strategy admission, capital/drawdown limits, recovery, alerts and independent audit. No model
 approves its own permissions; unproven agents/strategies are never auto-promoted.
 
+## 11. Market-wide autonomous scanning and multi-track trading (owner directive 2026-10-22)
+
+**Goal:** expand SideDeck from a few researched instruments to a market-wide, multi-strategy
+paper-trading platform that discovers opportunities with its **own** agents, quantitative
+strategies and deterministic decision engine. Architecture:
+[docs/SD065_MARKET_WIDE_ARCHITECTURE.md](docs/SD065_MARKET_WIDE_ARCHITECTURE.md); work packages
+SD-065…SD-075 in `TODO.md` (Milestone 1).
+
+**Priority order:** (1) the SD-058 MSFT Demo pilot and its SD-059…SD-062 completion — never
+change its signed intent, digest, unlock, request budget or execution path; (2) offline
+market-wide packages in parallel; (3) SD-063/SD-064 before any general autonomous Demo execution.
+
+**Rules (additive to §2):**
+- Universe: point-in-time registry; historical tests use securities eligible *on each date*;
+  snapshot lists are never used for history. Discovery eligibility never implies trading
+  eligibility; execution needs an independently verified broker mapping. Do not invent coverage
+  or assume an instrument is available on eToro Demo. Phase 1 US; UK (phase 2), EU and major FX
+  (phase 3) are design-only until separately approved. **No cryptocurrencies.**
+- Pipeline: broad deterministic scan → per-track quantitative shortlist → agent research on the
+  shortlist only → deterministic decision engine (`ELIGIBLE`/`WATCHLIST`/`ABSTAIN`/`REJECTED`).
+  Scores are ranking heuristics, not forecasts. Agent agreement is not proof of an edge; an agent
+  never grants itself execution permission. Only a separately authorized SideDeck Demo execution
+  service may submit an eligible order.
+- Tracks DAY / SWING / POSITION keep separate capital, risk, horizon, exit rules and strategy
+  identity. A signal from one track never authorizes another; positions are never silently
+  converted between tracks. New tracks default to research-only/simulation-only. **DAY**
+  supersedes the earlier "no intraday" preference in R4 only as research/simulation; autonomous
+  DAY execution needs separate validation and release, and it is `BLOCKED_EXTERNAL` until an
+  approved intraday consolidated data source exists.
+- Scheduling: exchange calendar in America/New_York (never fixed UK clock times), holidays,
+  early closes, DST; persisted, non-overlapping, restart-safe jobs; per-track enable/disable.
+- Data and cost: capability matrix; free/approved sources first; never present delayed,
+  single-venue or incomplete data as real-time consolidated coverage; provider-specific budgets,
+  rate limits, retries and failure isolation. No authenticated polling or paid calls without an
+  applicable owner authorization and enforceable budget. Research workers never receive eToro
+  execution credentials or the owner's SSH private key.
+- Strategy admission (G3) per horizon: point-in-time universe, no look-ahead/survivorship,
+  execution timing, corporate actions, realistic costs, train/validation/locked OOS, walk-forward,
+  parameter stability, regimes, enough independent trades, benchmark, correlation and drawdown.
+  A single high-ranking experiment never promotes a strategy.
+- Dashboard: scanner status, per-track views, candidates, agent opinions/disagreements,
+  provenance/freshness, rejected/abstained candidates, risk by track, permission/lock state.
+  The owner may configure research schedules and shortlist sizes without code; changing
+  execution permissions, capital limits or autonomous scope still requires verified authorization.
+
+**Final acceptance (G5 extension):** discover from a genuinely sourced broad universe; evaluate
+per track; coordinate native agents, imported methodologies and quantitative strategies; reject
+unreliable approaches reproducibly; size with deterministic risk controls; execute, monitor and
+exit autonomously in eToro Demo under an owner-released policy; reconcile and attribute
+performance to strategy and agent; run with no ChatGPT/Claude/Codex in live decisions.
+
