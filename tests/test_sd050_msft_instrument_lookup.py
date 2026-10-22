@@ -73,10 +73,11 @@ def go(paths, opener, env=ENV):
 
 
 def test_exact_match_resolves_and_request_is_bounded(paths):
-    opener = Opener(Response({"items": [item(), item(instrumentId=7002,
-                                                       internalSymbolFull="MSFT.RTH")]}))
+    opener = Opener(Response({"items": [item(currency="USD"),
+                                        item(instrumentId=7002, internalSymbolFull="MSFT.RTH")]}))
     result = go(paths, opener)
     assert result["status"] == "RESOLVED" and result["instrument_id"] == 7001
+    assert set(result["verification"].values()) == {"VERIFIED"}
     assert result["conflicts_with_protected_baseline"] is False
     assert len(opener.requests) == 1
     url = urlsplit(opener.requests[0].full_url)
@@ -126,15 +127,41 @@ def test_preflight_refusals_send_nothing(paths, tmp_path):
 
 def test_missing_type_accepted_but_wrong_type_rejected():
     assert select_exact_match({"items": [item(instrumentType=None)]})["instrumentId"] == 7001
-    with pytest.raises(LookupRefused, match="not a stock"):
+    with pytest.raises(LookupRefused, match="instrument_type"):
         select_exact_match({"items": [item(instrumentType="Crypto")]})
 
 
+@pytest.mark.parametrize("changes,reason", [
+    ({"internalExchangeName": "LSE"}, "exchange"), ({"internalExchangeName": None}, "exchange"),
+    ({"isDelisted": True}, "listing_status"), ({"isDelisted": 0}, "listing_status"),
+    ({"isHiddenFromClient": True}, "visibility"), ({"instrumentType": "Crypto"},
+                                                    "instrument_type"),
+    ({"displayname": "Micro Strategy Fund"}, "issuer"), ({"currency": "EUR"}, "currency"),
+])
+def test_sd052_rejected_unique_candidate_is_retained_not_usable(paths, changes, reason):
+    result = go(paths, Opener(Response({"items": [item(**changes)]})))
+    assert result["status"] == "CANDIDATE_REJECTED" and reason in result["rejection_reason"]
+    with open(paths["evidence"], encoding="utf-8") as handle:
+        saved = json.load(handle)
+    assert saved["instrument_id"] == 7001 and saved["status"] == "CANDIDATE_REJECTED"
+    assert attempts_consumed(paths["budget"]) == 1
+
+
+def test_sd052_missing_flags_resolve_but_are_reported(paths):
+    result = go(paths, Opener(Response({"items": [item(isDelisted=None,
+                                                         instrumentType=None)]})))
+    assert result["status"] == "RESOLVED_PARTIALLY_VERIFIED" and result["instrument_id"] == 7001
+    assert result["unverified_fields"] == ["instrument_type", "listing_status", "currency"]
+    assert result["verification"]["exchange"] == "VERIFIED"
+    assert select_exact_match({"items": [item(instrumentType="Equity")]})["instrumentId"] == 7001
+    assert "user-key-222" not in json.dumps(result)
+
+
 def test_rejection_records_sanitized_diagnostics(paths):
-    result = go(paths, Opener(Response({"items": [item(internalExchangeName="LSE")]})))
+    result = go(paths, Opener(Response({"items": [item(), item(instrumentId=7002)]})))
     assert result["status"] == "FAILED_UNVERIFIED"
     diag = result["diagnostics"]
-    assert diag["exact_symbol_matches"] == 1
+    assert diag["exact_symbol_matches"] == 2
     assert diag["candidates"][0]["fields"]["instrumentId"] == "int"
     assert "7001" not in json.dumps(diag) and "530.1" not in json.dumps(diag)
 
@@ -148,7 +175,21 @@ def test_review2_consumed_or_unlisted_ids_never_send(paths):
             run_once(env=ENV, db_path=paths["db"], budget_path=paths["budget"],
                      evidence_path=paths["evidence"], opener_factory=lambda: opener,
                      authorization_id=auth, authorized_ids=allowed)
-    assert opener.requests == [] and lookup.AUTHORIZED_LOOKUP_IDS == frozenset()
+    assert opener.requests == [] and "SD-050" in lookup.EXHAUSTED_LOOKUP_IDS
+    assert not lookup.AUTHORIZED_LOOKUP_IDS & lookup.EXHAUSTED_LOOKUP_IDS
+
+
+def test_sd052_authorization_ledger_is_single_use_and_never_reset(paths):
+    from sidedeck.application.sd050_msft_instrument_lookup import record_authorization
+    record_authorization(TEST_ID, "one MSFT search GET", path=paths["budget"])
+    record_authorization(TEST_ID, "one MSFT search GET", path=paths["budget"])  # idempotent
+    assert attempts_consumed(paths["budget"]) == 0
+    go(paths, Opener(Response({"items": [item()]})))
+    assert attempts_consumed(paths["budget"]) == 1
+    with pytest.raises(LookupRefused, match="exhausted"):
+        record_authorization(TEST_ID, "again", path=paths["budget"])
+    with pytest.raises(LookupRefused, match="exhausted"):
+        record_authorization("SD-050", "again", path=paths["budget"] + "x")
 
 
 def test_review2_network_lock_and_budget_paths(paths):
@@ -164,7 +205,7 @@ def test_review2_network_lock_and_budget_paths(paths):
 
 
 def test_review2_listing_status_must_be_explicit():
-    with pytest.raises(LookupRefused, match="listing status"):
-        select_exact_match({"items": [item(isDelisted=None)]})
-    with pytest.raises(LookupRefused, match="Nasdaq"):
+    with pytest.raises(LookupRefused, match="listing_status"):
+        select_exact_match({"items": [item(isDelisted="no")]})
+    with pytest.raises(LookupRefused, match="exchange"):
         select_exact_match({"items": [item(internalExchangeName="Nasdaq Dubai")]})
