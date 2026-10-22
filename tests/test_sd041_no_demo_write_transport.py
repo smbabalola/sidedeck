@@ -82,8 +82,14 @@ def test_production_transport_factory_has_exactly_one_reviewed_caller():
         if path.relative_to(SRC) == Path("infrastructure/etoro_demo_write_transport.py"):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = {"production_transport_factory", "network_transport_enabled",
+                 "ProductionTransportFactory"}
         for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr in (
-                    "production_transport_factory", "network_transport_enabled"):
+            hit = ((isinstance(node, ast.Attribute) and node.attr in names)
+                   or (isinstance(node, ast.ImportFrom)
+                       and any(a.name in names or a.name == "*" for a in node.names)
+                       and (node.module or "").endswith("etoro_demo_write_transport"))
+                   or (isinstance(node, ast.Constant) and node.value in names))
+            if hit:
                 callers.add(str(path.relative_to(SRC)).replace("\\", "/"))
     assert callers == {"application/sd054_pilot_operator.py"}

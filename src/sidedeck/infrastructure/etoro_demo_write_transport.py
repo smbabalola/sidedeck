@@ -129,7 +129,7 @@ class EtoroDemoHttpTransport:
             raise BrokerExecutionDisabled("real urllib openers cannot be injected")
         active: Any = opener
         if active is None:
-            if not NETWORK_TRANSPORT_ENABLED:
+            if NETWORK_TRANSPORT_ENABLED is not True:
                 raise BrokerExecutionDisabled("network transport is locked in this phase")
             active = build_opener(ProxyHandler({}), _NoRedirect())  # pragma: no cover
         self.__headers = {"x-api-key": api_key, "x-user-key": user_key}
@@ -246,10 +246,27 @@ def network_transport_enabled() -> bool:
     return NETWORK_TRANSPORT_ENABLED is True
 
 
-def production_transport_factory(env: Mapping[str, str]) -> Any:
+class ProductionTransportFactory:
     """The single production construction path (used only by the SD-054 operator).
-    While the lock is False the constructor refuses; no opener is ever injected here."""
-    def factory(release: PilotRelease, ledger_path: str) -> EtoroDemoHttpTransport:
-        return EtoroDemoHttpTransport.from_environment(env, release=release,
+    ``validate`` has no side effects and runs before the single-use release is consumed.
+    No opener is ever injected here."""
+
+    def __init__(self, env: Mapping[str, str]) -> None:
+        self.__env = dict(env)
+
+    def __repr__(self) -> str:
+        return "ProductionTransportFactory(<credentials hidden>)"
+
+    def validate(self) -> None:
+        if not network_transport_enabled():
+            raise BrokerExecutionDisabled("network transport is locked in this phase")
+        require_execution_credentials(self.__env)
+
+    def __call__(self, release: PilotRelease, ledger_path: str) -> EtoroDemoHttpTransport:
+        self.validate()
+        return EtoroDemoHttpTransport.from_environment(self.__env, release=release,
                                                        ledger_path=ledger_path)
-    return factory
+
+
+def production_transport_factory(env: Mapping[str, str]) -> ProductionTransportFactory:
+    return ProductionTransportFactory(env)

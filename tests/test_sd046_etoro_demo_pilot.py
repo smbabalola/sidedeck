@@ -181,11 +181,14 @@ def test_rejected_open_is_clean_and_never_closes(rig):
 def test_lost_open_response_recovered_by_lookup_and_stays_halted(rig):
     rig.sim.lose_next_response = True
     result = rig.open()
-    assert result["result"] == "OPEN_FILLED_AWAITING_CLOSE_APPROVAL"
+    # SD-056 review: a lost acknowledgement is UNRESOLVED at once (lookup-only state kept),
+    # never "awaiting close approval" while the kill-switch blocks any approval.
+    assert result["result"] == UNRESOLVED and "acknowledgement lost" in result["reason"]
     assert result["kill_switch"] == "HALTED" and len(rig.writes()) == 1
-    blocked = rig.close()                       # halted: close refused, unresolved
-    assert blocked["result"] == UNRESOLVED and len(rig.writes()) == 1
-    assert blocked["sidedeck_open_positions"] == 1
+    assert result["sidedeck_open_positions"] == 1
+    with pytest.raises(PilotError, match="no verified"):
+        rig.pilot.close_request(str(uuid.uuid4()))
+    assert len(rig.writes()) == 1
 
 
 def test_open_not_terminal_within_budget_is_unresolved(rig):

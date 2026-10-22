@@ -73,7 +73,7 @@ Use the key whose public half is in `data/approval_allowed_signers` (the verifie
 `sidedeck_approval`, principal `owner@sidedeck`). This writes `data\sd053-msft-pilot-intent.digest.sig`. The digest file holds the
 64 hex characters with no newline.
 
-Then, during the run, two **separate** SD-033 approvals (namespace `sidedeck-paper-approval`):
+Then, during the run, two **separate** SD-033 approvals (namespace `sidedeck-etoro-pilot-approval`):
 1. **Open approval** — over the exact open request the preflight derives (instrument, units,
    limit, reference id); printed by the runner after a successful preflight.
 2. **Close approval** — over the exact full-close request of the lineage-verified position.

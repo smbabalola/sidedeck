@@ -430,7 +430,7 @@ def test_interrupted_open_is_recovered_never_resubmitted(keys, tmp_path):
     rig = HttpRig(keys, tmp_path, fault="timeout_after")
     try:
         result = rig.open()
-        assert result["result"] == "OPEN_FILLED_AWAITING_CLOSE_APPROVAL"
+        assert result["result"] == UNRESOLVED and "acknowledgement lost" in result["reason"]
         assert result["kill_switch"] == "HALTED" and len(rig.posts(DEMO_OPEN_PATH)) == 1
     finally:
         rig.shutdown()

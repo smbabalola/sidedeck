@@ -253,9 +253,9 @@ class EtoroDemoPilot:
         if datetime.now(timezone.utc) - quote.observed_at > MAX_QUOTE_AGE_AT_OPEN:
             return self._result("ABORTED_PREFLIGHT", "open", reason="reference quote too old")
         try:
-            self._desk.submit_open(intent_id=intent_id, strategy=self._scope.strategy,
-                                   request=request, quote=quote,
-                                   eligibility=self._eligibility)
+            state = self._desk.submit_open(intent_id=intent_id, strategy=self._scope.strategy,
+                                           request=request, quote=quote,
+                                           eligibility=self._eligibility)
             outcome = None
             for _ in range(ROUTE_CAPS["lookup"]):
                 outcome = self._desk.refresh_open(request.reference_id)
@@ -263,6 +263,9 @@ class EtoroDemoPilot:
                     break
         except Exception as exc:  # any kill criterion after a write attempt
             return self._unresolved("open", type(exc).__name__)
+        if state == "OUTCOME_UNKNOWN":
+            return self._unresolved("open", "open acknowledgement lost; lookup-only state "
+                                    "recorded, operator must reconcile")
         if outcome is None:
             return self._unresolved("open", "order not found after submission")
         if not outcome.terminal:
@@ -325,7 +328,7 @@ class EtoroDemoPilot:
             report = self._desk.reconcile(final, datetime.now(timezone.utc))
         except Exception as exc:
             return self._unresolved("close", type(exc).__name__)
-        if report["status"] != "MATCHED" or self._sidedeck_open():
+        if report["status"] != "MATCHED" or self._sidedeck_open() or final.pending_orders:
             return self._unresolved("close", "final reconciliation not MATCHED")
         accounting: dict[str, Any] = {"entry": self._entry, "close_price": "NOT_REPORTED "
                                       "(documented close-info has no price)"}

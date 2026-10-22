@@ -1,7 +1,8 @@
 # SD-057 — Consolidated release request: first eToro Demo MSFT trade
 
 **Status: DRAFT — not yet presentable.** Prerequisites outstanding: the owner's SSH signature
-over the pinned intent (SD-055) and closure of the independent transport review (SD-056).
+over the pinned intent (SD-055). The independent transport review (SD-056) is closed:
+0 critical, 0 high; 5 medium and the actionable low findings fixed with tests.
 This document is **not** an authorization. `ETORO_DEMO_EXECUTION_RELEASE=NO_GO`,
 `broker_execution=DISABLED`, `NETWORK_TRANSPORT_ENABLED=False`.
 
@@ -39,8 +40,8 @@ budget). No write retries; `x-request-id` = reference id; no redirects; proxies 
 * **Protected baseline:** the 4 pre-existing Demo positions must reconcile MATCHED before the
   open and at the end; any baseline position is refused as a target; ownership only through
   referenceId → orderId → positionId lineage.
-* **Approvals:** open and close each need a separate owner signature (`sidedeck-paper-approval`)
-  over the exact request digest; open approval TTL 5 min (quote freshness), close 30 min.
+* **Approvals:** open and close each need a separate owner signature (`sidedeck-etoro-pilot-approval`)
+  over the exact request digest; open approval TTL 5 min (quote freshness); close TTL 30 min clipped to the window end; the open is refused unless ≥ 20 min of the signed window remain; signer key pinned (SHA-256 `600a7f7e…0f3`).
 * **Kill-switch / recovery:** any unknown acknowledgement, lost response, non-terminal or
   inconsistent outcome, declined or failed close → `UNRESOLVED_OPERATOR_INTERVENTION_REQUIRED`,
   kill-switch tripped, true state retained; recovery is lookup-only, never a resubmission.
@@ -54,7 +55,8 @@ budget). No write retries; `x-request-id` = reference id; no redirects; proxies 
    ```powershell
    Set-Location "C:\Users\smbab\OneDrive\Documents\Projects\sidedeck\sidedeck"; .\.venv\Scripts\python.exe -m sidedeck.application.sd054_pilot_operator run --confirm-owner-release
    ```
-   and signs the printed open (then close) digest in a second PowerShell window:
-   `ssh-keygen -Y sign -f "$HOME\.ssh\sidedeck_approval" -n sidedeck-paper-approval "<printed digest file>"`.
+   and signs each printed open (then close) approval in a second PowerShell window using the
+   exact `sign_in_powershell` command the runner prints: it re-checks the digest file against
+   the on-screen digest before signing (namespace `sidedeck-etoro-pilot-approval`).
 3. Immediately after: lock re-engaged by a follow-up commit; report, accounting and audit
    recorded (SD-062).

@@ -108,7 +108,7 @@ class Rig:
         self.prompts.append((label, scope))
         if label in self.decline:
             return ""
-        return sign(self.keys, digest, "sidedeck-paper-approval")
+        return sign(self.keys, digest, operator.APPROVAL_NAMESPACE)
 
     def run(self, release_signature=None, baseline_status="MATCHED"):
         signature = release_signature or sign(self.keys, self.intent.digest(), PILOT_NAMESPACE)
@@ -202,6 +202,10 @@ def signed_data(keys, tmp_path, monkeypatch):
     monkeypatch.setattr(sd053, "INTENT_PATH", data / "sd053-msft-pilot-intent.json")
     record = sd053.prepare(sd053.INTENT_PATH, frozenset())
     monkeypatch.setattr(operator, "PINNED_INTENT_DIGEST", record["digest"])
+    import hashlib
+    blob = (keys / "owner.pub").read_text().split()[1]
+    monkeypatch.setattr(operator, "PINNED_SIGNER_KEY_SHA256",
+                        hashlib.sha256(blob.encode("ascii")).hexdigest())
     return data, record
 
 
@@ -288,3 +292,95 @@ def test_terminal_partial_ioc_fill_closes_exactly_the_filled_units(keys, tmp_pat
     assert report["result"] == "COMPLETE" and len(rig.posts()) == 2
     entry = report["steps"][-1]["accounting"]["entry"]
     assert Decimal(entry["units"]) == Decimal("0.2")
+
+
+
+# ---- independent review fixes (SD-056) ---------------------------------------------
+
+def test_m1_interruption_after_open_trips_kill_switch_and_reports_unresolved(keys, tmp_path):
+    rig = Rig(keys, tmp_path)
+
+    def approve(label, digest, scope):
+        if label == "close":
+            raise KeyboardInterrupt
+        return sign(keys, digest, operator.APPROVAL_NAMESPACE)
+    rig.approve = approve
+    with pytest.raises(KeyboardInterrupt):
+        rig.run()
+    saved = json.loads((tmp_path / "op" / "report.json").read_text(encoding="utf-8"))
+    assert saved["result"] == UNRESOLVED and "may be OPEN" in saved["reason"]
+    from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch
+    controls = ApprovalKillSwitch(str(tmp_path / "op" / "controls.sqlite3"), lambda *a: False)
+    try:
+        assert controls.is_halted()
+    finally:
+        controls.close()
+
+
+def test_m2_factory_validation_runs_before_the_release_is_consumed(keys, tmp_path):
+    rig = Rig(keys, tmp_path)
+
+    class Locked:
+        def validate(self):
+            raise RuntimeError("locked")
+
+        def __call__(self, release, ledger):
+            raise AssertionError("must not be reached")
+    good = rig.factory
+    rig.factory = Locked()
+    with pytest.raises(RuntimeError, match="locked"):
+        rig.run()
+    assert rig.opener.requests == []
+    rig.factory = good
+    assert rig.run()["result"] == "COMPLETE"          # the release was not consumed
+
+
+def test_m3_open_refused_when_too_little_window_remains(keys, tmp_path):
+    rig = Rig(keys, tmp_path)
+    now = datetime.now(timezone.utc)
+    rig.intent = make_intent(not_before=now - timedelta(minutes=1),
+                             expires_at=now + timedelta(minutes=15))
+    report = rig.run()
+    assert report["result"] == "ABORTED_WINDOW_TOO_SHORT" and rig.posts() == []
+    assert rig.prompts == []
+
+
+def test_m5_generic_paper_approval_signature_is_not_accepted(keys, tmp_path):
+    rig = Rig(keys, tmp_path)
+    rig.approve = lambda label, digest, scope: sign(keys, digest, "sidedeck-paper-approval")
+    assert rig.run()["result"] == "ABORTED_OPEN_NOT_APPROVED" and rig.posts() == []
+
+
+def test_pinned_signer_refuses_other_or_extra_keys(keys, signed_data):
+    data, _ = signed_data
+    signers = data / "approval_allowed_signers"
+    operator.require_pinned_signer(signers)
+    other = (keys / "other.pub").read_text().split()
+    extra = f"owner@sidedeck {other[0]} {other[1]}"
+    signers.write_text(signers.read_text() + extra + chr(10))
+    with pytest.raises(operator.OperatorRefused):
+        operator.require_pinned_signer(signers)
+    signers.write_text(extra + chr(10))
+    with pytest.raises(operator.OperatorRefused):
+        operator.require_pinned_signer(signers)
+
+
+def test_console_approval_command_checks_digest_and_drops_stale_signature(signed_data,
+                                                                          monkeypatch, capsys):
+    data, _ = signed_data
+    folder = data / "sd054"
+    folder.mkdir()
+    (folder / "open-approval.digest.sig").write_text("stale", encoding="utf-8")
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+    assert operator.console_approval("open", "ab" * 32, "scope") == ""
+    out = json.loads(capsys.readouterr().out)
+    assert "-ceq '" + "ab" * 32 + "'" in out["sign_in_powershell"]
+    assert operator.APPROVAL_NAMESPACE in out["sign_in_powershell"]
+
+
+def test_production_factory_validate_refuses_while_locked():
+    from sidedeck.application.sd036_etoro_demo_desk import BrokerExecutionDisabled
+    factory = transport_module.production_transport_factory(ENV)
+    with pytest.raises(BrokerExecutionDisabled, match="locked"):
+        factory.validate()
+    assert "synthetic" not in repr(factory)

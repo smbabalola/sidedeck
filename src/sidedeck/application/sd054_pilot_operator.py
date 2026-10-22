@@ -8,7 +8,8 @@ Sequence (every step fails closed; nothing is retried):
 3. Preflight (reads only): baseline MATCHED live, Demo eligibility, fresh realtime ask,
    derived limit; instrument type / currency evidence reported.
 4. Print the exact open request and its SD-033 digest; the owner signs it
-   (namespace ``sidedeck-paper-approval``). Open, then confirm through lineage lookups.
+   (dedicated namespace ``sidedeck-etoro-pilot-approval``). Open, then confirm through
+   lineage lookups.
 5. Print the exact full-close request; the owner signs it separately. Close, confirm, and
    reconcile: ``COMPLETE`` only if the close FILLED, the final reconcile is MATCHED and no
    SideDeck position remains. Otherwise ``UNRESOLVED_OPERATOR_INTERVENTION_REQUIRED`` with
@@ -35,7 +36,7 @@ from sidedeck.application.sd033_approval_killswitch import (
     ApprovalError, ApprovalKillSwitch, intent_digest,
 )
 from sidedeck.application.sd036_etoro_demo_desk import (
-    DemoDeskPolicy, DemoRateBudget, EtoroDemoDesk, EtoroDemoLineage, EtoroDemoTransport,
+    DemoDeskPolicy, DemoRateBudget, EtoroDemoDesk, EtoroDemoLineage,
 )
 from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifier
 from sidedeck.application.sd046_etoro_demo_pilot import (
@@ -49,10 +50,14 @@ from sidedeck.domain.etoro_demo_books import BaselinePosition
 REQUESTER = "sidedeck-pilot-runner"
 OPEN_APPROVAL_TTL = timedelta(minutes=5)      # the fresh quote must still be <= 5 min old
 CLOSE_APPROVAL_TTL = timedelta(minutes=30)
+# Enough signed window left after the open for the close prompt and 3 close-side requests.
+MIN_WINDOW_REMAINING_AT_OPEN = timedelta(minutes=20)
+# Dedicated namespace: a pilot approval signature is unusable for any other SideDeck approval.
+APPROVAL_NAMESPACE = "sidedeck-etoro-pilot-approval"
 READY = "READY_FOR_OPEN_APPROVAL"
 OPENED = "OPEN_FILLED_AWAITING_CLOSE_APPROVAL"
 
-TransportFactory = Callable[[PilotRelease, str], EtoroDemoTransport]
+TransportFactory = Callable[[PilotRelease, str], Any]   # desk re-checks the transport
 # (label, digest, scope) -> SSH signature text, or "" to decline.
 ApprovalPrompt = Callable[[str, str, str], str]
 
@@ -93,7 +98,8 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
               await_approval: ApprovalPrompt, paths: OperatorPaths) -> dict[str, Any]:
     paths.root.mkdir(parents=True, exist_ok=True)
     release_verifier = SshSignatureVerifier(signers_path, principal, namespace=PILOT_NAMESPACE)
-    approval_verifier = SshSignatureVerifier(signers_path, principal)
+    approval_verifier = SshSignatureVerifier(signers_path, principal,
+                                             namespace=APPROVAL_NAMESPACE)
     controls = ApprovalKillSwitch(paths.controls, approval_verifier)
     budget = PilotBudget(paths.budget)
     store = PilotReleaseStore(paths.releases)
@@ -106,7 +112,11 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
     stores: list[Any] = [controls, budget, store, lineage, outbox, rate]
     report: dict[str, Any] = {"pilot_id": intent.pilot_id, "intent_digest": intent.digest(),
                               "execution_release": "NO_GO", "steps": []}
+    wrote = False
     try:
+        validate = getattr(transport_factory, "validate", None)
+        if callable(validate):
+            validate()          # lock + credentials, before the single-use release is consumed
         gates = ReleaseGates.from_runtime(env=env, controls=controls, pilot_budget=budget,
                                           baseline_status=baseline_status,
                                           signers_path=signers_path)
@@ -129,6 +139,8 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
         if step["result"] != READY:
             return _finish(report, step["result"], paths)
 
+        if intent.expires_at - datetime.now(timezone.utc) < MIN_WINDOW_REMAINING_AT_OPEN:
+            return _finish(report, "ABORTED_WINDOW_TOO_SHORT", paths)        # nothing written
         request, scope = pilot.open_approval_scope()
         open_id = f"sd054-open-{intent.pilot_id}"
         report["open_request"] = {"instrument_id": request.instrument_id,
@@ -138,6 +150,9 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
         if not _approve(controls, intent_id=open_id, scope=scope, principal=principal,
                         signature=signature, ttl=OPEN_APPROVAL_TTL):
             return _finish(report, "ABORTED_OPEN_NOT_APPROVED", paths)   # nothing written
+        if intent.expires_at - datetime.now(timezone.utc) < MIN_WINDOW_REMAINING_AT_OPEN:
+            return _finish(report, "ABORTED_WINDOW_TOO_SHORT", paths)        # nothing written
+        wrote = True
         step = pilot.open_phase(intent_id=open_id)
         report["steps"].append(step)
         if step["result"] != OPENED:
@@ -146,8 +161,9 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
         close_request, close_scope = pilot.close_request(str(uuid.uuid4()))
         close_id = f"sd054-close-{intent.pilot_id}"
         signature = await_approval("close", intent_digest(close_id, close_scope), close_scope)
+        ttl = min(CLOSE_APPROVAL_TTL, intent.expires_at - datetime.now(timezone.utc))
         if not _approve(controls, intent_id=close_id, scope=close_scope, principal=principal,
-                        signature=signature, ttl=CLOSE_APPROVAL_TTL):
+                        signature=signature, ttl=ttl):
             if not controls.is_halted():
                 controls.trip(PILOT_OPERATOR, "close not approved; pilot position remains open")
             return _finish(report, UNRESOLVED, paths,
@@ -155,6 +171,13 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
         step = pilot.close_phase(intent_id=close_id, request=close_request)
         report["steps"].append(step)
         return _finish(report, step["result"], paths)
+    except BaseException as exc:
+        if wrote:      # an order may exist: keep the true state, never look like "nothing"
+            if not controls.is_halted():
+                controls.trip(PILOT_OPERATOR, f"pilot interrupted: {type(exc).__name__}")
+            _finish(report, UNRESOLVED, paths, reason=f"interrupted after the open write "
+                    f"({type(exc).__name__}); the pilot position may be OPEN")
+        raise
     finally:
         for item in reversed(stores):
             closer = getattr(item, "close", None)
@@ -187,6 +210,20 @@ def recorded_baseline_status(ledger_path: str) -> str:
 # ---- production entry point (SD-053 MSFT pilot) -------------------------------------
 PINNED_INTENT_DIGEST = "71e111b3a8806dc9b8e59d96ce1ef6e6a0b64dc2b00363465244acccaad09a62"
 PRINCIPAL = "owner@sidedeck"
+# SHA-256 of the owner's ssh-ed25519 public key blob in data/approval_allowed_signers
+# (verified 2026-10-22). A different or additional signer key is refused.
+PINNED_SIGNER_KEY_SHA256 = "600a7f7e6597cfa2f87b1f3f9891de224c4e2a18b9d534da62888158ebbae0f3"
+
+
+def require_pinned_signer(path: Path) -> None:
+    import hashlib
+    lines = [line.split() for line in path.read_text(encoding="utf-8").splitlines()
+             if line.strip() and not line.lstrip().startswith("#")]
+    if (len(lines) != 1 or len(lines[0]) < 3 or lines[0][0] != PRINCIPAL
+            or lines[0][1] != "ssh-ed25519"
+            or hashlib.sha256(lines[0][2].encode("ascii")).hexdigest()
+            != PINNED_SIGNER_KEY_SHA256):
+        raise OperatorRefused("allowed_signers does not hold exactly the pinned owner key")
 
 
 def _data_dir() -> Path:
@@ -215,8 +252,9 @@ def load_signed_intent() -> tuple[PilotIntent, str]:
 def verify_release_signature() -> dict[str, Any]:
     """Offline: the owner's signature over the pinned intent. Consumes nothing."""
     intent, signature = load_signed_intent()
-    verifier = SshSignatureVerifier(str(_data_dir() / "approval_allowed_signers"), PRINCIPAL,
-                                    namespace=PILOT_NAMESPACE)
+    signers = _data_dir() / "approval_allowed_signers"
+    require_pinned_signer(signers)
+    verifier = SshSignatureVerifier(str(signers), PRINCIPAL, namespace=PILOT_NAMESPACE)
     now = datetime.now(timezone.utc)
     return {"intent_digest": intent.digest(), "principal": PRINCIPAL,
             "namespace": PILOT_NAMESPACE,
@@ -231,12 +269,18 @@ def console_approval(label: str, digest: str, scope: str) -> str:
     folder = _data_dir() / "sd054"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{label}-approval.digest"
-    path.write_bytes(digest.encode("ascii"))
-    print(json.dumps({"approval": label, "scope": scope, "digest": digest,
-                      "sign_with": "ssh-keygen -Y sign -f \"$HOME\\.ssh\\sidedeck_approval\" "
-                                   f"-n sidedeck-paper-approval \"{path}\""}, indent=2))
-    answer = input(f"Sign the {label} digest, then press Enter (type NO to decline): ")
     signature = path.with_name(path.name + ".sig")
+    if signature.exists():
+        signature.unlink()                      # never pick up a stale signature
+    path.write_bytes(digest.encode("ascii"))
+    # The command re-checks the file against the digest shown here before signing, so a
+    # swapped file is never signed; the namespace is dedicated to pilot approvals.
+    command = (f"if ((Get-Content -Raw '{path}') -ceq '{digest}') {{ ssh-keygen -Y sign -f "
+               f"\"$HOME\\.ssh\\sidedeck_approval\" -n {APPROVAL_NAMESPACE} '{path}' }} "
+               "else { 'DIGEST MISMATCH - do not sign' }")
+    print(json.dumps({"approval": label, "scope": scope, "digest": digest,
+                      "sign_in_powershell": command}, indent=2))
+    answer = input(f"Sign the {label} digest, then press Enter (type NO to decline): ")
     if answer.strip().upper() == "NO" or not signature.is_file():
         return ""
     return signature.read_text(encoding="utf-8")
@@ -269,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
             return 5
         intent, signature = load_signed_intent()
         data = _data_dir()
+        require_pinned_signer(data / "approval_allowed_signers")
         env = lookup.load_local_credentials(str(data.parent / ".env"))
         baseline = EtoroDemoStore(str(data / "etoro_demo.sqlite3")).baseline()
         report = run_pilot(
@@ -278,7 +323,11 @@ def main(argv: list[str] | None = None) -> int:
             transport_factory=wt.production_transport_factory(env),
             await_approval=console_approval, paths=OperatorPaths(data / "sd054"))
     except Exception as exc:
-        print(json.dumps({"status": "REFUSED", "reason": f"{type(exc).__name__}: {exc}",
+        report_path = _data_dir() / "sd054" / "report.json"
+        print(json.dumps({"status": "REFUSED_OR_INTERRUPTED",
+                          "reason": f"{type(exc).__name__}: {exc}",
+                          "see_report": str(report_path) if report_path.is_file() else None,
+                          "warning": "if see_report is set, read it: an order may exist",
                           "execution_release": "NO_GO"}, indent=2))
         return 5
     print(json.dumps(report, indent=2, default=str))

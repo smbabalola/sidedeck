@@ -144,7 +144,7 @@ SideDeck position. Digest `71e111b3a8806dc9b8e59d96ce1ef6e6a0b64dc2b00363465244a
 
 **Owner signing:** key `$HOME\.ssh\sidedeck_approval`, principal `owner@sidedeck`; release
 namespace `sidedeck-etoro-pilot-release` over `data\sd053-msft-pilot-intent.digest`; per-order
-open/close approvals in `sidedeck-paper-approval`. Codex/Claude never create, hold or use the
+open/close approvals in `sidedeck-etoro-pilot-approval`. Codex/Claude never create, hold or use the
 owner's private key and never bypass SSH verification. A signature alone does not enable trading.
 
 **Release boundary:** the order-network lock lift and any authenticated order request require one
