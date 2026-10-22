@@ -80,3 +80,18 @@ Then, during the run, two **separate** SD-033 approvals (namespace `sidedeck-pap
 
 A signed release does not unlock the order transport; that requires the separate reviewed
 lock-lift commit and the owner's explicit execution authorization.
+
+## SD-054 — supervised operator runner (offline, locked)
+
+`sidedeck.application.sd054_pilot_operator.run_pilot` composes the whole pilot: signed release
+and runtime gates → desk (policy equal to the intent) → preflight → **open approval prompt**
+(digest of the exact derived request; 5-minute TTL, matching the quote-age limit) → open →
+**close approval prompt** → full close → final reconcile. Declining the open sends no order;
+declining the close leaves the position OPEN, trips the kill-switch and reports
+`UNRESOLVED_OPERATOR_INTERVENTION_REQUIRED`.
+
+The network transport is injected (`transport_factory`), so no `src` module constructs the HTTP
+order transport and `main()` refuses with `REFUSED_LOCKED` (no secret read, release not
+consumed). The production factory, interactive signing prompts and
+`NETWORK_TRANSPORT_ENABLED=True` ship together in one reviewed lock-lift commit, after an
+independent security review and only with the owner's explicit execution authorization.
