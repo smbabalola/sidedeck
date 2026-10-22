@@ -69,8 +69,8 @@ Get-Content data\sd053-msft-pilot-intent.json
 ssh-keygen -Y sign -f "$HOME\.ssh\id_ed25519" -n sidedeck-etoro-pilot-release data\sd053-msft-pilot-intent.digest
 ```
 
-Use the key whose public half is in `data/approval_allowed_signers` (adjust `-f` if it is not
-`id_ed25519`). This writes `data\sd053-msft-pilot-intent.digest.sig`. The digest file holds the
+Use the key whose public half is in `data/approval_allowed_signers` (the verified key is
+`sidedeck_approval`, principal `owner@sidedeck`). This writes `data\sd053-msft-pilot-intent.digest.sig`. The digest file holds the
 64 hex characters with no newline.
 
 Then, during the run, two **separate** SD-033 approvals (namespace `sidedeck-paper-approval`):
