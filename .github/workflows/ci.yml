@@ -40,7 +40,7 @@ jobs:
       - run: python -m alembic upgrade head
       - name: Build read-only dashboard
         working-directory: web
-        run: npm install --no-package-lock --ignore-scripts && npm run build
+        run: npm ci --ignore-scripts && npm run build
       - name: Dashboard unit tests
         working-directory: web
         run: npm test

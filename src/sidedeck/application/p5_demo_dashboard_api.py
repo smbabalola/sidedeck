@@ -18,6 +18,7 @@ from sidedeck.application.sd014_strategy_engine import catalogue
 from sidedeck.application.sd036_etoro_demo_desk import etoro_demo_status
 from sidedeck.application.sd073_market_tracks_api import market_tracks_summary
 from sidedeck.application.sd082_scan_snapshot import scan_snapshot_summary
+from sidedeck.application.sd086_ops_api import authorization_ledger_summary, track_ledgers_summary
 
 
 def baseline_summary(db_path: str) -> dict[str, Any]:
@@ -275,7 +276,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                  strategy_paths: tuple[str, ...] = (), audit_paths: tuple[str, ...] = (),
                  release_gate_path: str | None = None, universe_path: str | None = None,
                  pilot_path: str | None = None,
-                 scan_path: str | None = None) -> type[BaseHTTPRequestHandler]:
+                 scan_path: str | None = None, authorization_ledger: str | None = None,
+                 ledger_dir: str | None = None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.headers.get("Host") not in ("127.0.0.1:8765", "localhost:8765") or urlsplit(self.path).query:
@@ -297,6 +299,10 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = market_tracks_summary(universe_path, pilot_path)
                 elif route == "/api/market/scan":
                     data = scan_snapshot_summary(scan_path)
+                elif route == "/api/ops/authorizations":
+                    data = authorization_ledger_summary(authorization_ledger)
+                elif route == "/api/portfolio/ledgers":
+                    data = track_ledgers_summary(ledger_dir)
                 else:
                     self.send_error(404)
                     return
@@ -334,11 +340,14 @@ def main() -> int:
     p.add_argument("--universe-summary", default=None)
     p.add_argument("--price-pilot-summary", default=None)
     p.add_argument("--scan-snapshot", default=None)
+    p.add_argument("--authorization-ledger", default="data/data-authorization-ledger.sqlite3")
+    p.add_argument("--simulation-ledgers", default=None)
     a = p.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research,
                                                                      tuple(a.strategy_research), tuple(a.strategy_audit), a.release_gate,
                                                                      a.universe_summary, a.price_pilot_summary,
-                                                                     a.scan_snapshot))
+                                                                     a.scan_snapshot, a.authorization_ledger,
+                                                                     a.simulation_ledgers))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()
