@@ -19,10 +19,14 @@ Rules (all fail closed: any error means "locked"):
 * **Expiry:** ``not_before <= now < expires_at`` at every check, independently of any later
   re-lock commit.
 * **Audit:** every activation, check refusal and revocation is appended to a hash-chained
-  SQLite ledger; ``verify_chain`` detects any edit or mid-chain deletion. **Limitation:**
-  truncating the newest rows leaves a valid prefix, so a hidden revocation needs an external
-  anchor (not yet built); short signed windows (8 h / 7 days) bound that exposure.
+  SQLite ledger mirrored by an independent anchor file (count, head hash, revoked ids);
+  edits, deletions and truncation fail closed, and a revocation in either store holds.
   Revocation is always allowed (it only reduces privilege) and is permanent.
+* **Usage:** every authorized request is counted persistently against the signed caps
+  (survives restarts); a write reference id is single-use (no replay / duplicate order).
+* **Threat model:** local anchoring defeats accidental or partial tampering and log
+  truncation; an attacker able to rewrite *both* the ledger and the anchor consistently is
+  bounded only by the short signed windows (8 h / 7 days) and the per-grant caps.
 
 This module grants nothing on its own and is not yet consulted by the order transport;
 wiring it in (replacing ``UNLOCKED_PILOT_DIGEST``) is a separate reviewed change.
@@ -31,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import uuid
@@ -153,11 +158,20 @@ def require_pinned_signer(path: Path, principal: str, key_sha256: str) -> None:
 
 
 class GrantLedger:
-    """Append-only, hash-chained audit ledger of grant events."""
+    """Append-only, hash-chained audit ledger of grant events with an independent anchor.
 
-    def __init__(self, path: str) -> None:
+    The anchor is a separate JSON file (keep it outside the repository and data folder)
+    mirroring the ledger's event count, head hash and every revoked grant id. A ledger that
+    was truncated, replaced or deleted no longer matches its anchor and fails closed; a
+    revocation recorded in either store stays effective (deny-by-default union).
+    """
+
+    def __init__(self, path: str, *, anchor_path: str) -> None:
         if path.strip() in ("", ":memory:") or path.startswith("file:"):
             raise GrantRefused("the grant ledger must be a durable file")
+        if not anchor_path or Path(anchor_path).resolve() == Path(path).resolve():
+            raise GrantRefused("the grant ledger needs a separate anchor file")
+        self._anchor = Path(anchor_path)
         self._db = sqlite3.connect(Path(path), isolation_level=None)
         self._db.execute("CREATE TABLE IF NOT EXISTS unlock_grant_events (seq INTEGER PRIMARY "
                          "KEY AUTOINCREMENT, at TEXT NOT NULL, grant_id TEXT NOT NULL, "
@@ -173,23 +187,83 @@ class GrantLedger:
         return hashlib.sha256("\x1f".join((prev, at, grant_id, grant_digest, event, detail))
                               .encode("utf-8")).hexdigest()
 
-    def append(self, grant_id: str, grant_digest: str, event: str, detail: str = "") -> None:
+    # ---- anchor ---------------------------------------------------------------------
+    def _read_anchor(self) -> dict[str, Any] | None:
+        if not self._anchor.exists():
+            return None
+        try:
+            data = json.loads(self._anchor.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise GrantRefused("grant anchor is unreadable") from None
+        if (not isinstance(data, dict) or type(data.get("count")) is not int
+                or not isinstance(data.get("head"), str)
+                or not isinstance(data.get("revoked"), list)):
+            raise GrantRefused("grant anchor is malformed")
+        return data
+
+    def _write_anchor(self, count: int, head: str, revoked: set[str]) -> None:
+        self._anchor.parent.mkdir(parents=True, exist_ok=True)
+        temp = self._anchor.with_name(self._anchor.name + ".tmp")
+        temp.write_text(json.dumps({"count": count, "head": head,
+                                    "revoked": sorted(revoked)}), encoding="utf-8")
+        os.replace(temp, self._anchor)
+
+    def _head(self) -> tuple[int, str]:
+        row = self._db.execute("SELECT seq, hash FROM unlock_grant_events ORDER BY seq DESC "
+                               "LIMIT 1").fetchone()
+        return (0, "0" * 64) if row is None else (int(row[0]), str(row[1]))
+
+    # ---- writes ---------------------------------------------------------------------
+    def _insert(self, grant_id: str, grant_digest: str, event: str, detail: str) -> None:
+        _, prev = self._head()
+        at = datetime.now(timezone.utc).isoformat()
+        self._db.execute("INSERT INTO unlock_grant_events (at, grant_id, grant_digest, "
+                         "event, detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (at, grant_id, grant_digest, event, detail, prev,
+                          self._hash(prev, at, grant_id, grant_digest, event, detail)))
+
+    def _transaction(self, body: Callable[[], None]) -> None:
         self._db.execute("BEGIN IMMEDIATE")
         try:
-            row = self._db.execute("SELECT hash FROM unlock_grant_events ORDER BY seq DESC "
-                                   "LIMIT 1").fetchone()
-            prev = "0" * 64 if row is None else str(row[0])
-            at = datetime.now(timezone.utc).isoformat()
-            self._db.execute("INSERT INTO unlock_grant_events (at, grant_id, grant_digest, "
-                             "event, detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                             (at, grant_id, grant_digest, event, detail, prev,
-                              self._hash(prev, at, grant_id, grant_digest, event, detail)))
+            if not self._consistent():
+                raise GrantRefused("grant audit ledger failed its integrity check")
+            body()
+            anchor = self._read_anchor()
+            revoked = set(anchor["revoked"]) if anchor else set()
+            revoked |= {g for g, e, _ in self.events() if e == "REVOKED"}
+            count, head = self._head()
+            self._write_anchor(count, head, revoked)
             self._db.execute("COMMIT")
         except BaseException:
             if self._db.in_transaction:
                 self._db.execute("ROLLBACK")
             raise
 
+    def append(self, grant_id: str, grant_digest: str, event: str, detail: str = "") -> None:
+        self._transaction(lambda: self._insert(grant_id, grant_digest, event, detail))
+
+    def reserve_use(self, grant: "UnlockGrant", *, write: bool, reference_id: str) -> None:
+        """Count one request against the grant's signed caps, persistently and atomically.
+        A write reference may be used once only (no replay, no duplicate order)."""
+        if not isinstance(reference_id, str) or not reference_id:
+            raise GrantRefused("a reference id is required")
+
+        def body() -> None:
+            uses = [(e, d) for g, e, d in self.events(grant.grant_id)
+                    if e in ("USE_READ", "USE_WRITE")]
+            if len(uses) >= grant.max_requests:
+                raise GrantRefused("grant request cap exhausted")
+            if write:
+                writes = [d for e, d in uses if e == "USE_WRITE"]
+                if len(writes) >= grant.max_writes:
+                    raise GrantRefused("grant write cap exhausted")
+                if reference_id in writes:
+                    raise GrantRefused("write reference already used (replay refused)")
+            self._insert(grant.grant_id, grant.digest(), "USE_WRITE" if write else "USE_READ",
+                         reference_id)
+        self._transaction(body)
+
+    # ---- reads ----------------------------------------------------------------------
     def events(self, grant_id: str | None = None) -> list[tuple[str, str, str]]:
         rows = self._db.execute("SELECT grant_id, event, detail FROM unlock_grant_events "
                                 "ORDER BY seq").fetchall()
@@ -197,9 +271,11 @@ class GrantLedger:
                 if grant_id is None or r[0] == grant_id]
 
     def revoked(self, grant_id: str) -> bool:
-        return any(event == "REVOKED" for _, event, _ in self.events(grant_id))
+        anchor = self._read_anchor()
+        return (any(event == "REVOKED" for _, event, _ in self.events(grant_id))
+                or (anchor is not None and grant_id in anchor["revoked"]))
 
-    def verify_chain(self) -> bool:
+    def _chain_ok(self) -> bool:
         prev, expected_seq = "0" * 64, 1
         for seq, at, gid, gdig, event, detail, prev_hash, digest in self._db.execute(
                 "SELECT seq, at, grant_id, grant_digest, event, detail, prev_hash, hash FROM "
@@ -210,6 +286,22 @@ class GrantLedger:
             prev, expected_seq = digest, expected_seq + 1
         return True
 
+    def _consistent(self) -> bool:
+        if not self._chain_ok():
+            return False
+        count, head = self._head()
+        anchor = self._read_anchor()
+        if anchor is None:
+            return count == 0                    # a populated ledger without its anchor
+        return bool(anchor["count"] == count and anchor["head"] == head)
+
+    def verify_chain(self) -> bool:
+        """Chain intact AND equal to the independent anchor (detects truncation)."""
+        try:
+            return self._consistent()
+        except GrantRefused:
+            return False
+
 
 class UnlockAuthority:
     """Decides whether the order network may open for one subject digest, right now."""
@@ -219,33 +311,118 @@ class UnlockAuthority:
             raise GrantRefused("grants must be verified in the unlock-grant namespace")
         self._verify, self._principal, self._ledger = verifier, principal, ledger
 
+    def _validate(self, document: Any, signature: str, subject_digest: str,
+                  moment: datetime) -> UnlockGrant:
+        grant = UnlockGrant.from_document(document)
+        if grant.issued_by != self._principal:
+            raise GrantRefused("grant must be issued by the owner principal")
+        if not self._ledger.verify_chain():
+            raise GrantRefused("grant audit ledger failed its integrity check")
+        if self._ledger.revoked(grant.grant_id):
+            raise GrantRefused("grant has been revoked")
+        if not self._verify(self._principal, grant.digest(), signature):
+            raise GrantRefused("owner signature does not verify for this exact grant")
+        if grant.subject_digest != subject_digest:
+            raise GrantRefused("grant does not cover this subject")
+        if not grant.not_before <= moment < grant.expires_at:
+            raise GrantRefused("grant is outside its signed window")
+        return grant
+
+    def _refuse(self, document: Any, exc: GrantRefused) -> None:
+        grant_id = str(document.get("grant_id", "?")) if isinstance(document, dict) else "?"
+        try:
+            self._ledger.append(grant_id, "-", "REFUSED", str(exc))
+        except GrantRefused:
+            pass                                  # an inconsistent ledger still refuses
+
     def check(self, *, document: Any, signature: str, subject_digest: str,
               now: datetime | None = None) -> UnlockGrant:
         """Return the verified, active grant for ``subject_digest`` or raise GrantRefused.
         Every outcome is written to the audit ledger."""
         moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-        grant_id = str(document.get("grant_id", "?")) if isinstance(document, dict) else "?"
         try:
-            grant = UnlockGrant.from_document(document)
-            if grant.issued_by != self._principal:
-                raise GrantRefused("grant must be issued by the owner principal")
-            if not self._ledger.verify_chain():
-                raise GrantRefused("grant audit ledger failed its integrity check")
-            if self._ledger.revoked(grant.grant_id):
-                raise GrantRefused("grant has been revoked")
-            if not self._verify(self._principal, grant.digest(), signature):
-                raise GrantRefused("owner signature does not verify for this exact grant")
-            if grant.subject_digest != subject_digest:
-                raise GrantRefused("grant does not cover this subject")
-            if not grant.not_before <= moment < grant.expires_at:
-                raise GrantRefused("grant is outside its signed window")
+            grant = self._validate(document, signature, subject_digest, moment)
         except GrantRefused as exc:
-            self._ledger.append(grant_id, "-", "REFUSED", str(exc))
+            self._refuse(document, exc)
             raise
         self._ledger.append(grant.grant_id, grant.digest(), "ACTIVE_CHECK_PASSED",
                             f"subject={subject_digest} kind={grant.kind}")
         return grant
 
+    def authorize_request(self, *, document: Any, signature: str, subject_digest: str,
+                          write: bool, reference_id: str,
+                          now: datetime | None = None) -> UnlockGrant:
+        """Full gate for ONE broker request: valid, in window, not revoked, within the
+        persistent signed caps; a write reference is single-use."""
+        moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        try:
+            grant = self._validate(document, signature, subject_digest, moment)
+            self._ledger.reserve_use(grant, write=write, reference_id=reference_id)
+        except GrantRefused as exc:
+            self._refuse(document, exc)
+            raise
+        return grant
+
     def revoke(self, grant_id: str, reason: str) -> None:
         """Permanent; anyone may revoke (it only removes privilege)."""
         self._ledger.append(grant_id, "-", "REVOKED", reason or "revoked")
+
+
+# ---- owner tooling: prepare a grant for signing (never signs) ---------------------------
+OWNER_PRINCIPAL = "owner@sidedeck"
+
+
+def prepare_grant(folder: Path, *, kind: str, subject_digest: str, not_before: str,
+                  expires_at: str, max_requests: int, max_writes: int,
+                  purpose: str) -> dict[str, str]:
+    """Write ``<grant_id>.json`` (canonical) and ``<grant_id>.digest`` for the owner to sign.
+    Scope rules are enforced before anything is written; nothing is signed here."""
+    document = {"schema": SCHEMA, "grant_id": str(uuid.uuid4()), "kind": kind,
+                "broker": BROKER, "subject_digest": subject_digest, "not_before": not_before,
+                "expires_at": expires_at, "max_requests": max_requests,
+                "max_writes": max_writes, "issued_by": OWNER_PRINCIPAL, "purpose": purpose}
+    grant = UnlockGrant.from_document(document)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{grant.grant_id}.json"
+    path.write_bytes(grant.canonical())
+    digest_path = path.with_suffix(".digest")
+    digest_path.write_bytes(grant.digest().encode("ascii"))
+    command = (f"if ((Get-Content -Raw '{digest_path}') -ceq '{grant.digest()}') {{ ssh-keygen "
+               f"-Y sign -f \"$HOME\\.ssh\\sidedeck_approval\" -n {GRANT_NAMESPACE} "
+               f"'{digest_path}' }} else {{ 'DIGEST MISMATCH - do not sign' }}")
+    return {"grant_id": grant.grant_id, "grant_file": str(path), "digest": grant.digest(),
+            "sign_in_powershell": command, "grants_network_access": "only once wired in and "
+            "verified; this file alone authorizes nothing"}
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    from sidedeck.application import sd050_msft_instrument_lookup as lookup
+
+    parser = argparse.ArgumentParser(description="SD-064 prepare an owner-signed unlock grant")
+    commands = parser.add_subparsers(dest="command", required=True)
+    prep = commands.add_parser("prepare", help="write a grant and its digest for signing")
+    prep.add_argument("--kind", choices=sorted(MAX_WINDOW), required=True)
+    prep.add_argument("--subject-digest", required=True)
+    prep.add_argument("--not-before", required=True, help="ISO-8601 with offset")
+    prep.add_argument("--expires-at", required=True, help="ISO-8601 with offset")
+    prep.add_argument("--max-requests", type=int, required=True)
+    prep.add_argument("--max-writes", type=int, required=True)
+    prep.add_argument("--purpose", required=True)
+    args = parser.parse_args(argv)
+    try:
+        result = prepare_grant(lookup.DATA_DIR / "grants", kind=args.kind,
+                               subject_digest=args.subject_digest,
+                               not_before=args.not_before, expires_at=args.expires_at,
+                               max_requests=args.max_requests, max_writes=args.max_writes,
+                               purpose=args.purpose)
+    except GrantRefused as exc:
+        print(json.dumps({"status": "REFUSED", "reason": str(exc)}, indent=2))
+        return 5
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
