@@ -70,6 +70,9 @@ def _route(method: str, path: str) -> tuple[str, str | None]:
     raise PilotError("route is outside the pilot plan")
 
 
+route_for = _route   # public alias used by the C7 transport ledger
+
+
 class PilotBudget:
     """Persistent per-route request caps, reserved before each send."""
 
@@ -145,8 +148,11 @@ class PilotScope:
 class EtoroDemoPilot:
     def __init__(self, *, desk: EtoroDemoDesk, transport: PilotTransport, budget: PilotBudget,
                  controls: ApprovalKillSwitch, lineage: EtoroDemoLineage,
-                 baseline: tuple[BaselinePosition, ...], scope: PilotScope) -> None:
+                 baseline: tuple[BaselinePosition, ...], scope: PilotScope,
+                 release: Any = None) -> None:
         scope.validate(baseline)
+        if release is not None and release.intent.scope() != scope:
+            raise PilotError("pilot scope differs from the signed pilot release")
         self._desk, self._transport, self._budget = desk, transport, budget
         self._controls, self._lineage = controls, lineage
         self._baseline, self._scope = baseline, scope

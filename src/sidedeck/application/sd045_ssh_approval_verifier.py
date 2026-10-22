@@ -16,6 +16,7 @@ Verification grants nothing: execution release remains ``NO_GO``.
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -31,22 +32,29 @@ _ARMOR = ("-----BEGIN SSH SIGNATURE-----", "-----END SSH SIGNATURE-----")
 
 class SshSignatureVerifier:
     def __init__(self, allowed_signers_path: str, principal: str, *,
-                 ssh_keygen: str = "ssh-keygen", timeout_seconds: float = 10.0) -> None:
+                 ssh_keygen: str = "ssh-keygen", timeout_seconds: float = 10.0,
+                 namespace: str = NAMESPACE) -> None:
         target = Path(allowed_signers_path)
         if not target.is_file() or target.is_symlink():
             raise ValueError("allowed_signers must be a regular file")
-        if not _PRINCIPAL.match(principal):
+        if not _PRINCIPAL.fullmatch(principal):
             raise ValueError("principal must be a simple identifier")
+        if not _PRINCIPAL.fullmatch(namespace):
+            raise ValueError("namespace must be a simple identifier")
         resolved = shutil.which(ssh_keygen)
         if resolved is None:
             raise ValueError("ssh-keygen is not available")
+        if Path(resolved).resolve().parent == Path(os.getcwd()).resolve():
+            # Windows searches the current directory first; a planted binary must not verify.
+            raise ValueError("ssh-keygen must not be resolved from the current directory")
         self._allowed = str(target.resolve())
         self._principal = principal
         self._tool = resolved
         self._timeout = timeout_seconds
+        self.namespace = namespace
 
     def __call__(self, public_key: str, digest: str, signature: str) -> bool:
-        if public_key != self._principal or not _DIGEST.match(digest):
+        if public_key != self._principal or not _DIGEST.fullmatch(digest):
             return False
         text = signature.strip()
         if (not text.isascii() or len(text) > MAX_SIGNATURE_BYTES or not text.startswith(_ARMOR[0])
@@ -58,7 +66,7 @@ class SshSignatureVerifier:
             try:
                 result = subprocess.run(
                     [self._tool, "-Y", "verify", "-f", self._allowed, "-I", self._principal,
-                     "-n", NAMESPACE, "-s", str(sig_path)],
+                     "-n", self.namespace, "-s", str(sig_path)],
                     input=digest.encode("ascii"), capture_output=True,
                     timeout=self._timeout, check=False)
             except (OSError, subprocess.SubprocessError):

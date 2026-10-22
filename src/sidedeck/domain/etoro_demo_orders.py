@@ -125,7 +125,7 @@ def require_demo_route(method: str, path: str) -> None:
     """Refuse every route except the documented Demo allowlist (checked pre-network)."""
     if "/demo/" not in path:
         raise RealExecutionExcluded("eToro Real endpoints are permanently excluded from SideDeck")
-    if not any(method == m and pattern.match(path) for m, pattern in _DEMO_ROUTES):
+    if not any(method == m and pattern.fullmatch(path) for m, pattern in _DEMO_ROUTES):
         raise RealExecutionExcluded("eToro endpoint is not on the SideDeck Demo allowlist")
 
 

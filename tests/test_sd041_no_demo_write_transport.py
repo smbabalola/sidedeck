@@ -33,6 +33,38 @@ def test_no_module_combines_network_access_with_etoro_write_paths():
     assert offenders == []
 
 
+AUTHENTICATED_CLIENTS = {Path("infrastructure/etoro_demo_client.py"),            # GET /pnl only
+                         Path("infrastructure/etoro_demo_write_transport.py")}   # C7, locked
+
+
+def test_only_two_modules_can_send_authenticated_etoro_requests():
+    found = set()
+    for path in SRC.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        literals = " ".join(_strings(tree))
+        if _imports(tree) & NETWORK_MODULES and ("x-user-key" in literals
+                                                 or "public-api.etoro.com" in literals):
+            found.add(path.relative_to(SRC))
+    assert found == AUTHENTICATED_CLIENTS
+
+
+def test_write_transport_is_locked_and_never_constructed_in_src():
+    from sidedeck.infrastructure import etoro_demo_write_transport as transport
+    assert transport.NETWORK_TRANSPORT_ENABLED is False
+    callers = []
+    for path in SRC.rglob("*.py"):
+        if path.relative_to(SRC) == Path("infrastructure/etoro_demo_write_transport.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "EtoroDemoHttpTransport":
+                callers.append(str(path.relative_to(SRC)))
+            if isinstance(node, ast.Attribute) and node.attr in ("EtoroDemoHttpTransport",
+                                                                  "NETWORK_TRANSPORT_ENABLED"):
+                callers.append(str(path.relative_to(SRC)))
+    assert callers == []
+
+
 def test_existing_etoro_client_remains_single_get_portfolio_read():
     assert etoro_demo_client.ALLOWED_PATHS == frozenset({"/api/v1/trading/info/demo/pnl"})
     methods = {node.name for node in ast.walk(ast.parse(Path(etoro_demo_client.__file__)

@@ -43,6 +43,10 @@ from sidedeck.domain.etoro_demo_orders import (
 )
 
 ETORO_DEMO_EXECUTION_RELEASE = "NO_GO"
+CLOSE_SETTLED_STATES = frozenset({"FILLED", "REJECTED", "CANCELED", "EXPIRED",
+                                  "CANCELED_PARTIALLY_FILLED", "REJECTED_PARTIALLY_FILLED",
+                                  "RECONCILED_NOT_EXECUTED", "RECONCILED_CLOSED_BY_SNAPSHOT",
+                                  "RECONCILED_PARTIAL_BY_SNAPSHOT"})
 DESK_OPERATOR = "sidedeck-etoro-demo-desk"
 # Unresolved risks from docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md §6 (R4 mitigated by SD-037;
 # R1 closed by SD-038: baseline MATCHED 4/4 on 2026-10-21).
@@ -291,11 +295,23 @@ class EtoroDemoDesk:
     def __init__(self, *, outbox: DurablePaperIntentStore, controls: ApprovalKillSwitch,
                  lineage: EtoroDemoLineage, transport: EtoroDemoTransport,
                  policy: DemoDeskPolicy, baseline: Iterable[BaselinePosition],
-                 budget: DemoRateBudget) -> None:
+                 budget: DemoRateBudget, pilot_release: Any = None) -> None:
+        self._pilot_release = None
         if getattr(transport, "offline_simulation", False) is not True:
-            raise BrokerExecutionDisabled(
-                f"eToro Demo execution release is {ETORO_DEMO_EXECUTION_RELEASE}; only the offline "
-                "simulator may be attached")
+            # The general release stays NO_GO. The only exception is one active, owner-signed
+            # SD-048 pilot release whose intent matches this desk's policy exactly.
+            from sidedeck.application.sd048_pilot_release import PilotRelease
+            if not isinstance(pilot_release, PilotRelease):
+                raise BrokerExecutionDisabled(
+                    f"eToro Demo execution release is {ETORO_DEMO_EXECUTION_RELEASE}; only the "
+                    "offline simulator or a signed pilot release may be used")
+            pilot_release.require_active()
+            intent = pilot_release.intent
+            if (policy.allowed_instrument_ids != frozenset({intent.instrument_id})
+                    or policy.max_order_notional_usd > intent.max_notional_usd
+                    or policy.max_open_positions_per_book != 1):
+                raise BrokerExecutionDisabled("desk policy does not match the signed pilot intent")
+            self._pilot_release = pilot_release
         self._outbox, self._controls, self._lineage = outbox, controls, lineage
         self._transport, self._policy = transport, policy
         self._baseline = tuple(baseline)
@@ -333,6 +349,12 @@ class EtoroDemoDesk:
             raise EtoroDemoOrderError("book already holds the maximum open positions")
         if not self._controls.is_approved(intent_id, open_scope(book, request)):
             raise EtoroDemoOrderError("no verified, unexpired approval for this exact order")
+        if self._pilot_release is not None:
+            self._pilot_release.require_active()
+            signed = self._pilot_release.intent
+            if (strategy, request.instrument_id, request.units, request.limit_rate) != (
+                    signed.strategy, signed.instrument_id, signed.units, signed.limit_rate):
+                raise EtoroDemoOrderError("open differs from the signed pilot intent")
         self._budget.acquire("write")
         self._outbox.enqueue(PaperIntent(
             intent_id, request.reference_id, "sidedeck", "etoro", "paper", "etoro-demo", book,
@@ -348,11 +370,17 @@ class EtoroDemoDesk:
         try:
             payload = self._send("POST", DEMO_OPEN_PATH, reference_id=request.reference_id,
                                  body=request.body())
-        except TransportOutcomeUnknown:
+        except Exception:  # any write failure after write-ahead: outcome unknown, never resubmit
             self._lineage.set_state(request.reference_id, "OUTCOME_UNKNOWN")
             self._halt("open order outcome unknown; recover by referenceId lookup")
             return "OUTCOME_UNKNOWN"
-        acceptance = parse_open_acceptance(payload, reference_id=request.reference_id)
+        try:
+            acceptance = parse_open_acceptance(payload, reference_id=request.reference_id)
+        except EtoroDemoOrderError:
+            # A 200 we cannot read may still be an accepted order: never resubmit.
+            self._lineage.set_state(request.reference_id, "OUTCOME_UNKNOWN")
+            self._halt("open acceptance unreadable; recover by referenceId lookup")
+            return "OUTCOME_UNKNOWN"
         self._lineage.set_state(request.reference_id, "ACCEPTED", order_id=acceptance.order_id)
         self._outbox.acknowledge(intent_id)
         return "ACCEPTED"
@@ -374,8 +402,10 @@ class EtoroDemoDesk:
             if row["order_id"] is not None:
                 self._halt("accepted order missing from broker lookup")
                 raise EtoroDemoOrderError("broker no longer reports an accepted order") from None
-            self._lineage.set_state(reference_id, "NOT_RECEIVED")
-            self._outbox.record_rejection(intent_id, "NOT_RECEIVED_BY_BROKER")
+            # A 404 is inconclusive: eToro may still land the order. Stay halted; no rejection
+            # is recorded and nothing is resubmitted until an operator reconciles /pnl.
+            self._lineage.set_state(reference_id, "NOT_FOUND_INCONCLUSIVE")
+            self._halt("order not found after submission; outcome inconclusive")
             return None
         try:
             outcome = parse_order_lookup(payload, request=self._open_request(row),
@@ -410,7 +440,8 @@ class EtoroDemoDesk:
                     "PENDING_SUBMIT", "OUTCOME_UNKNOWN", "ACCEPTED", "RECEIVED", "PLACED",
                     "PARTIALLY_FILLED", "WAITING_FOR_MARKET", "PENDING_TRIGGERED_RATE"}:
                 outcome = self.refresh_open(row["reference_id"])
-                results[row["reference_id"]] = "NOT_RECEIVED" if outcome is None else outcome.status
+                results[row["reference_id"]] = ("NOT_FOUND_INCONCLUSIVE" if outcome is None
+                                                  else outcome.status)
         return results
 
     # ---- close --------------------------------------------------------------
@@ -420,6 +451,11 @@ class EtoroDemoDesk:
         if any(b.position_id == request.position_id for b in self._baseline):
             raise EtoroDemoBookError("baseline positions are read-only and never closed by SideDeck")
         snapshot.require_fresh(now)
+        pending = [r for r in self._lineage.orders() if r["kind"] == "CLOSE"
+                   and r["position_id"] == request.position_id
+                   and r["state"] not in CLOSE_SETTLED_STATES]
+        if pending:
+            raise EtoroDemoOrderError("a close for this position is already outstanding")
         owned = self._lineage.owned(request.position_id)
         if owned is None or owned["state"] != "OPEN":
             raise EtoroDemoBookError("position has no open SideDeck lineage")
@@ -443,11 +479,16 @@ class EtoroDemoDesk:
         try:
             payload = self._send("POST", request.path, reference_id=request.reference_id,
                                  body=request.body())
-        except TransportOutcomeUnknown:
+        except Exception:  # any write failure after write-ahead: outcome unknown, never resubmit
             self._lineage.set_state(request.reference_id, "OUTCOME_UNKNOWN")
             self._halt("close order outcome unknown; operator /pnl reconciliation required")
             return "OUTCOME_UNKNOWN"
-        acceptance = parse_close_acceptance(payload, request=request)
+        try:
+            acceptance = parse_close_acceptance(payload, request=request)
+        except EtoroDemoOrderError:
+            self._lineage.set_state(request.reference_id, "OUTCOME_UNKNOWN")
+            self._halt("close acceptance unreadable; operator /pnl reconciliation required")
+            return "OUTCOME_UNKNOWN"
         self._lineage.set_state(request.reference_id, "ACCEPTED", order_id=acceptance.order_id)
         return "ACCEPTED"
 

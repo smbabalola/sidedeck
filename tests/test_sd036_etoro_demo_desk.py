@@ -292,12 +292,13 @@ def test_lost_response_halts_and_recovers_without_resubmission(h):
     assert h.outbox.get("open-1")["state"] == "FILLED_SIMULATED"
 
 
-def test_never_received_order_is_closed_out_not_resubmitted(h):
+def test_order_not_found_after_unknown_outcome_is_inconclusive(h):
     h.sim.drop_next_request = True
     request, state = h.open()
     assert state == "OUTCOME_UNKNOWN"
-    assert h.desk.recover() == {request.reference_id: "NOT_RECEIVED"}
-    assert h.outbox.get("open-1")["state"] == "REJECTED_SIMULATED"
+    assert h.desk.recover() == {request.reference_id: "NOT_FOUND_INCONCLUSIVE"}
+    assert h.outbox.get("open-1")["state"] == "SUBMITTED_SIMULATED"   # no rejection recorded
+    assert h.controls.is_halted()
     assert h.posts() == [("POST", "/api/v2/trading/execution/demo/orders")]
 
 
@@ -606,3 +607,16 @@ def test_rehearsal_is_offline_and_labelled(tmp_path):
     assert result["reconciliation"]["etoro_demo_execution_release"] == "NO_GO"
     assert result["reconciliation"]["etoro_real_execution"] == "PERMANENTLY_EXCLUDED"
     assert result["authenticated_requests"] == 0 and result["orders_sent_to_etoro"] == 0
+
+
+def test_second_close_refused_while_one_is_outstanding(h):
+    position_id = _filled(h)
+    first = DemoCloseRequest(ref(), position_id, 1001, Decimal("0.5"))
+    h.approve("c1", close_scope(BOOK, first))
+    h.sim.close_mode = "PENDING"
+    h.desk.submit_close(intent_id="c1", request=first, snapshot=h.snapshot(), now=h.now)
+    second = DemoCloseRequest(ref(), position_id, 1001, Decimal("0.5"))
+    h.approve("c2", close_scope(BOOK, second))
+    with pytest.raises(EtoroDemoOrderError, match="outstanding"):
+        h.desk.submit_close(intent_id="c2", request=second, snapshot=h.snapshot(), now=h.now)
+    assert len(h.posts()) == 2      # open + first close only

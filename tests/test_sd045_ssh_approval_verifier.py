@@ -98,3 +98,26 @@ def test_integrates_with_approval_store(tmp_path, setup):
     assert controls.is_approved("intent-1", scope)
     assert not controls.is_approved("intent-1", scope + ":changed")
     controls.close()
+
+
+def test_planted_ssh_keygen_in_current_directory_refused(tmp_path, monkeypatch, setup):
+    import os
+    import sys
+    planted = tmp_path / ("ssh-keygen.exe" if sys.platform == "win32" else "ssh-keygen")
+    planted.write_text("#!/bin/sh\nexit 0\n")
+    planted.chmod(0o755)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
+    with pytest.raises(ValueError, match="current directory"):
+        SshSignatureVerifier(str(tmp_path / "allowed_signers"), "owner@sidedeck")
+
+
+def test_custom_namespace_is_enforced(tmp_path, setup):
+    _, owner, _ = setup
+    pilot = SshSignatureVerifier(str(tmp_path / "allowed_signers"), "owner@sidedeck",
+                                 namespace="sidedeck-etoro-pilot-release")
+    assert pilot("owner@sidedeck", DIGEST, sign(owner, DIGEST, "sidedeck-etoro-pilot-release"))
+    assert not pilot("owner@sidedeck", DIGEST, sign(owner, DIGEST))
+    with pytest.raises(ValueError, match="namespace"):
+        SshSignatureVerifier(str(tmp_path / "allowed_signers"), "owner@sidedeck",
+                             namespace="bad namespace")
