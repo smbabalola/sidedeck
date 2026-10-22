@@ -55,7 +55,8 @@ NETWORK_TRANSPORT_ENABLED = False   # development lock (owner instruction 2026-1
 # Release-bound unlock: the reviewed lock-lift commit sets this to exactly one owner-signed
 # pilot digest. Only a release with that digest gets a network opener, and every send still
 # requires the signed window. Never a wildcard; None means locked.
-UNLOCKED_PILOT_DIGEST: str | None = None
+UNLOCKED_PILOT_DIGEST: str | None = (   # SD-057 owner release 2026-10-22; SD-053 pilot only
+    "71e111b3a8806dc9b8e59d96ce1ef6e6a0b64dc2b00363465244acccaad09a62")
 ETORO_HOST = "https://public-api.etoro.com"
 USER_AGENT = "SideDeck/0.1 (eToro Demo pilot transport)"
 MAX_RESPONSE_BYTES = 1_000_000
