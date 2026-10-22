@@ -1,0 +1,64 @@
+import { describe, expect, it } from "vitest";
+import marketScan from "../fixtures/market-scan.json";
+import marketTracks from "../fixtures/market-tracks.json";
+import releaseGate from "../fixtures/release-gate.json";
+import demo from "../fixtures/demo-summary.json";
+import { isDemoSummary, isMarketTracks, isReleaseGate, isScanSnapshot } from "../../src/lib/contracts";
+import { compactUsd, pct, plainPct, tone, words } from "../../src/lib/format";
+import { href, parseRoute } from "../../src/lib/router";
+
+describe("contracts accept real backend payloads and reject unsafe ones", () => {
+  it("accepts the generated fixtures", () => {
+    expect(isScanSnapshot(marketScan)).toBe(true);
+    expect(isMarketTracks(marketTracks)).toBe(true);
+    expect(isReleaseGate(releaseGate)).toBe(true);
+    expect(isDemoSummary(demo)).toBe(true);
+  });
+  it("rejects anything that claims execution is enabled", () => {
+    expect(isScanSnapshot({ ...marketScan, execution_enabled: true })).toBe(false);
+    expect(isMarketTracks({ ...marketTracks, execution_enabled: true })).toBe(false);
+    expect(isReleaseGate({ ...releaseGate, overall_status: "GO" })).toBe(false);
+    expect(isReleaseGate({ ...releaseGate, paper_order_submission: "ENABLED" })).toBe(false);
+    expect(isDemoSummary({ ...demo, execution_enabled: true })).toBe(false);
+    const tracks = structuredClone(marketTracks);
+    tracks.tracks[0].execution = "ENABLED";
+    expect(isMarketTracks(tracks)).toBe(false);
+  });
+  it("rejects unknown provenance and non-numeric values", () => {
+    expect(isScanSnapshot({ ...marketScan, provenance: "LIVE" })).toBe(false);
+    const bad = structuredClone(marketScan);
+    bad.instruments[0].last_close = "abc";
+    expect(isScanSnapshot(bad)).toBe(false);
+    expect(isScanSnapshot({ status: "UNAVAILABLE", execution_enabled: false, reason: "none" })).toBe(true);
+  });
+});
+
+describe("formatting never invents values", () => {
+  it("formats signed and plain percentages", () => {
+    expect(pct("0.0523")).toBe("+5.2%");
+    expect(pct("-0.01")).toBe("-1.0%");
+    expect(pct(null)).toBe("—");
+    expect(pct("NaN")).toBe("—");
+    expect(plainPct("0.1", 0)).toBe("10%");
+  });
+  it("humanises tokens and keeps acronyms", () => {
+    expect(words("NO_GO")).toBe("No go");
+    expect(words("OWNER_CSV_IMPORT")).toBe("Owner CSV import");
+    expect(words("SECONDS")).toBe("Seconds");
+    expect(words(null)).toBe("—");
+  });
+  it("classifies tone and compacts money", () => {
+    expect(tone("0.1")).toBe("gain");
+    expect(tone("-0.1")).toBe("loss");
+    expect(tone(null)).toBe("unknown");
+    expect(compactUsd("53100000")).toBe("$53.1M");
+  });
+});
+
+describe("router", () => {
+  it("parses workspace and detail and falls back to overview", () => {
+    expect(parseRoute("#/markets/US%3AMSFT")).toEqual({ workspace: "markets", detail: "US:MSFT" });
+    expect(parseRoute("#/nope/x")).toEqual({ workspace: "overview", detail: null });
+    expect(href("tracks", "SWING")).toBe("#/tracks/SWING");
+  });
+});

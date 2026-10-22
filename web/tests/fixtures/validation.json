@@ -1,0 +1,8 @@
+{
+ "broker_execution": "DISABLED",
+ "datasets": [],
+ "execution_enabled": false,
+ "schema_version": 1,
+ "source": "LOCAL_STRATEGY_VALIDATION",
+ "status": "NOT_LOADED"
+}

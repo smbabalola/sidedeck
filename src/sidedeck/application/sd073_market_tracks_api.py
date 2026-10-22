@@ -23,7 +23,27 @@ from sidedeck.application.sd068_track_scheduler import (
     slots_for,
 )
 from sidedeck.application.sd070_research_signal import TRACK_HORIZONS
+from decimal import Decimal
+
 from sidedeck.application.sd071_decision_engine import EXECUTION_PERMISSION
+from sidedeck.application.sd072_track_risk_limits import TrackLimits
+
+# Research configuration for simulation and display. Not an execution authorization and
+# not a capital allocation: virtual capital stays NOT_ALLOCATED until the owner decides.
+TRACK_RISK_BUDGETS: dict[str, dict[str, str | int]] = {
+    "DAY": {"risk_per_trade_pct": "0.005", "max_positions": 3, "max_drawdown_pct": "0.05",
+            "max_daily_loss_pct": "0.02", "max_orders_per_day": 6,
+            "exit_policy": "SAME_SESSION_LIQUIDATION"},
+    "SWING": {"risk_per_trade_pct": "0.01", "max_positions": 5, "max_drawdown_pct": "0.10",
+              "max_daily_loss_pct": "0.03", "max_orders_per_day": 4,
+              "exit_policy": "STOP_OR_TIME_EXIT_15_SESSIONS"},
+    "POSITION": {"risk_per_trade_pct": "0.01", "max_positions": 8, "max_drawdown_pct": "0.15",
+                 "max_daily_loss_pct": "0.04", "max_orders_per_day": 2,
+                 "exit_policy": "STOP_OR_THESIS_INVALIDATION"},
+}
+for _track, _b in TRACK_RISK_BUDGETS.items():  # validated by the same limits used in SD-072
+    TrackLimits(_track, Decimal(str(_b["max_drawdown_pct"])),
+                Decimal(str(_b["max_daily_loss_pct"])), int(_b["max_orders_per_day"]))
 
 _COVERAGE_KEYS = ("COVERED", "PARTIALLY_COVERED", "UNAVAILABLE")
 
@@ -96,6 +116,8 @@ def market_tracks_summary(universe_path: str | None = None, pilot_path: str | No
                         "spread_required": cfg.max_spread_bps is not None},
             "shortlist_sizes": {"quant": cfg.quant_size, "research": cfg.research_size},
             "jobs": [{"job_id": j.job_id, "next_run_utc": _next_slot(j.job_id, now)} for j in jobs],
+            "risk_budget": {**TRACK_RISK_BUDGETS[track], "virtual_capital": "NOT_ALLOCATED",
+                            "basis": "RESEARCH_CONFIGURATION_NOT_AUTHORIZATION"},
             "execution": "DISABLED",
         })
     return {

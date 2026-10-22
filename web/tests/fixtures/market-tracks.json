@@ -1,0 +1,138 @@
+{
+ "decision_engine": {
+  "agent_only_cap": "WATCHLIST",
+  "execution_permission": "NOT_GRANTED_BY_DECISION_ENGINE"
+ },
+ "execution_enabled": false,
+ "generated_at": "2026-10-22T20:30:00+00:00",
+ "price_coverage": {
+  "reason": "no SD-075B price pilot summary loaded",
+  "status": "UNAVAILABLE"
+ },
+ "schema_version": 1,
+ "tracks": [
+  {
+   "data_status": "BLOCKED_EXTERNAL",
+   "execution": "DISABLED",
+   "filters": {
+    "min_dollar_adv": "50000000",
+    "min_price": "5",
+    "min_sessions": 21,
+    "spread_required": true
+   },
+   "horizon_trading_days": [
+    0,
+    0
+   ],
+   "jobs": [
+    {
+     "job_id": "day_candidate_scan",
+     "next_run_utc": "2026-10-23T13:35:00+00:00"
+    }
+   ],
+   "mode": "RESEARCH_ONLY",
+   "risk_budget": {
+    "basis": "RESEARCH_CONFIGURATION_NOT_AUTHORIZATION",
+    "exit_policy": "SAME_SESSION_LIQUIDATION",
+    "max_daily_loss_pct": "0.02",
+    "max_drawdown_pct": "0.05",
+    "max_orders_per_day": 6,
+    "max_positions": 3,
+    "risk_per_trade_pct": "0.005",
+    "virtual_capital": "NOT_ALLOCATED"
+   },
+   "shortlist_sizes": {
+    "quant": 150,
+    "research": 15
+   },
+   "track": "DAY",
+   "usable_sources": []
+  },
+  {
+   "data_status": "AVAILABLE",
+   "execution": "DISABLED",
+   "filters": {
+    "min_dollar_adv": "20000000",
+    "min_price": "5",
+    "min_sessions": 61,
+    "spread_required": false
+   },
+   "horizon_trading_days": [
+    2,
+    15
+   ],
+   "jobs": [
+    {
+     "job_id": "swing_review",
+     "next_run_utc": "2026-10-23T13:00:00+00:00"
+    }
+   ],
+   "mode": "RESEARCH_ONLY",
+   "risk_budget": {
+    "basis": "RESEARCH_CONFIGURATION_NOT_AUTHORIZATION",
+    "exit_policy": "STOP_OR_TIME_EXIT_15_SESSIONS",
+    "max_daily_loss_pct": "0.03",
+    "max_drawdown_pct": "0.10",
+    "max_orders_per_day": 4,
+    "max_positions": 5,
+    "risk_per_trade_pct": "0.01",
+    "virtual_capital": "NOT_ALLOCATED"
+   },
+   "shortlist_sizes": {
+    "quant": 200,
+    "research": 20
+   },
+   "track": "SWING",
+   "usable_sources": [
+    "OWNER_CSV_IMPORT"
+   ]
+  },
+  {
+   "data_status": "AVAILABLE",
+   "execution": "DISABLED",
+   "filters": {
+    "min_dollar_adv": "10000000",
+    "min_price": "10",
+    "min_sessions": 252,
+    "spread_required": false
+   },
+   "horizon_trading_days": [
+    15,
+    180
+   ],
+   "jobs": [
+    {
+     "job_id": "position_daily",
+     "next_run_utc": "2026-10-22T21:00:00+00:00"
+    },
+    {
+     "job_id": "position_weekly",
+     "next_run_utc": "2026-10-23T22:00:00+00:00"
+    }
+   ],
+   "mode": "RESEARCH_ONLY",
+   "risk_budget": {
+    "basis": "RESEARCH_CONFIGURATION_NOT_AUTHORIZATION",
+    "exit_policy": "STOP_OR_THESIS_INVALIDATION",
+    "max_daily_loss_pct": "0.04",
+    "max_drawdown_pct": "0.15",
+    "max_orders_per_day": 2,
+    "max_positions": 8,
+    "risk_per_trade_pct": "0.01",
+    "virtual_capital": "NOT_ALLOCATED"
+   },
+   "shortlist_sizes": {
+    "quant": 150,
+    "research": 15
+   },
+   "track": "POSITION",
+   "usable_sources": [
+    "OWNER_CSV_IMPORT"
+   ]
+  }
+ ],
+ "universe": {
+  "reason": "no verified SD-075A snapshot loaded",
+  "status": "UNAVAILABLE"
+ }
+}

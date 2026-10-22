@@ -1,0 +1,4 @@
+# Frontend test artifacts (paths relative to web/)
+test-results/
+playwright-report/
+tsconfig.tsbuildinfo

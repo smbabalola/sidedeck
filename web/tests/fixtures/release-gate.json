@@ -1,0 +1,42 @@
+{
+ "account_mapping": "UNVERIFIED",
+ "blocking_controls": [
+  "RELEASE_GATE_NOT_LOADED"
+ ],
+ "broker_execution": "DISABLED",
+ "broker_reconciliation": "UNRELEASED",
+ "engineering_rehearsal": "UNAVAILABLE",
+ "etoro_demo": {
+  "accepted_risks": [
+   "R9_SHARED_DEMO_READ_WRITE_PAIR_OWNER_ACCEPTED"
+  ],
+  "agent_portfolios": "NOT_ADOPTED_PENDING_EVIDENCE",
+  "baseline": "PROTECTED_UNATTRIBUTED",
+  "broker_priority": "PRIMARY",
+  "execution_release": "NO_GO",
+  "open_risks": [
+   "R2_KEY_IP_EXPIRY_OWNER_ATTESTED_WRITE_UNVERIFIED",
+   "R3_CLOSE_LOOKUP_UNVERIFIED",
+   "R5_NO_RELEASED_TRANSPORT",
+   "R6_LIVE_SCHEMA_UNVERIFIED",
+   "R8_NO_CAPITAL_ALLOCATED"
+  ],
+  "ownership": "VERIFIED_LINEAGE_ONLY",
+  "real_execution": "PERMANENTLY_EXCLUDED",
+  "secondary_broker": "ALPACA_PAPER",
+  "transport": "OFFLINE_SIMULATOR_ONLY"
+ },
+ "gate": "PAPER_RELEASE",
+ "human_approval": "REQUIRED_SEPARATE_OWNER_RELEASE",
+ "kill_switch": "UNRELEASED",
+ "overall_status": "NO_GO",
+ "paper_order_submission": "DISABLED",
+ "protected_baseline": "PRESERVED",
+ "rehearsal": {
+  "broker_execution": "DISABLED",
+  "status": "UNAVAILABLE"
+ },
+ "release_enabled": false,
+ "schema_version": 1,
+ "source": "LOCAL_PAPER_RELEASE_GATE"
+}

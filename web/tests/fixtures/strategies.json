@@ -1,0 +1,62 @@
+{
+ "broker_execution": "DISABLED",
+ "execution_enabled": false,
+ "schema_version": 1,
+ "source": "LOCAL_STRATEGY_CATALOGUE",
+ "status": "RESEARCH_ONLY",
+ "strategies": [
+  {
+   "acceptance": "NOT_ASSESSED",
+   "execution_assumption": "NEXT_OBSERVED_CLOSE_INTERVAL",
+   "holding_period": [
+    5,
+    15
+   ],
+   "id": "channel_mean_reversion",
+   "parameters": {
+    "entry_bps": "100",
+    "lookback": "20"
+   },
+   "version": "1.0.0"
+  },
+  {
+   "acceptance": "NOT_ASSESSED",
+   "execution_assumption": "NEXT_OBSERVED_CLOSE_INTERVAL",
+   "holding_period": [
+    5,
+    15
+   ],
+   "id": "liquidity_sweep_reversal",
+   "parameters": {
+    "lookback": "20",
+    "volume_multiple": "1.5"
+   },
+   "version": "1.0.0"
+  },
+  {
+   "acceptance": "NOT_ASSESSED",
+   "execution_assumption": "NEXT_OBSERVED_CLOSE_INTERVAL",
+   "holding_period": [
+    5,
+    15
+   ],
+   "id": "moving_average_trend",
+   "parameters": {
+    "fast": "10",
+    "slow": "30"
+   },
+   "version": "1.0.0"
+  },
+  {
+   "acceptance": "NOT_ASSESSED",
+   "execution_assumption": "NEXT_OBSERVED_CLOSE_INTERVAL",
+   "holding_period": [
+    1,
+    10000
+   ],
+   "id": "buy_and_hold",
+   "parameters": {},
+   "version": "1.0.0"
+  }
+ ]
+}

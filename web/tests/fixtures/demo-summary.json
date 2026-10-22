@@ -1,0 +1,30 @@
+{
+ "available_cash_usd_status": "UNAVAILABLE",
+ "baseline_status": "CAPTURED",
+ "books": [
+  {
+   "allocation_status": "NOT_ALLOCATED",
+   "id": "etoro-demo:tradingagents",
+   "positions": null
+  },
+  {
+   "allocation_status": "NOT_ALLOCATED",
+   "id": "etoro-demo:ai-trading",
+   "positions": null
+  },
+  {
+   "allocation_status": "NOT_ALLOCATED",
+   "id": "etoro-demo:unattributed",
+   "positions": 4
+  }
+ ],
+ "captured_at": "2026-10-20T15:02:00+00:00",
+ "discrepancy_count": null,
+ "execution_enabled": false,
+ "fresh_snapshot": null,
+ "protected_positions": 4,
+ "reconciliation_status": "NOT_CURRENT",
+ "schema_version": 1,
+ "source": "LOCAL_BASELINE_ONLY",
+ "unrealized_pnl_status": "UNAVAILABLE"
+}

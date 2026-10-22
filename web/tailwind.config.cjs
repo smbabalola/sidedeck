@@ -1,2 +1,18 @@
 /** @type {import("tailwindcss").Config} */
-module.exports = { content: ["./index.html", "./src/**/*.{ts,tsx}"], theme: { extend: { colors: { ink: "#080F1D", panel: "#101C2D", raised: "#16263B", accent: "#3DD6BA" }, boxShadow: { glow: "0 10px 45px rgba(0,0,0,.18)" } } }, plugins: [] };
+const v = (name) => `rgb(var(--${name}) / <alpha-value>)`;
+module.exports = {
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  darkMode: ["class", '[data-theme="dark"]'],
+  theme: {
+    extend: {
+      colors: {
+        canvas: v("canvas"), panel: v("panel"), raised: v("raised"), rule: v("rule"),
+        ink: v("ink"), muted: v("muted"), faint: v("faint"),
+        accent: v("accent"), attention: v("attention"), gain: v("gain"), loss: v("loss"),
+      },
+      fontFamily: { sans: ['"IBM Plex Sans"', "ui-sans-serif", "system-ui", "sans-serif"] },
+      fontSize: { "2xs": ["0.6875rem", "1rem"] },
+    },
+  },
+  plugins: [],
+};

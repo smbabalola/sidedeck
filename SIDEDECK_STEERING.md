@@ -220,3 +220,26 @@ unreliable approaches reproducibly; size with deterministic risk controls; execu
 exit autonomously in eToro Demo under an owner-released policy; reconcile and attribute
 performance to strategy and agent; run with no ChatGPT/Claude/Codex in live decisions.
 
+## 12. Professional trading workstation UI (owner directive 2026-10-22)
+
+The React/Tailwind frontend is SideDeck's operator workstation with seven workspaces: Overview,
+Markets, Trading tracks, Agents, Strategies, Portfolio, Operations. Tracked as SD-083…SD-087 in
+`TODO.md`.
+
+**Rules:**
+- Read-only by construction: GET-only typed contracts validated at runtime; a payload that fails
+  validation is an error, never guessed at. No order, close, capital, permission or schedule
+  control; no new broker write path from the UI. The MSFT pilot and every release stay CLI-only
+  behind the existing signed mechanisms.
+- Provenance is always visible and never upgraded: `Real data`, `Demo broker`, `Simulation`,
+  `Synthetic fixture` or `No data`, encoded as a panel edge plus a badge. Mixed panels badge each row.
+  Synthetic or fixture scans can never be written as `REAL_DATA` (enforced in SD-082).
+- Never fabricate balances, positions, signals or performance. Missing data is shown as missing,
+  with the owner action that would unblock it.
+- Loading, empty, error and stale states for every panel; explicit instrument identity, exchange
+  and data timestamps; source strategy, version and track on every signal.
+- Accessibility (WCAG 2.2 AA), keyboard operation, light/dark themes, desktop/tablet/phone layouts;
+  self-hosted fonts (no third-party requests from the loopback app).
+- Verification per batch: TypeScript, production build, Vitest unit tests, Playwright E2E on three
+  viewports with a mocked API, Python tests, Ruff, mypy, independent review, exact-HEAD CI.
+

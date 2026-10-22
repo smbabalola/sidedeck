@@ -1,152 +1,24 @@
-import { useEffect, useState } from "react";
-import { Activity, ArrowUpRight, BarChart3, Bot, BrainCircuit, CircleAlert, CircleCheck, Database, LayoutDashboard, LockKeyhole, Moon, ShieldCheck, Wallet } from "lucide-react";
+import { Shell } from "./components/Shell";
+import { useRoute } from "./lib/router";
+import { useTheme } from "./lib/theme";
+import Markets from "./workspaces/Markets";
+import { Operations, Portfolio } from "./workspaces/Operations";
+import Overview from "./workspaces/Overview";
+import { Agents, Strategies } from "./workspaces/Research";
+import Tracks from "./workspaces/Tracks";
 import "./index.css";
 
-type Book = { id: string; title: string; positions: number; pnlStatus: "AVAILABLE" | "UNAVAILABLE"; allocation: string; description: string };
-type ResearchStatus = { status: "READY_OFFLINE" | "BLOCKED"; valuation: "VALIDATED" | "PENDING" | "BLOCKED"; agents: { id: string; status: string; evidence_count: number }[]; execution_enabled: false };
-type StrategyCatalogue = { id: string; version: string; parameters: Record<string, string>; holding_period: [number, number]; acceptance: string };
-type StrategyValidation = { ticker: string; observations: number; start: string; end: string; benchmark?: { convention: string; total_return: string; ending_equity: string | null; return: string | null; max_drawdown: string | null; corporate_action_status: string }; strategies: { id: string; status: string; metrics: { trade_count: number | null; profit_factor: string | null; max_drawdown: string | null } }[] };
-type ReleaseGate = { overall_status: "NO_GO"; engineering_rehearsal: string; paper_order_submission: "DISABLED"; human_approval: string; account_mapping: string; broker_reconciliation: string; kill_switch: string; protected_baseline: string; blocking_controls: string[]; rehearsal: { status: string; broker_execution: "DISABLED"; final_state?: string | null; event_count?: number | null }; etoro_demo?: EtoroDemoStatus };
-type EtoroDemoStatus = { broker_priority: string; secondary_broker: string; execution_release: string; real_execution: string; transport: string; baseline: string; ownership: string; agent_portfolios: string; open_risks: string[] };
-type TrackJob = { job_id: string; next_run_utc: string };
-type MarketTrack = { track: "DAY" | "SWING" | "POSITION"; mode: string; horizon_trading_days: [number, number]; data_status: string; usable_sources: string[]; filters: { min_price: string; min_dollar_adv: string; min_sessions: number; spread_required: boolean }; shortlist_sizes: { quant: number; research: number }; jobs: TrackJob[]; execution: "DISABLED" };
-type MarketTracks = { execution_enabled: false; universe: { status: string; instruments?: number; history_basis?: string; retrieved_at?: string; reason?: string }; price_coverage: { status: string; counts?: Record<string, number>; benchmark_status?: string; reason?: string }; tracks: MarketTrack[]; decision_engine: { execution_permission: string; agent_only_cap: string } };
-const trackTitles: Record<MarketTrack["track"], string> = { DAY: "Day · intraday", SWING: "Swing · 2–15 days", POSITION: "Position · weeks–months" };
-const initialBooks: Book[] = [
-  { id: "tradingagents", title: "TradingAgents", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
-  { id: "ai-trading", title: "AI-Trading", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
-  { id: "unattributed", title: "Existing portfolio", positions: 4, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Immutable baseline · protected positions" },
-];
-function StatusPill({ children, positive = false }: { children: React.ReactNode; positive?: boolean }) {
-  return <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${positive ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300" : "border-slate-700 bg-slate-800/70 text-slate-300"}`}>{children}</span>;
-}
-function Stat({ title, value, detail, icon: Icon }: { title: string; value: string; detail: string; icon: typeof Wallet }) {
-  return <section className="rounded-2xl border border-slate-700/60 bg-panel p-5 shadow-glow"><div className="flex items-center justify-between"><p className="text-sm text-slate-400">{title}</p><Icon size={18} className="text-slate-400" aria-hidden="true"/></div><p className="mt-5 text-3xl font-semibold tracking-tight text-white">{value}</p><p className="mt-2 text-xs text-slate-400">{detail}</p></section>;
-}
 export default function App() {
-  const [activeBook, setActiveBook] = useState("all");
-  const [clock, setClock] = useState(() => Date.now());
-  useEffect(() => { const timer = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(timer); }, []);
-  const [summary, setSummary] = useState<{ protected_positions: number | null; captured_at: string | null; books: {id: string; positions: number | null}[]; fresh_snapshot?: { observed_at: string; reconciliation_status: string; discrepancy_count: number | null; available_cash_usd_status: string; books: {id: string; positions: number | null}[] } | null } | null>(null);
-  const [apiError, setApiError] = useState(false);
-  const [research, setResearch] = useState<ResearchStatus | null>(null);
-  const [strategies, setStrategies] = useState<StrategyCatalogue[]>([]);
-  const [validation, setValidation] = useState<StrategyValidation[]>([]);
-  const [releaseGate, setReleaseGate] = useState<ReleaseGate>({ overall_status: "NO_GO", engineering_rehearsal: "LOADING", paper_order_submission: "DISABLED", human_approval: "REQUIRED_SEPARATE_OWNER_RELEASE", account_mapping: "UNVERIFIED", broker_reconciliation: "UNRELEASED", kill_switch: "UNRELEASED", protected_baseline: "PRESERVED", blocking_controls: ["RELEASE_GATE_NOT_LOADED"], rehearsal: { status: "UNAVAILABLE", broker_execution: "DISABLED" } });
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/demo/summary", { signal: controller.signal, cache: "no-store" })
-      .then(response => { if (!response.ok) throw Error("API unavailable"); return response.json(); })
-      .then(data => {
-        if (data.schema_version !== 1 || data.source !== "LOCAL_BASELINE_ONLY" || data.execution_enabled !== false || !Array.isArray(data.books)) throw Error("API schema mismatch");
-        setSummary(data);
-      })
-      .catch(() => { if (!controller.signal.aborted) setApiError(true); });
-    return () => controller.abort();
-  }, []);
-  useEffect(() => {
-    fetch("/api/research/validation", { cache: "no-store" })
-      .then(response => response.ok ? response.json() : Promise.reject())
-      .then(data => { if (data.execution_enabled === false && Array.isArray(data.datasets)) setValidation(data.datasets); })
-      .catch(() => setValidation([]));
-  }, []);
-  useEffect(() => {
-    fetch("/api/research/strategies", { cache: "no-store" })
-      .then(response => response.ok ? response.json() : Promise.reject())
-      .then(data => { if (data.execution_enabled === false && Array.isArray(data.strategies)) setStrategies(data.strategies); })
-      .catch(() => setStrategies([]));
-  }, []);
-  useEffect(() => {
-    fetch("/api/research/release-gate", { cache: "no-store" })
-      .then(response => response.ok ? response.json() : Promise.reject())
-      .then(data => {
-        if (data.overall_status === "NO_GO" && data.release_enabled === false && data.paper_order_submission === "DISABLED" && data.broker_execution === "DISABLED" && Array.isArray(data.blocking_controls)) setReleaseGate(data);
-      })
-      .catch(() => setReleaseGate(current => ({ ...current, engineering_rehearsal: "UNAVAILABLE", blocking_controls: ["RELEASE_GATE_UNAVAILABLE"] })));
-  }, []);
-  const [market, setMarket] = useState<MarketTracks | null>(null);
-  const [marketError, setMarketError] = useState(false);
-  useEffect(() => {
-    fetch("/api/market/tracks", { cache: "no-store" })
-      .then(response => response.ok ? response.json() : Promise.reject())
-      .then(data => {
-        if (data.execution_enabled !== false || !Array.isArray(data.tracks) || data.tracks.some((t: MarketTrack) => t.execution !== "DISABLED")) throw Error("schema");
-        setMarket(data);
-      })
-      .catch(() => setMarketError(true));
-  }, []);
-  useEffect(() => {
-    fetch("/api/research/summary", { cache: "no-store" })
-      .then(response => response.ok ? response.json() : Promise.reject())
-      .then(data => setResearch(data))
-      .catch(() => setResearch({ status: "BLOCKED", valuation: "PENDING", agents: [], execution_enabled: false }));
-  }, []);
-  const observed = summary?.fresh_snapshot ? Date.parse(summary.fresh_snapshot.observed_at) : NaN;
-  const fresh = Number.isFinite(observed) && clock >= observed && clock - observed <= 300000 ? summary?.fresh_snapshot : null;
-  const books = initialBooks.map(b => ({...b, positions: (fresh?.books ?? summary?.books)?.find(x => x.id === "etoro-demo:" + b.id)?.positions ?? null, pnlStatus: "UNAVAILABLE" }));
-
-  const shown = activeBook === "all" ? books : books.filter(b => b.id === activeBook);
-  const releaseGatePanel = <section className="mt-5 rounded-2xl border border-amber-400/25 bg-amber-400/5 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Paper release gate</h2><p className="mt-1 text-sm text-slate-400">Sanitized local evidence only; a separate owner decision is still required.</p></div><StatusPill><CircleAlert size={13}/> {releaseGate.overall_status}</StatusPill></div><div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Order submission</p><p className="mt-2 font-semibold text-amber-300">{releaseGate.paper_order_submission}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Human approval</p><p className="mt-2 font-semibold text-amber-300">{releaseGate.human_approval}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Account mapping</p><p className="mt-2 font-semibold">{releaseGate.account_mapping}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Rehearsal</p><p className="mt-2 font-semibold">{releaseGate.rehearsal.status}</p></div></div><p className="mt-4 text-xs leading-5 text-amber-100">Broker execution is {releaseGate.rehearsal.broker_execution}. Reconciliation and kill-switch release remain {releaseGate.broker_reconciliation.toLowerCase()} / {releaseGate.kill_switch.toLowerCase()}; protected baseline: {releaseGate.protected_baseline}.</p>{releaseGate.etoro_demo && <div className="mt-5 rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">eToro Demo ({releaseGate.etoro_demo.broker_priority.toLowerCase()} paper broker; {releaseGate.etoro_demo.secondary_broker} secondary)</p><p className="mt-2 text-sm">Execution release <span className="font-semibold text-amber-300">{releaseGate.etoro_demo.execution_release}</span> · Real execution <span className="font-semibold text-amber-300">{releaseGate.etoro_demo.real_execution}</span> · Transport {releaseGate.etoro_demo.transport} · Ownership {releaseGate.etoro_demo.ownership}</p><p className="mt-2 text-xs text-slate-400">Open risks: {releaseGate.etoro_demo.open_risks.join(", ") || "none recorded"}</p></div>}</section>;
-  const formatRun = (value: string) => { const t = Date.parse(value); return Number.isFinite(t) ? new Date(t).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : value.split("_").join(" ").toLowerCase(); };
-  const marketPanel = <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6">
-    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Market scanning tracks</h2><p className="mt-1 text-sm text-slate-400">Research-only. Scores rank candidates; they are not forecasts or orders.</p></div><StatusPill><LockKeyhole size={13}/> {market ? `Agents capped at ${market.decision_engine.agent_only_cap}` : "Execution disabled"}</StatusPill></div>
-    {marketError || !market ? <p className="mt-5 text-sm text-amber-200">{marketError ? "Track summary unavailable. Start the local SideDeck service." : "Loading track summary."}</p> : <>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">US universe</p><p className="mt-2 font-semibold">{market.universe.status === "SNAPSHOT_LOADED" ? `${market.universe.instruments?.toLocaleString()} listed symbols` : "Not loaded"}</p><p className="mt-1 text-xs text-slate-400">{market.universe.status === "SNAPSHOT_LOADED" ? `Current snapshot only · ${market.universe.retrieved_at}` : market.universe.reason}</p></div>
-        <div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Price coverage</p><p className="mt-2 font-semibold">{market.price_coverage.counts ? `${market.price_coverage.counts.COVERED} covered · ${market.price_coverage.counts.PARTIALLY_COVERED} partial · ${market.price_coverage.counts.UNAVAILABLE} unavailable` : "No genuine price data"}</p><p className="mt-1 text-xs text-slate-400">{market.price_coverage.counts ? `Benchmark ${market.price_coverage.benchmark_status} · research data only` : market.price_coverage.reason}</p></div>
-      </div>
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">{market.tracks.map(t => <article key={t.track} className="rounded-xl border border-slate-700/60 bg-raised p-5">
-        <div className="flex items-center justify-between"><h3 className="font-semibold text-white">{trackTitles[t.track]}</h3><span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{t.mode.split("_").join(" ").toLowerCase()}</span></div>
-        <p className={`mt-3 text-sm font-semibold ${t.data_status === "AVAILABLE" ? "text-emerald-300" : "text-amber-300"}`}>{t.data_status === "AVAILABLE" ? `Data: ${t.usable_sources.join(", ")}` : "Data: no approved source"}</p>
-        <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><dt className="text-slate-500">Min price</dt><dd className="text-right tabular-nums">${t.filters.min_price}</dd><dt className="text-slate-500">Min $ volume/day</dt><dd className="text-right tabular-nums">${(Number(t.filters.min_dollar_adv) / 1e6).toFixed(0)}M</dd><dt className="text-slate-500">Shortlist</dt><dd className="text-right tabular-nums">{t.shortlist_sizes.quant} → {t.shortlist_sizes.research}</dd><dt className="text-slate-500">Spread data</dt><dd className="text-right">{t.filters.spread_required ? "Required" : "Optional"}</dd></dl>
-        <div className="mt-4 border-t border-slate-800 pt-3 space-y-1.5">{t.jobs.map(j => <div key={j.job_id} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-400">{j.job_id.split("_").join(" ")}</span><span className="text-slate-200">{formatRun(j.next_run_utc)}</span></div>)}</div>
-      </article>)}</div>
-    </>}
-  </section>;
-  return <div className="min-h-screen bg-ink text-slate-100">
-    <div className="flex min-h-screen">
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800 bg-[#0C1625] px-5 py-7 lg:flex">
-        <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-ink"><BarChart3 size={23}/></div><div><div className="text-xl font-bold tracking-tight">SideDeck</div><div className="text-xs text-slate-500">Research workstation</div></div></div>
-        <div className="mt-12 space-y-2">
-          <div className="flex items-center gap-3 rounded-xl border border-accent/20 bg-accent/10 px-4 py-3 text-sm font-semibold text-accent"><LayoutDashboard size={17}/> Demo portfolio</div>
-          <div className="flex items-center gap-3 px-4 py-3 text-sm text-slate-400"><Activity size={17}/> Strategy analytics <span className="ml-auto text-[10px] uppercase">Local</span></div>
-          <div className="flex items-center gap-3 px-4 py-3 text-sm text-slate-400"><Database size={17}/> Evidence center <span className="ml-auto text-[10px] uppercase">Local</span></div>
-        </div>
-        <div className="mt-auto rounded-xl border border-slate-700 bg-raised p-4"><div className="flex items-center gap-2 text-sm text-emerald-300"><ShieldCheck size={16}/> Execution locked</div><p className="mt-2 text-xs leading-5 text-slate-400">All broker order submission remains disabled. This screen contains no broker connectivity.</p></div>
-      </aside>
-      <main className="mx-auto w-full max-w-[1520px] px-5 py-7 sm:px-8 lg:px-12">
-        {releaseGatePanel}
-        {marketPanel}
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.16em] text-accent"><Moon size={13}/> Trading workspace <span className="text-slate-600">/</span> eToro Demo</div><h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Portfolio overview</h1><p className="mt-2 max-w-2xl text-sm text-slate-400">A protected baseline and three isolated books. No live connection or monetary balances are displayed in this preview.</p></div>
-          <div className="flex flex-wrap gap-2"><StatusPill positive><CircleCheck size={13}/> {fresh ? "Fresh Demo snapshot" : "Saved baseline only"}</StatusPill><StatusPill><LockKeyhole size={13}/> Read-only</StatusPill></div>
-        </header>
-        <div className="mt-7 flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-sm text-amber-100"><CircleAlert size={18} className="mt-0.5 shrink-0 text-amber-300"/><p><strong>Local baseline, not live.</strong> {apiError ? "Backend unavailable. Start the local SideDeck service." : summary ? `Baseline captured ${summary.captured_at ?? "at an unknown time"}.` : "Loading baseline metadata."} {fresh ? `Fresh owner-authorized snapshot ${fresh.observed_at}. Reconciliation: ${fresh.reconciliation_status}.` : "No recent authorized snapshot. Current portfolio reconciliation, cash and P&L are unavailable."}</p></div>
-        <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">M2 research readiness</h2><p className="mt-1 text-sm text-slate-400">Offline evidence only; provider calls and broker execution remain disabled.</p></div><StatusPill positive={research?.status === "READY_OFFLINE"}><ShieldCheck size={13}/> {research?.status ?? "LOADING"}</StatusPill></div><div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">TradingAgents</p><p className="mt-2 font-semibold">{research?.agents.find(a => a.id === "tradingagents")?.status ?? "NOT RUN"}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">BuffettAgent</p><p className="mt-2 font-semibold">{research?.agents.find(a => a.id === "ai-trading")?.status ?? "NOT RUN"}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Valuation</p><p className="mt-2 font-semibold text-amber-300">{research?.valuation ?? "PENDING"}</p></div></div></section>
-        <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Strategy catalogue</h2><p className="mt-1 text-sm text-slate-400">Versioned proposal strategies; acceptance remains unassessed.</p></div><StatusPill><LockKeyhole size={13}/> Execution disabled</StatusPill></div><div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">{strategies.map(strategy => <div key={strategy.id} className="rounded-lg bg-raised p-4"><p className="text-sm font-semibold text-white">{strategy.id.split("_").join(" ")}</p><p className="mt-1 text-xs text-slate-500">v{strategy.version} · {strategy.holding_period[0]}–{strategy.holding_period[1]} day constraint</p><p className="mt-3 text-xs font-semibold text-amber-300">{strategy.acceptance}</p></div>)}</div></section>
-        <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Genuine strategy validation</h2><p className="mt-1 text-sm text-slate-400">Local SIP research summaries only; metrics are screening evidence, not trade authorization.</p></div><StatusPill><LockKeyhole size={13}/> Proposal-only</StatusPill></div><div className="mt-5 grid gap-4 lg:grid-cols-3">{validation.map(dataset => <div key={dataset.ticker} className="rounded-lg bg-raised p-4"><div className="flex items-center justify-between"><p className="font-semibold text-white">{dataset.ticker}</p><span className="text-xs text-slate-500">{dataset.observations} bars</span></div><p className="mt-1 text-xs text-slate-500">{dataset.start} → {dataset.end}</p><div className="mt-4 space-y-2">{dataset.strategies.map(item => <div key={item.id} className="flex items-center justify-between gap-3 text-xs"><span className="truncate text-slate-300">{item.id.split("_").join(" ")}</span><span className={item.status === "VERIFIED" ? "text-emerald-300" : "text-amber-300"}>{item.status}</span></div>)}</div></div>)}</div></section>
-        <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6"><div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Benchmark evidence</h2><p className="mt-1 text-sm text-slate-400">Price-only reference returns are shown with their evidence status; they are not recommendations.</p></div><StatusPill><LockKeyhole size={13}/> Evidence only</StatusPill></div><div className="mt-5 grid gap-3 md:grid-cols-3">{validation.map(dataset => <div key={dataset.ticker} className="rounded-lg bg-raised p-4"><div className="flex items-center justify-between"><p className="font-semibold text-white">{dataset.ticker}</p><span className="text-xs text-amber-300">{dataset.benchmark?.corporate_action_status ?? "NOT_ASSESSED"}</span></div><p className="mt-2 text-xs leading-5 text-slate-400">{dataset.benchmark?.convention ?? "UNAVAILABLE"}</p><p className="mt-3 text-sm text-slate-200">Price-only return: {dataset.benchmark?.return ? `${(Number(dataset.benchmark.return) * 100).toFixed(2)}%` : "UNAVAILABLE"}</p><p className="mt-1 text-xs text-amber-300">Total return: {dataset.benchmark?.total_return ?? "UNAVAILABLE"}</p></div>)}</div></section>
-        <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat title="Protected positions" value={summary?.protected_positions?.toString() ?? "—"} detail="Saved holdings · unattributed" icon={ShieldCheck}/>
-          <Stat title="Strategy positions" value={fresh ? String((fresh.books[0]?.positions ?? 0) + (fresh.books[1]?.positions ?? 0)) : "—"} detail={fresh ? "Owner-authorized snapshot" : "Current positions unavailable"} icon={BrainCircuit}/>
-          <Stat title="Reconciliation exceptions" value={fresh?.discrepancy_count?.toString() ?? "—"} detail={fresh ? fresh.reconciliation_status : "Current reconciliation unavailable"} icon={CircleCheck}/>
-          <Stat title="Available cash (USD)" value="—" detail={fresh ? `Status: ${fresh.available_cash_usd_status} · amount withheld` : "Status: UNAVAILABLE · no live data"} icon={Wallet}/>
-        </div>
-        <div className="mt-9 flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">Strategy books</h2><p className="mt-1 text-sm text-slate-400">Positions and capital remain segregated by attribution.</p></div><label className="flex items-center gap-3 text-sm text-slate-400">View <select aria-label="Filter strategy books" value={activeBook} onChange={e => setActiveBook(e.target.value)} className="rounded-lg border border-slate-700 bg-panel px-3 py-2 text-slate-100"><option value="all">All books</option>{books.map(b => <option value={b.id} key={b.id}>{b.title}</option>)}</select></label></div>
-        <div className="mt-5 grid gap-4 lg:grid-cols-3">
-          {shown.map(b => <article key={b.id} className="rounded-2xl border border-slate-700/60 bg-panel p-6">
-            <div className="flex items-center justify-between"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-raised text-accent">{b.id === "tradingagents" ? <BrainCircuit size={21}/> : b.id === "ai-trading" ? <Bot size={21}/> : <ShieldCheck size={21}/>}</div><StatusPill>{b.id === "unattributed" ? "Protected" : "Unallocated"}</StatusPill></div>
-            <h3 className="mt-5 text-lg font-semibold">{b.title}</h3><p className="mt-1 text-sm text-slate-400">{b.description}</p>
-            <div className="mt-6 grid grid-cols-2 gap-4 border-t border-slate-800 pt-5"><div><p className="text-xs text-slate-500">Positions</p><p className="mt-1 text-2xl font-semibold tabular-nums">{b.positions ?? "—"}</p></div><div><p className="text-xs text-slate-500">Capital</p><p className="mt-2 text-xs font-semibold text-amber-300">{b.allocation}</p></div></div>
-            <div className="mt-5 flex items-center justify-between rounded-lg bg-raised px-3 py-2.5 text-xs"><span className="text-slate-400">Unrealised P&amp;L status</span><span className="font-semibold text-amber-300">UNAVAILABLE</span></div>
-          </article>)}
-        </div>
-        <section className="mt-8 overflow-hidden rounded-2xl border border-slate-700/60 bg-panel">
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 px-6 py-5"><div><h2 className="text-lg font-semibold">Portfolio safeguards</h2><p className="mt-1 text-sm text-slate-400">{fresh ? "Latest owner-authorized snapshot; no orders possible." : "Baseline stored locally; current reconciliation not available."}</p></div><StatusPill><CircleAlert size={14}/> {fresh ? `Reconciliation: ${fresh.reconciliation_status}` : "Not currently reconciled"}</StatusPill></div>
-          <div className="grid gap-px bg-slate-800 md:grid-cols-3"><div className="bg-panel p-6"><LockKeyhole size={20} className="text-accent"/><h3 className="mt-3 font-semibold">No order capability</h3><p className="mt-2 text-sm leading-6 text-slate-400">There are no buy, sell, close or order-management controls in this application.</p></div><div className="bg-panel p-6"><ShieldCheck size={20} className="text-accent"/><h3 className="mt-3 font-semibold">Baseline protected</h3><p className="mt-2 text-sm leading-6 text-slate-400">Four pre-existing positions are assigned only to the unattributed book.</p></div><div className="bg-panel p-6"><ArrowUpRight size={20} className="text-accent"/><h3 className="mt-3 font-semibold">No inferred allocations</h3><p className="mt-2 text-sm leading-6 text-slate-400">Each strategy needs an explicit owner decision before virtual capital can appear.</p></div></div>
-        </section>
-        <footer className="mt-8 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500"><span>SideDeck · eToro Demo portfolio UI preview</span><span>Local baseline summary · No broker calls</span></footer>
-      </main>
-    </div>
-  </div>;
+  const route = useRoute();
+  const [theme, toggleTheme] = useTheme();
+  const views = {
+    overview: <Overview/>,
+    markets: <Markets detail={route.detail}/>,
+    tracks: <Tracks detail={route.detail}/>,
+    agents: <Agents/>,
+    strategies: <Strategies/>,
+    portfolio: <Portfolio/>,
+    operations: <Operations/>,
+  } as const;
+  return <Shell active={route.workspace} theme={theme} onToggleTheme={toggleTheme}>{views[route.workspace]}</Shell>;
 }

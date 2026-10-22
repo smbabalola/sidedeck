@@ -1,0 +1,9 @@
+{
+ "agents": [],
+ "broker_execution": "DISABLED",
+ "execution_enabled": false,
+ "schema_version": 1,
+ "source": "LOCAL_RESEARCH_EVIDENCE",
+ "status": "BLOCKED",
+ "valuation": "PENDING"
+}

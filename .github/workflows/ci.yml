@@ -41,3 +41,9 @@ jobs:
       - name: Build read-only dashboard
         working-directory: web
         run: npm install --no-package-lock --ignore-scripts && npm run build
+      - name: Dashboard unit tests
+        working-directory: web
+        run: npm test
+      - name: Dashboard browser end-to-end tests (mocked API, desktop/tablet/phone)
+        working-directory: web
+        run: npx playwright install --with-deps chromium && npx playwright test workstation
