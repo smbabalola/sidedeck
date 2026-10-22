@@ -107,3 +107,8 @@ def validate_session_coverage(
     unexpected = tuple(day for day in observed_unique if day not in expected_set)
     status = "VALIDATED" if not missing and not unexpected and len(observed) == len(observed_unique) else "REJECTED"
     return SessionCoverage(expected, observed_unique, missing, unexpected, status)
+
+
+# Years whose full-closure list above is complete. 2021 holds only two late-year dates,
+# so sessions in 2021 must not be inferred from this table.
+COMPLETE_CALENDAR_YEARS: frozenset[int] = frozenset(range(2022, 2027))
