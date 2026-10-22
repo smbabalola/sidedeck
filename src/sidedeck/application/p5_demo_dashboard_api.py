@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from sidedeck.application.sd014_strategy_engine import catalogue
 from sidedeck.application.sd036_etoro_demo_desk import etoro_demo_status
+from sidedeck.application.sd073_market_tracks_api import market_tracks_summary
 
 
 def baseline_summary(db_path: str) -> dict[str, Any]:
@@ -271,7 +272,8 @@ def release_gate_summary(path: str | None = None) -> dict[str, Any]:
 
 def make_handler(db_path: str, snapshot_path: str | None = None, research_path: str | None = None,
                  strategy_paths: tuple[str, ...] = (), audit_paths: tuple[str, ...] = (),
-                 release_gate_path: str | None = None) -> type[BaseHTTPRequestHandler]:
+                 release_gate_path: str | None = None, universe_path: str | None = None,
+                 pilot_path: str | None = None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.headers.get("Host") not in ("127.0.0.1:8765", "localhost:8765") or urlsplit(self.path).query:
@@ -289,6 +291,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = strategy_validation_summary(strategy_paths, audit_paths)
                 elif route == "/api/research/release-gate":
                     data = release_gate_summary(release_gate_path)
+                elif route == "/api/market/tracks":
+                    data = market_tracks_summary(universe_path, pilot_path)
                 else:
                     self.send_error(404)
                     return
@@ -323,9 +327,12 @@ def main() -> int:
     p.add_argument("--strategy-research", action="append", default=[])
     p.add_argument("--strategy-audit", action="append", default=[])
     p.add_argument("--release-gate", default=None)
+    p.add_argument("--universe-summary", default=None)
+    p.add_argument("--price-pilot-summary", default=None)
     a = p.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research,
-                                                                     tuple(a.strategy_research), tuple(a.strategy_audit), a.release_gate))
+                                                                     tuple(a.strategy_research), tuple(a.strategy_audit), a.release_gate,
+                                                                     a.universe_summary, a.price_pilot_summary))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()

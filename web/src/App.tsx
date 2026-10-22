@@ -8,6 +8,10 @@ type StrategyCatalogue = { id: string; version: string; parameters: Record<strin
 type StrategyValidation = { ticker: string; observations: number; start: string; end: string; benchmark?: { convention: string; total_return: string; ending_equity: string | null; return: string | null; max_drawdown: string | null; corporate_action_status: string }; strategies: { id: string; status: string; metrics: { trade_count: number | null; profit_factor: string | null; max_drawdown: string | null } }[] };
 type ReleaseGate = { overall_status: "NO_GO"; engineering_rehearsal: string; paper_order_submission: "DISABLED"; human_approval: string; account_mapping: string; broker_reconciliation: string; kill_switch: string; protected_baseline: string; blocking_controls: string[]; rehearsal: { status: string; broker_execution: "DISABLED"; final_state?: string | null; event_count?: number | null }; etoro_demo?: EtoroDemoStatus };
 type EtoroDemoStatus = { broker_priority: string; secondary_broker: string; execution_release: string; real_execution: string; transport: string; baseline: string; ownership: string; agent_portfolios: string; open_risks: string[] };
+type TrackJob = { job_id: string; next_run_utc: string };
+type MarketTrack = { track: "DAY" | "SWING" | "POSITION"; mode: string; horizon_trading_days: [number, number]; data_status: string; usable_sources: string[]; filters: { min_price: string; min_dollar_adv: string; min_sessions: number; spread_required: boolean }; shortlist_sizes: { quant: number; research: number }; jobs: TrackJob[]; execution: "DISABLED" };
+type MarketTracks = { execution_enabled: false; universe: { status: string; instruments?: number; history_basis?: string; retrieved_at?: string; reason?: string }; price_coverage: { status: string; counts?: Record<string, number>; benchmark_status?: string; reason?: string }; tracks: MarketTrack[]; decision_engine: { execution_permission: string; agent_only_cap: string } };
+const trackTitles: Record<MarketTrack["track"], string> = { DAY: "Day · intraday", SWING: "Swing · 2–15 days", POSITION: "Position · weeks–months" };
 const initialBooks: Book[] = [
   { id: "tradingagents", title: "TradingAgents", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
   { id: "ai-trading", title: "AI-Trading", positions: 0, pnlStatus: "AVAILABLE", allocation: "NOT ALLOCATED", description: "Independent strategy book" },
@@ -60,6 +64,17 @@ export default function App() {
       })
       .catch(() => setReleaseGate(current => ({ ...current, engineering_rehearsal: "UNAVAILABLE", blocking_controls: ["RELEASE_GATE_UNAVAILABLE"] })));
   }, []);
+  const [market, setMarket] = useState<MarketTracks | null>(null);
+  const [marketError, setMarketError] = useState(false);
+  useEffect(() => {
+    fetch("/api/market/tracks", { cache: "no-store" })
+      .then(response => response.ok ? response.json() : Promise.reject())
+      .then(data => {
+        if (data.execution_enabled !== false || !Array.isArray(data.tracks) || data.tracks.some((t: MarketTrack) => t.execution !== "DISABLED")) throw Error("schema");
+        setMarket(data);
+      })
+      .catch(() => setMarketError(true));
+  }, []);
   useEffect(() => {
     fetch("/api/research/summary", { cache: "no-store" })
       .then(response => response.ok ? response.json() : Promise.reject())
@@ -72,6 +87,22 @@ export default function App() {
 
   const shown = activeBook === "all" ? books : books.filter(b => b.id === activeBook);
   const releaseGatePanel = <section className="mt-5 rounded-2xl border border-amber-400/25 bg-amber-400/5 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Paper release gate</h2><p className="mt-1 text-sm text-slate-400">Sanitized local evidence only; a separate owner decision is still required.</p></div><StatusPill><CircleAlert size={13}/> {releaseGate.overall_status}</StatusPill></div><div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Order submission</p><p className="mt-2 font-semibold text-amber-300">{releaseGate.paper_order_submission}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Human approval</p><p className="mt-2 font-semibold text-amber-300">{releaseGate.human_approval}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Account mapping</p><p className="mt-2 font-semibold">{releaseGate.account_mapping}</p></div><div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Rehearsal</p><p className="mt-2 font-semibold">{releaseGate.rehearsal.status}</p></div></div><p className="mt-4 text-xs leading-5 text-amber-100">Broker execution is {releaseGate.rehearsal.broker_execution}. Reconciliation and kill-switch release remain {releaseGate.broker_reconciliation.toLowerCase()} / {releaseGate.kill_switch.toLowerCase()}; protected baseline: {releaseGate.protected_baseline}.</p>{releaseGate.etoro_demo && <div className="mt-5 rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">eToro Demo ({releaseGate.etoro_demo.broker_priority.toLowerCase()} paper broker; {releaseGate.etoro_demo.secondary_broker} secondary)</p><p className="mt-2 text-sm">Execution release <span className="font-semibold text-amber-300">{releaseGate.etoro_demo.execution_release}</span> · Real execution <span className="font-semibold text-amber-300">{releaseGate.etoro_demo.real_execution}</span> · Transport {releaseGate.etoro_demo.transport} · Ownership {releaseGate.etoro_demo.ownership}</p><p className="mt-2 text-xs text-slate-400">Open risks: {releaseGate.etoro_demo.open_risks.join(", ") || "none recorded"}</p></div>}</section>;
+  const formatRun = (value: string) => { const t = Date.parse(value); return Number.isFinite(t) ? new Date(t).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" }) : value.split("_").join(" ").toLowerCase(); };
+  const marketPanel = <section className="mt-5 rounded-2xl border border-slate-700/60 bg-panel p-6">
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Market scanning tracks</h2><p className="mt-1 text-sm text-slate-400">Research-only. Scores rank candidates; they are not forecasts or orders.</p></div><StatusPill><LockKeyhole size={13}/> {market ? `Agents capped at ${market.decision_engine.agent_only_cap}` : "Execution disabled"}</StatusPill></div>
+    {marketError || !market ? <p className="mt-5 text-sm text-amber-200">{marketError ? "Track summary unavailable. Start the local SideDeck service." : "Loading track summary."}</p> : <>
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+        <div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">US universe</p><p className="mt-2 font-semibold">{market.universe.status === "SNAPSHOT_LOADED" ? `${market.universe.instruments?.toLocaleString()} listed symbols` : "Not loaded"}</p><p className="mt-1 text-xs text-slate-400">{market.universe.status === "SNAPSHOT_LOADED" ? `Current snapshot only · ${market.universe.retrieved_at}` : market.universe.reason}</p></div>
+        <div className="rounded-lg bg-raised p-4"><p className="text-xs text-slate-500">Price coverage</p><p className="mt-2 font-semibold">{market.price_coverage.counts ? `${market.price_coverage.counts.COVERED} covered · ${market.price_coverage.counts.PARTIALLY_COVERED} partial · ${market.price_coverage.counts.UNAVAILABLE} unavailable` : "No genuine price data"}</p><p className="mt-1 text-xs text-slate-400">{market.price_coverage.counts ? `Benchmark ${market.price_coverage.benchmark_status} · research data only` : market.price_coverage.reason}</p></div>
+      </div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">{market.tracks.map(t => <article key={t.track} className="rounded-xl border border-slate-700/60 bg-raised p-5">
+        <div className="flex items-center justify-between"><h3 className="font-semibold text-white">{trackTitles[t.track]}</h3><span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{t.mode.split("_").join(" ").toLowerCase()}</span></div>
+        <p className={`mt-3 text-sm font-semibold ${t.data_status === "AVAILABLE" ? "text-emerald-300" : "text-amber-300"}`}>{t.data_status === "AVAILABLE" ? `Data: ${t.usable_sources.join(", ")}` : "Data: no approved source"}</p>
+        <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs"><dt className="text-slate-500">Min price</dt><dd className="text-right tabular-nums">${t.filters.min_price}</dd><dt className="text-slate-500">Min $ volume/day</dt><dd className="text-right tabular-nums">${(Number(t.filters.min_dollar_adv) / 1e6).toFixed(0)}M</dd><dt className="text-slate-500">Shortlist</dt><dd className="text-right tabular-nums">{t.shortlist_sizes.quant} → {t.shortlist_sizes.research}</dd><dt className="text-slate-500">Spread data</dt><dd className="text-right">{t.filters.spread_required ? "Required" : "Optional"}</dd></dl>
+        <div className="mt-4 border-t border-slate-800 pt-3 space-y-1.5">{t.jobs.map(j => <div key={j.job_id} className="flex items-center justify-between gap-2 text-xs"><span className="truncate text-slate-400">{j.job_id.split("_").join(" ")}</span><span className="text-slate-200">{formatRun(j.next_run_utc)}</span></div>)}</div>
+      </article>)}</div>
+    </>}
+  </section>;
   return <div className="min-h-screen bg-ink text-slate-100">
     <div className="flex min-h-screen">
       <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800 bg-[#0C1625] px-5 py-7 lg:flex">
@@ -85,6 +116,7 @@ export default function App() {
       </aside>
       <main className="mx-auto w-full max-w-[1520px] px-5 py-7 sm:px-8 lg:px-12">
         {releaseGatePanel}
+        {marketPanel}
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[.16em] text-accent"><Moon size={13}/> Trading workspace <span className="text-slate-600">/</span> eToro Demo</div><h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Portfolio overview</h1><p className="mt-2 max-w-2xl text-sm text-slate-400">A protected baseline and three isolated books. No live connection or monetary balances are displayed in this preview.</p></div>
           <div className="flex flex-wrap gap-2"><StatusPill positive><CircleCheck size={13}/> {fresh ? "Fresh Demo snapshot" : "Saved baseline only"}</StatusPill><StatusPill><LockKeyhole size={13}/> Read-only</StatusPill></div>

@@ -126,8 +126,15 @@ def run_demo(count: int = 60) -> dict[str, Any]:
     }
 
 
-def main() -> None:
-    print(json.dumps(run_demo(), indent=2, sort_keys=True))
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="SD-076 synthetic pipeline demo / throughput")
+    parser.add_argument("--count", type=int, default=60, help="synthetic instruments (1-10000)")
+    args = parser.parse_args(argv)
+    if not 1 <= args.count <= 10_000:
+        parser.error("count must be 1-10000")
+    print(json.dumps(run_demo(args.count), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
