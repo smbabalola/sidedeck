@@ -1,6 +1,6 @@
 # SD-049 — MSFT eToro Demo pilot: release checklist and blockers (2026-10-22)
 
-**Status: NOT READY.** Updated 2026-10-22 after SD-050/SD-051: B3 and B4 are now automated pre-order gates; B1, B5 and the owner's intent signature remain. `ETORO_DEMO_EXECUTION_RELEASE=NO_GO`, `broker_execution=DISABLED`, `NETWORK_TRANSPORT_ENABLED=False`. This checklist was prepared fully offline. The owner's selection of MSFT is not authorization to send an order.
+**Status: NOT READY (intent prepared; awaiting owner signature and operator runner).** Updated 2026-10-22 after SD-052/SD-053; earlier note after SD-050/SD-051: B3 and B4 are now automated pre-order gates; B1, B5 and the owner's intent signature remain. `ETORO_DEMO_EXECUTION_RELEASE=NO_GO`, `broker_execution=DISABLED`, `NETWORK_TRANSPORT_ENABLED=False`. This checklist was prepared fully offline. The owner's selection of MSFT is not authorization to send an order.
 
 ## Owner-selected configuration
 
@@ -56,3 +56,18 @@ After these, Codex prepares the canonical MSFT `PilotIntent` (exact units, limit
 | B5 window | **OPEN.** Owner to pick a date; 10:00–11:30 ET recommended |
 | Intent signature | Pending B1 and B5: Codex will prepare the canonical schema-v2 intent and digest for the owner to sign (namespace `sidedeck-etoro-pilot-release`) |
 | Request plan | 12 requests / 2 writes (owner ceiling), enforced by the signed caps, the transport ledger and the pilot budget |
+
+## Update 2026-10-22 (SD-052 / SD-053)
+
+| # | Status |
+|---|---|
+| B1 instrument ID | **RESOLVED: MSFT = 1004** (SD-052, one authorized GET, `RESOLVED_PARTIALLY_VERIFIED`; exchange and issuer VERIFIED) |
+| B2 baseline conflict | **RESOLVED: no conflict** (read-only check against the 4 protected positions) |
+| Instrument type / currency | **Still to verify at preflight:** UNVERIFIED in search. The preflight aborts on any conflicting broker label and reports `BROKER_VERIFIED` or `DERIVED` before the open approval |
+| B3 / B4 | Automated pre-order gates (SD-051) |
+| B5 window | **SET: Fri 2026-10-23 10:00–11:30 ET** (14:00–15:30 UTC) |
+| Intent | **PREPARED (SD-053):** 0.09 units, signed max limit 552.56, ≤ USD 50, digest `71e111b3…9a62`. Awaiting the owner's SSH signature (`sidedeck-etoro-pilot-release`) |
+| Operator runner | **OPEN (SD-054):** end-to-end supervised runner composing release → preflight → open approval → open → close approval → close → reconcile; to be built and reviewed offline |
+| B6 network lock | Locked; lift only by a separate reviewed commit after the signed release and explicit authorization |
+
+Details: `docs/SD052_SD053_MSFT_ID_AND_PILOT_INTENT.md`.

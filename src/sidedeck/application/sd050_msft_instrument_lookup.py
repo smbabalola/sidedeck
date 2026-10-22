@@ -36,9 +36,9 @@ from sidedeck.application.sd042_etoro_credential_roles import (
 AUTHORIZATION_ID = "SD-050"
 # Each lookup needs an owner authorization recorded HERE in reviewed code. SD-050 was
 # consumed (2026-10-22) and is refused unconditionally, even if its budget file is lost.
-# SD-052: owner authorization (2026-10-22) for exactly one more MSFT search GET.
-AUTHORIZED_LOOKUP_IDS: frozenset[str] = frozenset({"SD-052"})
-EXHAUSTED_LOOKUP_IDS = frozenset({"SD-050"})
+# SD-050 (2026-10-22, rejected) and SD-052 (2026-10-22, resolved MSFT = 1004) are consumed.
+AUTHORIZED_LOOKUP_IDS: frozenset[str] = frozenset()
+EXHAUSTED_LOOKUP_IDS = frozenset({"SD-050", "SD-052"})
 LOOKUP_NETWORK_ENABLED = False   # network lock; a reviewed commit enables one authorized id
 _AUTH_ID = re.compile(r"SD-[0-9]{3}")
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"

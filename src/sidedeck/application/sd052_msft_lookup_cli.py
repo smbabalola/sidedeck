@@ -57,7 +57,8 @@ def run(env: dict[str, str]) -> dict[str, Any]:
     lookup.LOOKUP_NETWORK_ENABLED = True          # in-process only, for this one call
     try:
         return lookup.run_once(env=env, db_path=BASELINE_DB, budget_path=budget,
-                               evidence_path=EVIDENCE_PATH, authorization_id=AUTHORIZATION_ID)
+                               evidence_path=EVIDENCE_PATH, authorization_id=AUTHORIZATION_ID,
+                               authorized_ids=lookup.AUTHORIZED_LOOKUP_IDS)
     finally:
         lookup.LOOKUP_NETWORK_ENABLED = False
 

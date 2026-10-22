@@ -50,6 +50,8 @@ def rig(tmp_path, monkeypatch):
     EtoroDemoStore(str(db)).capture_baseline(payload, observed_at=datetime.now(timezone.utc),
                                              expected_positions=4)
     monkeypatch.setattr(lookup, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(lookup, "AUTHORIZED_LOOKUP_IDS", frozenset({"SD-052"}))
+    monkeypatch.setattr(lookup, "EXHAUSTED_LOOKUP_IDS", frozenset({"SD-050"}))
     monkeypatch.setattr(cli, "BASELINE_DB", str(db))
     monkeypatch.setattr(cli, "EVIDENCE_PATH", str(tmp_path / "sd052-msft-instrument.json"))
     lookup._reserve(lookup.budget_path_for("SD-050"))          # SD-050 exhausted state
@@ -124,7 +126,13 @@ def test_cli_has_no_bypass_options(rig, argv):
 def test_source_locks_and_authorization_state():
     assert lookup.LOOKUP_NETWORK_ENABLED is False
     assert order_transport.NETWORK_TRANSPORT_ENABLED is False
-    assert "SD-050" in lookup.EXHAUSTED_LOOKUP_IDS
+    assert {"SD-050", "SD-052"} <= lookup.EXHAUSTED_LOOKUP_IDS
+    assert lookup.AUTHORIZED_LOOKUP_IDS == frozenset()
+
+
+def test_consumed_sd052_is_refused_by_real_configuration():
+    with pytest.raises(cli.LauncherRefused):
+        cli._preconditions()
 
 
 def test_launcher_never_references_order_transport():

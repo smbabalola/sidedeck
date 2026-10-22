@@ -421,6 +421,7 @@ def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime) -> Fre
     if len(mine) != 1 or len(rows) != 1:
         raise EtoroDemoOrderError("rates response must contain exactly the pilot instrument")
     row = mine[0]
+    identity_conflicts(row)
     if row.get("quoteType") != "realtime":
         raise EtoroDemoOrderError("reference quote is not realtime")
     bid, ask = _dec(row.get("bid"), "bid"), _dec(row.get("ask"), "ask")
@@ -447,11 +448,45 @@ def derive_limit(ask: Decimal, signed_max: Decimal, premium: Decimal) -> Decimal
     return limit
 
 
+STOCK_TYPE_ID = 5          # eToro instrumentTypeID for stocks (6 = ETF, 10 = crypto, ...)
+USD_CURRENCY_ID = 1        # eToro currency id for USD (as in accountCurrencyId)
+_STOCK_WORDS = ("stock", "equit", "share")
+BROKER_VERIFIED, DERIVED = "BROKER_VERIFIED", "DERIVED"
+
+
+def identity_conflicts(row: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Explicit type/currency labels on a broker row must say stock / USD; a conflicting
+    label raises. Returns (type, currency) BROKER_VERIFIED where a label was present."""
+    kind = currency = None
+    for key, value in row.items():
+        lowered = key.lower()
+        if value is None:
+            continue
+        if "currency" in lowered:
+            usd = (value == USD_CURRENCY_ID if type(value) is int
+                   else str(value).strip().upper() == "USD")
+            if not usd:
+                raise EtoroDemoOrderError("broker row reports a non-USD currency")
+            currency = BROKER_VERIFIED
+        elif lowered in ("instrumenttypeid", "instrumenttype", "instrumenttypename",
+                         "assetclass", "assettype"):
+            stock = (value == STOCK_TYPE_ID if type(value) is int
+                     else any(w in str(value).lower() for w in _STOCK_WORDS))
+            if not stock:
+                raise EtoroDemoOrderError("broker row reports a non-stock instrument type")
+            kind = BROKER_VERIFIED
+    return kind, currency
+
+
 @dataclass(frozen=True)
 class Eligibility:
     instrument_id: int
     fractional: bool
     min_position_usd: Decimal
+    # BROKER_VERIFIED when eToro labelled it explicitly; DERIVED from the required
+    # real-settlement (non-CFD) long 1x configuration and the USD eligibility response.
+    instrument_type_evidence: str = DERIVED
+    currency_evidence: str = DERIVED
 
 
 def parse_eligibility(payload: Any, *, instrument_id: int, units: Decimal,
@@ -466,6 +501,7 @@ def parse_eligibility(payload: Any, *, instrument_id: int, units: Decimal,
     if len(mine) != 1:
         raise EtoroDemoOrderError("eligibility must contain exactly the pilot instrument")
     row = mine[0]
+    kind, currency = identity_conflicts(row)
     if row.get("allowOpenPosition") is not True or row.get("allowClosePosition") is not True:
         raise EtoroDemoOrderError("eToro does not allow opening and closing this instrument")
     if row.get("tradeUnitType") != "units" or row.get("allowedOrderQuantityType") not in (
@@ -488,4 +524,4 @@ def parse_eligibility(payload: Any, *, instrument_id: int, units: Decimal,
                              for c in long_1x])
     if notional_usd < floor:
         raise EtoroDemoOrderError("pilot notional is below eToro's minimum position size")
-    return Eligibility(instrument_id, fractional, floor)
+    return Eligibility(instrument_id, fractional, floor, kind or DERIVED, currency or DERIVED)
