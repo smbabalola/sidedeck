@@ -1,5 +1,10 @@
 # SD-057 — Consolidated release request: first eToro Demo MSFT trade
 
+> **SUPERSEDED — historical record only (2026-10-23).** The pilots, digests and windows in
+> this document are expired or consumed and must never be signed or unlocked. The current
+> operational authority is [`SD058_MONDAY_OWNER_RUNBOOK.md`](SD058_MONDAY_OWNER_RUNBOOK.md)
+> (pilot `af2213c5…`, digest `1ab4d2c8…fd4a`, Mon 2026-10-26 14:00–16:00 UTC).
+
 **Status: READY FOR THE OWNER'S DECISION (2026-10-22).** All offline prerequisites pass.
 This document is **not** an authorization. `ETORO_DEMO_EXECUTION_RELEASE=NO_GO`,
 `broker_execution=DISABLED`, `NETWORK_TRANSPORT_ENABLED=False`, `UNLOCKED_PILOT_DIGEST=None`.
