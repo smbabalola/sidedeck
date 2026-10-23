@@ -34,10 +34,10 @@ def _paper_pair_credentials() -> tuple[PaperCredentials, PaperCredentials]:
     if not first_key or not second_key:
         raise ValueError("both ALPACA_API_KEY and ALPACA_API_KEY2 must be present")
     first_secret = _secret_from_env(
-        ("ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY")
+        ("ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY", "ALPACA_API_SECRET")
     )
     second_secret = _secret_from_env(
-        ("ALPACA_SECRET_KEY2", "ALPACA_API_SECRET_KEY2", "APCA_API_SECRET_KEY2")
+        ("ALPACA_SECRET_KEY2", "ALPACA_API_SECRET_KEY2", "APCA_API_SECRET_KEY2", "ALPACA_API_SECRET2")
     )
     if first_key == second_key:
         raise ValueError("paper key IDs are identical; independent account binding is unverified")

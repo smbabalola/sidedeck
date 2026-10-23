@@ -143,3 +143,20 @@ def test_secret_alias_conflicts_are_rejected_without_values(monkeypatch):
     monkeypatch.setenv("ALPACA_SECRET_KEY2", "S2")
     with pytest.raises(ValueError, match="conflicting"):
         paper_pair._paper_pair_credentials()
+
+
+def test_alpaca_api_secret_aliases_are_accepted_for_both_slots(monkeypatch):
+    monkeypatch.setenv("ALPACA_API_KEY", "KEY1")
+    monkeypatch.setenv("ALPACA_API_KEY2", "KEY2")
+    for name in ("ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY",
+                 "ALPACA_API_SECRET", "ALPACA_SECRET_KEY2", "ALPACA_API_SECRET_KEY2",
+                 "APCA_API_SECRET_KEY2", "ALPACA_API_SECRET2"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ALPACA_API_SECRET", "SECRET1")
+    monkeypatch.setenv("ALPACA_API_SECRET2", "SECRET2")
+    left, right = paper_pair._paper_pair_credentials()
+    assert (left.secret_key, right.secret_key) == ("SECRET1", "SECRET2")
+    assert "SECRET1" not in repr(left)
+    monkeypatch.setenv("ALPACA_SECRET_KEY2", "DIFFERENT")
+    with pytest.raises(ValueError, match="conflicting"):
+        paper_pair._paper_pair_credentials()

@@ -192,3 +192,17 @@ def test_http_error_never_returns_provider_error_body(monkeypatch) -> None:
 def test_single_paper_account_cannot_be_two_broker_ledgers() -> None:
     view = AlpacaPaperReadClient(Transport()).inspect(observed_at=NOW)
     assert view.broker_scope != "TWO_INDEPENDENT_STRATEGY_ACCOUNTS"
+
+
+def test_alpaca_api_secret_alias_is_accepted(monkeypatch) -> None:
+    monkeypatch.setenv("ALPACA_API_KEY", "DUMMY_KEY")
+    for k in ("ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY",
+              "ALPACA_API_SECRET"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ALPACA_API_SECRET", "DUMMY_SECRET")
+    auth = paper.PaperCredentials.from_environment()
+    assert auth.secret_key == "DUMMY_SECRET"
+    assert "DUMMY_SECRET" not in repr(auth)
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "OTHER_SECRET")
+    with pytest.raises(ValueError, match="conflicting"):
+        paper.PaperCredentials.from_environment()

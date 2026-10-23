@@ -31,7 +31,9 @@ class PaperCredentials:
     @classmethod
     def from_environment(cls) -> "PaperCredentials":
         key = os.environ.get("ALPACA_API_KEY")
-        names = ("ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY")
+        names = (
+            "ALPACA_SECRET_KEY", "ALPACA_API_SECRET_KEY", "APCA_API_SECRET_KEY", "ALPACA_API_SECRET"
+        )
         populated = [os.environ[name] for name in names if os.environ.get(name)]
         if not key or not populated:
             raise ValueError("ALPACA_API_KEY and a paper API secret variable are required")

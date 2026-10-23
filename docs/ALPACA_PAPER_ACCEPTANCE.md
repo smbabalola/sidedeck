@@ -5,7 +5,7 @@
 ## Offline checks (no network; proceed without asking)
 
 1. Safely sync `feat/p2-agent-adapters`, preserving ignored `.env`, local databases, `SideDeck-Blueprint/` and any untracked work. **No auto-merge or reset.**
-2. Read `docs/ADR-002-alpaca-paper-control-plane.md`; verify local `ALPACA_API_KEY` is present and nonempty. Also check for the **paired paper secret** in `ALPACA_SECRET_KEY`, `ALPACA_API_SECRET_KEY` or `APCA_API_SECRET_KEY`. Report only boolean presence and whether aliases conflict. Do not read/print/hash prefixes, values, lengths, account IDs or secret-bearing errors into output, logs or GitHub.
+2. Read `docs/ADR-002-alpaca-paper-control-plane.md`; verify local `ALPACA_API_KEY` is present and nonempty. Also check for the **paired paper secret** in `ALPACA_SECRET_KEY`, `ALPACA_API_SECRET_KEY`, `APCA_API_SECRET_KEY` or `ALPACA_API_SECRET` (second slot: the same names with a `2` suffix). Report only boolean presence and whether aliases conflict. Do not read/print/hash prefixes, values, lengths, account IDs or secret-bearing errors into output, logs or GitHub.
 3. Confirm through existing *local* documentation/configuration evidence that the key pair belongs to Alpaca **Paper** rather than Live. If this cannot be confirmed offline, label `PAPER_KEY_SCOPE_UNVERIFIED` and request the owner to inspect the Alpaca dashboard. Never test keys against the real brokerage host.
 4. In the local SideDeck venv run `PYTHONPATH=src python -m sidedeck.paper --dry-run`, offline pytest/Ruff/mypy as needed. Confirm `FIXTURE_NOT_REAL`, synthetic `1000`, zero external HTTP requests. A fixture's account/positions is never a provider-authentication pass.
 

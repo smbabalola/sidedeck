@@ -411,3 +411,10 @@ These are source-review findings at verified commit `4a35d4120d3a6653250083906f1
 - [ ] Record CI results, tested SHA and runbook `docs/PAPER_DISPATCHER.md` once green.
 
 - [x] **SD-12I offline acceptance:** Code commit `7441e7a1fe13446ec71c5e7505eab336a596384e` passed both [CI 39203827920](https://github.com/smbabalola/sidedeck/actions/runs/39203827920) and [CI 39203825069](https://github.com/smbabalola/sidedeck/actions/runs/39203825069): **269 tests passed**, 3 known SQLite warnings, Ruff passed, mypy passed for 40 source files, disposable PostgreSQL CI. Mocked GET/POST only. Accounts and secrets have NOT been verified in a user-local authenticated run; no Alpaca paper or live orders executed.
+
+## SD-12J — Local credential presence check and secret-alias fix (2026-10-23)
+
+- [x] **SD-12A-1 presence check (names only, no values/hashes/lengths):** local ignored `.env` holds non-empty `ALPACA_API_KEY`, `ALPACA_API_KEY2`, `ALPACA_API_SECRET` and `ALPACA_API_SECRET2`. No `ALPACA_SECRET_KEY*` / `APCA_*` names are set. `.env` is not auto-loaded by any product module.
+- [x] **Defect fixed:** `PaperCredentials.from_environment` and `paper_pair._paper_pair_credentials` didn't recognise `ALPACA_API_SECRET` / `ALPACA_API_SECRET2`, so the consent-gated two-GET identity check would have failed with "secret missing". Both names are now accepted aliases; conflicting aliases still fail closed. 2 new tests.
+- [x] **Local verification:** 270 passed / 1 skipped (PostgreSQL, CI-only), Ruff clean on `src tests`, mypy clean (40 source files), `alembic upgrade head` OK, `sidedeck.paper_pair --dry-run` → `FIXTURE_NOT_REAL`, `broker_order_submission_enabled=false`. Repo-wide `ruff check .` reports 8 lint errors only inside the untracked `ai-hedge-fund/` folder, which is not project code and is left untouched.
+- [ ] **BLOCKED — owner consent:** the read-only two-GET `/v2/account` identity check (`sidedeck.paper_pair --paper-only --allow-read-network --confirm-owner-paper-read-only`) still needs explicit owner approval. No Alpaca request has been made. Paper writes remain disabled.
