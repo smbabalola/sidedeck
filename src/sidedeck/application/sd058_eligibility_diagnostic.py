@@ -92,7 +92,7 @@ def _fixed_root() -> Path:
 
 def fixed_paths() -> dict[str, Path]:
     root = _fixed_root()
-    return {"root": root, "intent": root / "intent.json", "signature": root / "intent.sig",
+    return {"root": root, "intent": root / "intent.json", "signature": root / "intent.digest.sig",
             "digest": root / "intent.digest", "ledger": root / "request-ledger.sqlite3",
             "audit": root / "audit.sqlite3"}
 
