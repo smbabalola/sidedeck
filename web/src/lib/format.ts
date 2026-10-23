@@ -66,3 +66,10 @@ export function tone(value: string | number | null | undefined): "gain" | "loss"
   if (!Number.isFinite(n)) return "unknown";
   return n > 0 ? "gain" : n < 0 ? "loss" : "flat";
 }
+
+/** Pounds sterling. UK prices arrive already normalised from pence (GBX) to GBP by the backend. */
+export function gbp(value: string | number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || value === "") return dash;
+  const n = Number(value);
+  return Number.isFinite(n) ? "£" + n.toLocaleString("en-GB", { minimumFractionDigits: digits, maximumFractionDigits: Math.max(digits, 4) }) : dash;
+}

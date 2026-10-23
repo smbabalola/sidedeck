@@ -121,3 +121,24 @@ test("simulated ledgers are labelled simulation and the saved baseline is not ca
   await expect(books.getByText("Saved baseline", { exact: true })).toBeVisible();
   await expect(books.getByText("Demo broker")).toHaveCount(0);
 });
+
+test("UK markets tab is read-only with honest provenance", async ({ page, pageErrors }) => {
+  await page.goto("/#/markets");
+  await page.getByRole("tab", { name: /UK \(LSE\)/ }).click();
+  await expect(page.getByRole("heading", { name: "London Stock Exchange calendar" })).toBeVisible();
+  await expect(page.getByText("UK broker execution disabled")).toBeVisible();
+  await expect(page.getByText("Synthetic fixture").first()).toBeVisible();
+  await expect(page.getByText("Simulation").first()).toBeVisible();
+  await expect(page.getByText("No data").first()).toBeVisible();
+  await expect(page.getByText("Real data")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /buy|sell|order|close position|submit|execute|allocate/i })).toHaveCount(0);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+  expect(overflow).toBe(false);
+});
+
+test("UK tab shows an error state for an invalid payload", async ({ page, pageErrors }) => {
+  await mockApi(page, { "/api/market/uk": { ...fixture("market-uk"), execution_enabled: true } });
+  await page.goto("/#/markets");
+  await page.getByRole("tab", { name: /UK \(LSE\)/ }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+});

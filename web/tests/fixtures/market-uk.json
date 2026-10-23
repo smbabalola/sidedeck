@@ -1,0 +1,507 @@
+{
+ "authorizations": {
+  "A": "NOT_AUTHORIZED",
+  "B": "NOT_AUTHORIZED",
+  "C": "NOT_AUTHORIZED"
+ },
+ "broker_execution": "DISABLED_FOR_UK",
+ "calendar": {
+  "continuous_hours_local": "08:00-16:30",
+  "corroboration": "PENDING_SD094A_AND_LSE_NOTICE",
+  "half_day_close_local": "12:30",
+  "half_days_uncorroborated": [
+   "2025-12-24",
+   "2025-12-31",
+   "2026-12-24",
+   "2026-12-31",
+   "2027-12-24",
+   "2027-12-31"
+  ],
+  "id": "XLON",
+  "last_completed_session": "2026-10-22",
+  "next_sessions": [
+   {
+    "close_utc": "2026-10-26T16:30:00+00:00",
+    "date": "2026-10-26",
+    "early_close": false,
+    "open_utc": "2026-10-26T08:00:00+00:00"
+   },
+   {
+    "close_utc": "2026-10-27T16:30:00+00:00",
+    "date": "2026-10-27",
+    "early_close": false,
+    "open_utc": "2026-10-27T08:00:00+00:00"
+   },
+   {
+    "close_utc": "2026-10-28T16:30:00+00:00",
+    "date": "2026-10-28",
+    "early_close": false,
+    "open_utc": "2026-10-28T08:00:00+00:00"
+   },
+   {
+    "close_utc": "2026-10-29T16:30:00+00:00",
+    "date": "2026-10-29",
+    "early_close": false,
+    "open_utc": "2026-10-29T08:00:00+00:00"
+   },
+   {
+    "close_utc": "2026-10-30T16:30:00+00:00",
+    "date": "2026-10-30",
+    "early_close": false,
+    "open_utc": "2026-10-30T08:00:00+00:00"
+   }
+  ],
+  "rule_only_half_days": [
+   "2022-12-23",
+   "2022-12-30",
+   "2023-12-22",
+   "2023-12-29"
+  ],
+  "source_status": "TRANSCRIBED_RULE_CROSSCHECKED",
+  "status_now": "OPEN",
+  "timezone": "Europe/London",
+  "today": {
+   "close_utc": "2026-10-23T15:30:00+00:00",
+   "closure_reason": null,
+   "date": "2026-10-23",
+   "early_close": false,
+   "is_session": true,
+   "open_utc": "2026-10-23T07:00:00+00:00"
+  }
+ },
+ "evidence": {
+  "admitted_uk_strategies": 0,
+  "agents": "NOT_RUN (SD-008 blocked: no owner-approved provider call)",
+  "note": "UK signals stay WATCHLIST/ABSTAIN until a UK strategy passes locked OOS admission on genuine data",
+  "provenance": "NO_DATA"
+ },
+ "exchange": "LSE",
+ "execution_enabled": false,
+ "fixture": {
+  "acceptance": "ABSTAIN_NO_GENUINE_DATA_FIXTURE_RUN",
+  "cutoff": "2026-10-22",
+  "decision_counts": {
+   "POSITION:ABSTAIN": 4,
+   "SWING:ABSTAIN": 5,
+   "SWING:WATCHLIST": 3
+  },
+  "excluded": [
+   [
+    "UK:ZZSYN0000095",
+    "UNKNOWN_OR_AMBIGUOUS_UNIT:'gbp'"
+   ],
+   [
+    "UK:ZZSYN0000103",
+    "SUSPECTED_UNIT_FLIP:2026-09-11"
+   ]
+  ],
+  "filtered": {
+   "DAY": {
+    "ILLIQUID": 8,
+    "SPREAD_UNAVAILABLE": 1
+   },
+   "POSITION": {
+    "BELOW_OR_NO_SMA200": 5
+   },
+   "SWING": {
+    "ILLIQUID": 1
+   }
+  },
+  "identities": [
+   {
+    "canonical_id": "UK:ZZSYN0000012",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "100",
+    "isin": "ZZSYN0000012",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "3.4419",
+    "name": "Synthetic UK 001",
+    "quote_unit": "GBX",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBX",
+    "tidm": "SYA"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000020",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "100",
+    "isin": "ZZSYN0000020",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "8.6858",
+    "name": "Synthetic UK 002",
+    "quote_unit": "GBX",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBX",
+    "tidm": "SYB"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000038",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "100",
+    "isin": "ZZSYN0000038",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "8.1449",
+    "name": "Synthetic UK 003",
+    "quote_unit": "GBX",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBX",
+    "tidm": "SYC"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000046",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "100",
+    "isin": "ZZSYN0000046",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "4.9132",
+    "name": "Synthetic UK 004",
+    "quote_unit": "GBX",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBX",
+    "tidm": "SYD"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000053",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "100",
+    "isin": "ZZSYN0000053",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "9.0929",
+    "name": "Synthetic UK 005",
+    "quote_unit": "GBX",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBX",
+    "tidm": "SYE"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000061",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "100",
+    "isin": "ZZSYN0000061",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "8.0575",
+    "name": "Synthetic UK 006",
+    "quote_unit": "GBX",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBX",
+    "tidm": "SYF"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000079",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "100",
+    "isin": "ZZSYN0000079",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "12.0222",
+    "name": "Synthetic UK 007",
+    "quote_unit": "GBX",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBX",
+    "tidm": "SYG.A"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000087",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "1",
+    "isin": "ZZSYN0000087",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "25.29",
+    "name": "Synthetic UK 008",
+    "quote_unit": "GBP",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBP",
+    "tidm": "SYH"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000111",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "100",
+    "isin": "ZZSYN0000111",
+    "last_bar": "2026-10-19",
+    "last_close_gbp": "19.2331",
+    "name": "Synthetic UK 011",
+    "quote_unit": "GBX",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBX",
+    "tidm": "SYK"
+   },
+   {
+    "canonical_id": "UK:ZZSYN0000129",
+    "data_basis": "SYNTHETIC_FIXTURE",
+    "divisor": "1",
+    "isin": "ZZSYN0000129",
+    "last_bar": "2026-10-22",
+    "last_close_gbp": "56.92",
+    "name": "Synthetic UK 012",
+    "quote_unit": "GBP",
+    "retrieved_at": "2026-10-22T18:00:00+00:00",
+    "source_id": "SD096_SYNTHETIC_UK",
+    "source_unit": "GBP",
+    "tidm": "SYX"
+   }
+  ],
+  "listing_rejections": [
+   [
+    "ZZSYN0000202",
+    "UNSUPPORTED_SECURITY_TYPE:INVESTMENT_TRUST"
+   ],
+   [
+    "ZZSYN0000210",
+    "VENDOR_SYMBOL_NOT_TIDM"
+   ],
+   [
+    "ZZSYN0000228",
+    "UNKNOWN_SECURITY_TYPE:STAPLED_UNIT"
+   ]
+  ],
+  "provenance": "SYNTHETIC_FIXTURE",
+  "rankings": {
+   "DAY": [],
+   "POSITION": [
+    {
+     "canonical_id": "UK:ZZSYN0000020",
+     "rank": 1,
+     "score": "1.00"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000129",
+     "rank": 2,
+     "score": "0.4499999999999999999999999999"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000087",
+     "rank": 3,
+     "score": "0.4333333333333333333333333334"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000038",
+     "rank": 4,
+     "score": "0.1166666666666666666666666667"
+    }
+   ],
+   "SWING": [
+    {
+     "canonical_id": "UK:ZZSYN0000020",
+     "rank": 1,
+     "score": "0.850"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000087",
+     "rank": 2,
+     "score": "0.6500000000000000000000000000"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000129",
+     "rank": 3,
+     "score": "0.6428571428571428571428571429"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000038",
+     "rank": 4,
+     "score": "0.4928571428571428571428571429"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000061",
+     "rank": 5,
+     "score": "0.4857142857142857142857142857"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000079",
+     "rank": 6,
+     "score": "0.3714285714285714285714285714"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000053",
+     "rank": 7,
+     "score": "0.2928571428571428571428571429"
+    },
+    {
+     "canonical_id": "UK:ZZSYN0000046",
+     "rank": 8,
+     "score": "0.2142857142857142857142857143"
+    }
+   ]
+  },
+  "scan_exclusions": {
+   "STALE": 1
+  },
+  "scanned": 9,
+  "signals": 4,
+  "universe": 12
+ },
+ "generated_at": "2026-10-23T15:00:00+00:00",
+ "genuine": {
+  "blocker": "no UK data directory configured",
+  "candidates": [
+   {
+    "name": "BP p.l.c.",
+    "proposed_tidm": "BP.",
+    "reasons": [
+     "NO_SOURCED_RECORD",
+     "NO_APPROVED_MARKET_DATA"
+    ],
+    "result": "ABSTAIN"
+   },
+   {
+    "name": "Shell plc",
+    "proposed_tidm": "SHEL",
+    "reasons": [
+     "NO_SOURCED_RECORD",
+     "NO_APPROVED_MARKET_DATA"
+    ],
+    "result": "ABSTAIN"
+   },
+   {
+    "name": "HSBC Holdings plc",
+    "proposed_tidm": "HSBA",
+    "reasons": [
+     "NO_SOURCED_RECORD",
+     "NO_APPROVED_MARKET_DATA"
+    ],
+    "result": "ABSTAIN"
+   },
+   {
+    "name": "AstraZeneca PLC",
+    "proposed_tidm": "AZN",
+    "reasons": [
+     "NO_SOURCED_RECORD",
+     "NO_APPROVED_MARKET_DATA"
+    ],
+    "result": "ABSTAIN"
+   },
+   {
+    "name": "Unilever PLC",
+    "proposed_tidm": "ULVR",
+    "reasons": [
+     "NO_SOURCED_RECORD",
+     "NO_APPROVED_MARKET_DATA"
+    ],
+    "result": "ABSTAIN"
+   }
+  ],
+  "identities": [],
+  "memberships": [],
+  "provenance": "UNAVAILABLE",
+  "rejected": 0,
+  "status": "NO_GENUINE_UK_DATA",
+  "warnings": 0
+ },
+ "market": "UK",
+ "price_unit": "GBP",
+ "report_reason": null,
+ "schema_version": 1,
+ "simulation": {
+  "entry": {
+   "avg_price_gbp": "8.69",
+   "fees_gbp": "0.74",
+   "filled_quantity": "17",
+   "label": "SIMULATION",
+   "reason": "OK",
+   "status": "FILLED"
+  },
+  "exit": {
+   "avg_price_gbp": "8.715724",
+   "fees_gbp": "0.00",
+   "filled_quantity": "17",
+   "label": "SIMULATION",
+   "reason": "OK",
+   "status": "FILLED"
+  },
+  "fill_basis": "SIMULATED_LOCAL",
+  "gbx_to_gbp": {
+   "normalized_ask_gbp": "8.69",
+   "source_ask": "869.0",
+   "source_unit": "GBX"
+  },
+  "instrument": {
+   "canonical_id": "UK:ZZSYN0000020",
+   "isin": "ZZSYN0000020",
+   "quote_unit": "GBX",
+   "tidm": "SYB"
+  },
+  "intent_source": "CONTROLLED_EXECUTION_FIXTURE",
+  "provenance": "SIMULATION",
+  "reconciliation": {
+   "cash_gbp": "999.70",
+   "fees_gbp": "0.74",
+   "open_positions": 0,
+   "realized_pnl_gbp": "-0.30",
+   "status": "MATCHED"
+  },
+  "scenarios": {
+   "after_close_same_day": "MARKET_CLOSED",
+   "duplicate_order": "FILLED->DUPLICATE_INTENT_ORIGINAL_RESULT:fills=1",
+   "gbx_ambiguous_unit_label": "REFUSED:UNKNOWN_OR_AMBIGUOUS_UNIT:'gbp'",
+   "interrupted_execution": "blocked=PRIOR_ORDER_OUTCOME_PENDING;recovered=FILLED;submissions=1;recon=MATCHED",
+   "market_closed": "MARKET_CLOSED",
+   "minimum_order_violation": "BELOW_MINIMUM_ORDER",
+   "missing_broker_mapping": "MISSING_VENUE_MAPPING",
+   "partial_fill": "PARTIALLY_FILLED:4/10:MATCHED",
+   "protected_portfolio_separation": "PROTECTED_OR_NON_SIMULATION_BOOK;cross_book=BOOK_MISMATCH_PROTECTED_SEPARATION",
+   "stale_market_data": "STALE_QUOTE",
+   "unknown_exit_outcome": "UNRESOLVED;kill_switch=True;recon=UNRESOLVED;position=['MAY_BE_OPEN_UNRESOLVED'];next_order=KILL_SWITCH_ACTIVE"
+  }
+ },
+ "tracks": [
+  {
+   "data_status": "BLOCKED_EXTERNAL",
+   "execution": "DISABLED",
+   "jobs": [
+    {
+     "enabled": false,
+     "job_id": "xlon.day_candidate_scan",
+     "next_run_utc": "2026-10-23T15:05:00+00:00"
+    }
+   ],
+   "mode": "RESEARCH_ONLY",
+   "track": "DAY",
+   "usable_sources": []
+  },
+  {
+   "data_status": "AVAILABLE",
+   "execution": "DISABLED",
+   "jobs": [
+    {
+     "enabled": true,
+     "job_id": "xlon.swing_review",
+     "next_run_utc": "2026-10-26T07:30:00+00:00"
+    }
+   ],
+   "mode": "RESEARCH_ONLY",
+   "track": "SWING",
+   "usable_sources": [
+    "OWNER_CSV_IMPORT_UK"
+   ]
+  },
+  {
+   "data_status": "AVAILABLE",
+   "execution": "DISABLED",
+   "jobs": [
+    {
+     "enabled": true,
+     "job_id": "xlon.position_daily",
+     "next_run_utc": "2026-10-23T16:30:00+00:00"
+    },
+    {
+     "enabled": true,
+     "job_id": "xlon.position_weekly",
+     "next_run_utc": "2026-10-23T17:30:00+00:00"
+    }
+   ],
+   "mode": "RESEARCH_ONLY",
+   "track": "POSITION",
+   "usable_sources": [
+    "OWNER_CSV_IMPORT_UK"
+   ]
+  }
+ ]
+}

@@ -325,7 +325,7 @@ def parse_uk_listings(text: str, *, licence_note: str) -> UkParseReport:
         ))
         try:
             record = InstrumentRecord(
-                canonical_id=f"UK:{isin}", name=first["name"].strip(), country="GB",
+                canonical_id=f"UK:{isin}", name=first["name"].strip(), country=isin[:2],
                 asset_type=SECURITY_TYPES[first["security_type"].strip()],
                 currency=first["currency"].strip(), tickers=intervals,
                 history_basis="POINT_IN_TIME" if listing else "SNAPSHOT",

@@ -207,6 +207,9 @@ class DueRun:
     track: str
     slot: datetime
     skipped_missed: int
+    # Effective mode: SIMULATION_ONLY only when both the track and the exchange track allow
+    # it; otherwise RESEARCH_ONLY. Consumers must not simulate fills for RESEARCH_ONLY runs.
+    mode: str = "RESEARCH_ONLY"
 
 
 @dataclass(frozen=True)
@@ -299,6 +302,14 @@ class SchedulerStore:
             for c, t, e, m in rows
         }
 
+    def effective_mode(self, job: JobSpec) -> str:
+        track_mode = self.track_controls().get(job.track, (False, "RESEARCH_ONLY"))[1]
+        exchange_mode = self.exchange_track_controls().get(
+            (job.calendar_id, job.track), (False, "RESEARCH_ONLY"))[1]
+        both = (track_mode, exchange_mode)
+        ok = both == ("SIMULATION_ONLY", "SIMULATION_ONLY")
+        return "SIMULATION_ONLY" if ok else "RESEARCH_ONLY"
+
     def _runnable(self, job: JobSpec) -> str | None:
         if not job.enabled:
             return "JOB_DISABLED"
@@ -345,7 +356,8 @@ class SchedulerStore:
                          now.isoformat()),
                     )
                 if fresh is not None:
-                    due.append(DueRun(job.job_id, job.track, fresh, len(pending) - 1))
+                    due.append(DueRun(job.job_id, job.track, fresh, len(pending) - 1,
+                                      self.effective_mode(job)))
             conn.execute("COMMIT")
         return tuple(sorted(due, key=lambda r: (r.slot, r.job_id)))
 

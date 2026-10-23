@@ -7,14 +7,12 @@ from typing import Any
 
 import pytest
 
-from sidedeck.application.sd090_uk_market import LISTING_COLUMNS
 from sidedeck.application.sd096_uk_acceptance import (
-    fixture_isin,
     genuine_data_inventory,
     main,
     run_acceptance,
 )
-from sidedeck.application.sd096_uk_acceptance import CUTOFF
+from uk_import_helpers import NOW, build_uk_dir
 
 
 @pytest.fixture(autouse=True)
@@ -58,24 +56,32 @@ def test_acceptance_report_separates_genuine_fixture_and_simulation(tmp_path: Pa
     assert report["execution_permission"] == "NOT_GRANTED"
 
 
-def test_owner_listing_without_licence_note_is_refused(tmp_path: Path) -> None:
-    (tmp_path / "uk_listings_2026.csv").write_text(",".join(LISTING_COLUMNS) + "\n")
-    inv = genuine_data_inventory(tmp_path, CUTOFF)
-    assert inv["rejected"] == [["uk_listings_2026.csv", "MISSING_LICENCE_NOTE"]]
-    assert inv["status"] == "NO_GENUINE_UK_DATA"
+def test_owner_files_without_a_licence_statement_are_refused(tmp_path: Path) -> None:
+    root = build_uk_dir(tmp_path / "uk", licence="")
+    inv = genuine_data_inventory(root, NOW)
+    assert inv["import"]["status"] == "MANIFEST_INVALID"
+    assert ["manifest", "LICENCE_AND_SOURCE_REQUIRED"] in inv["import"]["rejected"]
+    assert inv["status"] == "GENUINE_IMPORT_MANIFEST_INVALID" and inv["blocker"]
 
 
 def test_sourced_listing_without_bars_still_abstains(tmp_path: Path) -> None:
-    row = ("SHEL", fixture_isin(60), "Synthetic stand-in", "ORDINARY_SHARE", "GBX", "GBP", "",
-           "", "", "", "test", "2026-10-22")
-    (tmp_path / "uk_listings_t.csv").write_text(
-        ",".join(LISTING_COLUMNS) + "\n" + ",".join(row) + "\n")
-    (tmp_path / "uk_listings_t.licence.txt").write_text("test-only")
-    inv = genuine_data_inventory(tmp_path, CUTOFF)
-    shell = next(c for c in inv["candidates"] if c["proposed_tidm"] == "SHEL")
-    assert shell["reasons"] == ["ISIN_DIFFERS_FROM_EXPECTED_REVIEW_REQUIRED",
-                                "NO_APPROVED_MARKET_DATA"]
-    assert inv["status"] == "NO_GENUINE_UK_DATA"
+    root = build_uk_dir(tmp_path / "uk")
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    manifest["bars"] = []
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    inv = genuine_data_inventory(root, NOW)
+    assert inv["import"]["status"] == "IMPORTED_NO_PRICE_DATA"
+    bp = next(c for c in inv["candidates"] if c["proposed_tidm"] == "BP.")
+    assert bp["result"] == "ABSTAIN" and "NO_APPROVED_MARKET_DATA" in bp["reasons"]
+    assert inv["real_scan"] is None
+
+
+def test_cli_writes_the_report_for_the_dashboard(tmp_path: Path,
+                                                 capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "uk-acceptance.json"
+    main(["--data-dir", str(tmp_path / "none"), "--out", str(out)])
+    assert json.loads(out.read_text(encoding="utf-8"))["report"] == "sd096.uk_morning_acceptance.v1"
+    capsys.readouterr()
 
 
 def test_cli_prints_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

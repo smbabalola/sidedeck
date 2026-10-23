@@ -146,3 +146,66 @@ export function isScanSnapshot(d: unknown): d is ScanSnapshot {
       return isObj(tr) && isArr(tr.candidates) && tr.candidates.every(candidateOk) && isCounts(tr.filtered);
     });
 }
+
+// --- /api/market/uk (SD-097) -----------------------------------------------------------
+export type UkSession = { date: string; open_utc: string; close_utc: string; early_close: boolean };
+export type UkIdentity = {
+  canonical_id: string; tidm: string | null; isin: string | null; name: string | null; quote_unit: string | null;
+  source_id: string | null; source_unit: string | null; divisor: string | null; last_bar: string | null;
+  retrieved_at: string | null; data_basis: string | null; last_close_gbp: string | null;
+};
+export type UkScan = {
+  cutoff: string; universe: number; scanned: number; excluded: [string, string][]; scan_exclusions: Record<string, number>;
+  rankings: Record<TrackId, { rank: number; canonical_id: string; score: string | null }[]>;
+  filtered: Record<string, Record<string, number>>; decision_counts: Record<string, number>; signals: number; acceptance: string;
+};
+export type UkCandidate = { name: string; proposed_tidm: string; result: string; reasons: string[] };
+export type UkMarkets = {
+  schema_version: 1; market: "UK"; exchange: "LSE"; price_unit: "GBP"; execution_enabled: false; broker_execution: "DISABLED_FOR_UK";
+  generated_at: string;
+  calendar: {
+    id: "XLON"; timezone: string; continuous_hours_local: string; half_day_close_local: string; source_status: string; corroboration: string;
+    half_days_uncorroborated: string[]; rule_only_half_days: string[]; status_now: string;
+    today: null | { date: string; is_session: boolean; open_utc: string | null; close_utc: string | null; early_close: boolean; closure_reason: string | null };
+    next_sessions: UkSession[]; last_completed_session: string | null;
+  };
+  tracks: { track: TrackId; data_status: string; usable_sources: string[]; mode: string; execution: "DISABLED"; jobs: { job_id: string; enabled: boolean; next_run_utc: string | null }[] }[];
+  genuine: {
+    provenance: "UNAVAILABLE" | "REAL_DATA"; status: string; blocker?: string | null; cutoff?: string; import_status?: string;
+    identities: UkIdentity[]; candidates: UkCandidate[]; rejected: number; warnings: number; scan?: UkScan;
+    memberships: { canonical_id: string; index_id: string; start: string; end: string | null; basis: string }[];
+  };
+  fixture: null | (UkScan & { provenance: "SYNTHETIC_FIXTURE"; identities: UkIdentity[]; listing_rejections: [string, string][] });
+  simulation: null | {
+    provenance: "SIMULATION"; fill_basis: "SIMULATED_LOCAL"; intent_source: string; instrument: Record<string, string>;
+    gbx_to_gbp: Record<string, string>; entry: Record<string, string | null>; exit: Record<string, string | null>;
+    reconciliation: { status: string; cash_gbp: string | null; realized_pnl_gbp: string | null; fees_gbp: string | null; open_positions: number };
+    scenarios: Record<string, string>;
+  };
+  report_reason: string | null; authorizations: Record<"A" | "B" | "C", string>;
+  evidence: { provenance: "NO_DATA"; admitted_uk_strategies: number; agents: string; note: string };
+};
+const isPair = (v: unknown) => isArr(v) && v.length === 2 && isStr(v[0]) && isStr(v[1]);
+const isOptStr = (v: unknown) => v === null || isStr(v);
+const isUkIdentity = (i: unknown) => isObj(i) && isStr(i.canonical_id) && isNumStr(i.last_close_gbp)
+  && ["tidm", "isin", "name", "quote_unit", "source_id", "source_unit", "divisor", "last_bar", "retrieved_at", "data_basis"].every(k => isOptStr(i[k]));
+const isUkScan = (s: unknown) => isObj(s) && isStr(s.cutoff) && isCount(s.universe) && isCount(s.scanned) && isArr(s.excluded) && s.excluded.every(isPair)
+  && isObj(s.rankings) && TRACKS.every(t => isArr((s.rankings as Record<string, unknown>)[t]) && ((s.rankings as Record<string, unknown[]>)[t]).every(r => isObj(r) && isCount(r.rank) && isStr(r.canonical_id) && isNumStr(r.score)))
+  && isCounts(s.scan_exclusions) && isObj(s.filtered) && Object.values(s.filtered).every(isCounts) && isCounts(s.decision_counts) && isCount(s.signals) && isStr(s.acceptance);
+export function isUkMarkets(d: unknown): d is UkMarkets {
+  if (!isObj(d) || d.schema_version !== 1 || d.market !== "UK" || d.execution_enabled !== false || d.broker_execution !== "DISABLED_FOR_UK" || d.price_unit !== "GBP") return false;
+  const c = d.calendar, g = d.genuine, f = d.fixture, s = d.simulation;
+  if (!isObj(c) || c.id !== "XLON" || !isStr(c.source_status) || !isStr(c.status_now) || !isArr(c.next_sessions) || !isArr(c.half_days_uncorroborated)) return false;
+  if (!isArr(d.tracks) || d.tracks.length !== 3 || !d.tracks.every(t => isObj(t) && TRACKS.includes(t.track as TrackId) && t.execution === "DISABLED" && isArr(t.jobs) && isStr(t.data_status))) return false;
+  if (!isObj(g) || (g.provenance !== "UNAVAILABLE" && g.provenance !== "REAL_DATA") || !isStr(g.status) || !isArr(g.identities) || !g.identities.every(isUkIdentity)
+    || !isArr(g.candidates) || !g.candidates.every(x => isObj(x) && isStr(x.name) && isStr(x.result) && isArr(x.reasons) && x.reasons.every(isStr))) return false;
+  if (g.provenance === "REAL_DATA" && !isUkScan(g.scan)) return false;
+  if (!isArr(g.memberships) || !g.memberships.every(m => isObj(m) && isStr(m.canonical_id) && isStr(m.index_id) && isStr(m.start) && isOptStr(m.end) && isStr(m.basis))) return false;
+  if (g.provenance === "UNAVAILABLE" && g.memberships.length > 0) return false;
+  if (g.provenance === "UNAVAILABLE" && g.identities.length > 0) return false;
+  if (f !== null && !(isObj(f) && f.provenance === "SYNTHETIC_FIXTURE" && isUkScan(f) && isArr(f.identities) && f.identities.every(isUkIdentity))) return false;
+  if (s !== null && !(isObj(s) && s.provenance === "SIMULATION" && s.fill_basis === "SIMULATED_LOCAL" && isObj(s.reconciliation) && isObj(s.scenarios))) return false;
+  const e = d.evidence;
+  if (!isObj(e) || e.provenance !== "NO_DATA" || !isCount(e.admitted_uk_strategies) || !isStr(e.agents)) return false;
+  return isObj(d.authorizations) && isOptStr(d.report_reason);
+}

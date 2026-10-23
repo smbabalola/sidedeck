@@ -48,6 +48,7 @@ from sidedeck.application.sd090_uk_market import (
     parse_uk_listings,
 )
 from sidedeck.application.sd092_uk_scanner import UkScanResult, run_uk_scan
+from sidedeck.application.sd098_uk_import import import_uk_directory
 from sidedeck.application.sd093_uk_sim_desk import (
     FillPlan,
     SimDeskError,
@@ -69,42 +70,70 @@ SIM_BOOK = "SIM_UK_SWING"
 
 # --- genuine data inventory -------------------------------------------------------------
 
-def genuine_data_inventory(data_dir: Path, as_of: date) -> dict[str, Any]:
-    listings = sorted(data_dir.glob("uk_listings*.csv")) if data_dir.is_dir() else []
-    bars = sorted((data_dir / "bars").glob("*.csv")) if (data_dir / "bars").is_dir() else []
-    records: tuple[InstrumentRecord, ...] = ()
-    rejected: list[list[str]] = []
-    for path in listings:
-        licence = path.with_suffix(".licence.txt")
-        if not licence.is_file():
-            rejected.append([path.name, "MISSING_LICENCE_NOTE"])
-            continue
-        report = parse_uk_listings(path.read_text(encoding="utf-8"),
-                                   licence_note=licence.read_text(encoding="utf-8"))
-        records += report.records
-        rejected += [list(r) for r in report.rejected]
+def genuine_data_inventory(data_dir: Path, now: datetime) -> dict[str, Any]:
+    """Import owner-supplied licensed files (SD-098) and, if present, run the REAL_DATA scan.
+
+    The result never mixes with the synthetic fixture: a manifest declaring
+    SYNTHETIC_FIXTURE is reported but not scanned as genuine.
+    """
+    imported = import_uk_directory(data_dir, now=now)
+    cutoff = XLON.last_completed_session(now)
+    records = imported.registry.records if imported.registry is not None else ()
+    real_scan: UkScanResult | None = None
+    if imported.status == "IMPORTED" and imported.data_basis == "REAL_DATA" \
+            and imported.registry is not None:
+        real_scan = run_uk_scan(imported.registry, imported.series, cutoff, now,
+                                data_basis="REAL_DATA")
+    decisions = {} if real_scan is None else {
+        (d.canonical_id, d.track): d.status for d in real_scan.decisions}
+    excluded = {} if real_scan is None else dict(real_scan.excluded)
     candidates = []
     for cand in UK_CANDIDATE_WATCHLIST:
-        status, record = candidate_identity_check(cand, records, as_of)
+        status, record = candidate_identity_check(cand, records, cutoff)
         reasons = [status]
-        if record is None or not bars:
+        result = "ABSTAIN"
+        if record is None or record.canonical_id not in imported.series \
+                or imported.data_basis != "REAL_DATA":
             reasons.append("NO_APPROVED_MARKET_DATA")
+        elif record.canonical_id in excluded:
+            reasons.append(f"EXCLUDED:{excluded[record.canonical_id]}")
+        else:
+            mine = {t: s for (cid, t), s in decisions.items() if cid == record.canonical_id}
+            reasons.append("DECISIONS:" + (",".join(f"{t}={s}" for t, s in sorted(mine.items()))
+                                           or "NOT_SHORTLISTED"))
+            if "WATCHLIST" in mine.values():
+                result = "WATCHLIST"
         candidates.append({
             "name": cand.name, "proposed_tidm": cand.proposed_tidm,
             "expected_isin_unverified": cand.expected_isin,
-            "identity_status": cand.identity_status, "result": "ABSTAIN", "reasons": reasons,
+            "identity_status": cand.identity_status, "result": result, "reasons": reasons,
             "note": cand.note,
         })
-    status = "GENUINE_UK_DATA_PRESENT_REVIEW_REQUIRED" if records and bars \
-        else "NO_GENUINE_UK_DATA"
+    if imported.status == "NO_GENUINE_UK_DATA":
+        status = "NO_GENUINE_UK_DATA"
+    elif imported.data_basis == "SYNTHETIC_FIXTURE":
+        status = "FIXTURE_MANIFEST_NOT_GENUINE"
+    elif imported.data_basis != "REAL_DATA":
+        status = f"GENUINE_IMPORT_{imported.status}"           # e.g. an invalid manifest
+    elif real_scan is not None:
+        status = "GENUINE_UK_SCAN_COMPLETED_REVIEW_REQUIRED"
+    else:
+        status = f"GENUINE_IMPORT_{imported.status}"
     return {
-        "data_dir": str(data_dir), "listing_files": [p.name for p in listings],
-        "bar_files": len(bars), "sourced_records": len(records), "rejected": rejected,
-        "status": status, "candidates": candidates,
-        "blocker": None if status != "NO_GENUINE_UK_DATA" else (
-            "No licensed UK listings, FTSE membership or OHLCV exist locally. Approved sources: "
-            "owner-supplied licensed files (none supplied) or a bounded owner authorization "
-            "(SD-094). Calendar corroboration (gov.uk) also pending."
+        "data_dir": str(data_dir), "cutoff": cutoff.isoformat(), "import": imported.summary(),
+        "sourced_records": len(records), "status": status, "candidates": candidates,
+        "real_scan": None if real_scan is None else real_scan.summary(),
+        "index_memberships": [
+            {"canonical_id": r.canonical_id, "index_id": m.index_id, "start": m.start.isoformat(),
+             "end": None if m.end is None else m.end.isoformat(),
+             "basis": m.source.split(":", 1)[0]}
+            for r in records for m in r.memberships
+        ] if imported.data_basis == "REAL_DATA" else [],
+        "blocker": None if real_scan is not None else (
+            "No licensed UK listings, FTSE membership or OHLCV are available locally "
+            f"(import status {imported.status}). Approved routes: owner-supplied licensed files "
+            "under data/uk with manifest.json (SD-098) or a bounded owner authorization (SD-094). "
+            "Calendar corroboration (SD-094A) also pending."
         ),
     }
 
@@ -383,7 +412,8 @@ def scenario_matrix(fixture: UkFixture, cid: str, workdir: Path) -> dict[str, An
     return out
 
 
-def run_acceptance(data_dir: Path, workdir: Path) -> dict[str, Any]:
+def run_acceptance(data_dir: Path, workdir: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    """``now`` drives only the genuine-data part; the fixture uses its fixed simulated clock."""
     workdir.mkdir(parents=True, exist_ok=True)
     fixture = build_uk_fixture()
     scan = run_fixture_scan(fixture)
@@ -392,7 +422,7 @@ def run_acceptance(data_dir: Path, workdir: Path) -> dict[str, Any]:
         sorted(fixture.series)[0]
     return {
         "report": "sd096.uk_morning_acceptance.v1",
-        "genuine_data": genuine_data_inventory(data_dir, CUTOFF),
+        "genuine_data": genuine_data_inventory(data_dir, now or datetime.now(UTC)),
         "calendar": {"id": XLON.calendar_id, "timezone": XLON.timezone,
                      "continuous_hours_local": "08:00-16:30", "half_day_close_local": "12:30",
                      "source_status": XLON.source_status, "source_note": XLON.source_note},
@@ -411,10 +441,17 @@ def run_acceptance(data_dir: Path, workdir: Path) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="SD-096 UK morning acceptance (offline)")
     parser.add_argument("--data-dir", type=Path, default=Path("data/uk"))
+    parser.add_argument("--out", type=Path, default=None,
+                        help="also write the report here (e.g. data/uk-acceptance.json for the "
+                             "read-only dashboard)")
     args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory(prefix="sd096-") as tmp:
-        print(json.dumps(run_acceptance(args.data_dir, Path(tmp)), indent=2, sort_keys=True,
-                         default=str))
+        text = json.dumps(run_acceptance(args.data_dir, Path(tmp)), indent=2, sort_keys=True,
+                          default=str)
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8")
+    print(text)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,8 @@ import { useResource } from "../lib/api";
 import { type LoadedScan, type ScanInstrument, type TrackId, isMarketTracks, isScanSnapshot, TRACKS } from "../lib/contracts";
 import { compactUsd, num, pct, plainPct, price, tone, when, words } from "../lib/format";
 import { href } from "../lib/router";
-import { Badge, type Column, DataTable, KeyValues, Metric, Panel, SearchBox, Select, StateBlock } from "../components/ui";
+import { Badge, type Column, DataTable, KeyValues, Metric, Panel, SearchBox, Select, StateBlock, Tabs, tabId, tabPanelId } from "../components/ui";
+import UkMarkets from "./UkMarkets";
 
 type TrackFilter = "ALL" | TrackId;
 type FlagFilter = "ANY" | "BREAKOUT" | "SWEEP" | "ABOVE_200" | "BELOW_200";
@@ -63,7 +64,20 @@ function InstrumentDetail({ scan, inst }: { scan: LoadedScan; inst: ScanInstrume
   </div>;
 }
 
+type MarketTab = "US" | "UK";
+
 export default function Markets({ detail }: { detail: string | null }) {
+  const [market, setMarket] = useState<MarketTab>(detail?.startsWith("UK:") ? "UK" : "US");
+  return <div className="space-y-4">
+    <Tabs<MarketTab> label="Market" idPrefix="market" value={market} onChange={setMarket}
+      tabs={[{ id: "US", label: "US" }, { id: "UK", label: "UK (LSE)", hint: "research only" }]}/>
+    <div role="tabpanel" id={tabPanelId("market")} aria-labelledby={tabId("market", market)}>
+      {market === "US" ? <UsMarkets detail={detail}/> : <UkMarkets/>}
+    </div>
+  </div>;
+}
+
+function UsMarkets({ detail }: { detail: string | null }) {
   const scan = useResource("/api/market/scan", isScanSnapshot);
   const tracks = useResource("/api/market/tracks", isMarketTracks);
   const [query, setQuery] = useState("");

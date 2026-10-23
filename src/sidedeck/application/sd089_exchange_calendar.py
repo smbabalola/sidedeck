@@ -236,6 +236,12 @@ UK_HALF_DAYS: dict[date, str] = {
     date(2027, 12, 24): "Christmas Eve half day", date(2027, 12, 31): "New Year's Eve half day",
 }
 UK_COVERED_YEARS: frozenset[int] = frozenset(range(2022, 2028))
+# Half days inferred only from the 'last weekday before a weekend 24th/31st' rule; the
+# independent derivation uses the same rule, so it cannot corroborate them. They need an
+# LSE business-days notice before G1 (independent review L3). Until then they are listed.
+UK_UNCORROBORATED_HALF_DAYS: frozenset[date] = frozenset({
+    date(2022, 12, 23), date(2022, 12, 30), date(2023, 12, 22), date(2023, 12, 29),
+})
 
 XLON = ExchangeCalendar(
     calendar_id="XLON", name="London Stock Exchange continuous trading",

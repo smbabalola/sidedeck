@@ -3,8 +3,9 @@ import marketScan from "../fixtures/market-scan.json";
 import marketTracks from "../fixtures/market-tracks.json";
 import releaseGate from "../fixtures/release-gate.json";
 import demo from "../fixtures/demo-summary.json";
-import { isDemoSummary, isMarketTracks, isReleaseGate, isScanSnapshot } from "../../src/lib/contracts";
-import { compactUsd, pct, plainPct, tone, words } from "../../src/lib/format";
+import marketUk from "../fixtures/market-uk.json";
+import { isDemoSummary, isMarketTracks, isReleaseGate, isScanSnapshot, isUkMarkets } from "../../src/lib/contracts";
+import { compactUsd, gbp, pct, plainPct, tone, words } from "../../src/lib/format";
 import { href, parseRoute } from "../../src/lib/router";
 
 describe("contracts accept real backend payloads and reject unsafe ones", () => {
@@ -60,5 +61,29 @@ describe("router", () => {
     expect(parseRoute("#/markets/US%3AMSFT")).toEqual({ workspace: "markets", detail: "US:MSFT" });
     expect(parseRoute("#/nope/x")).toEqual({ workspace: "overview", detail: null });
     expect(href("tracks", "SWING")).toBe("#/tracks/SWING");
+  });
+});
+
+describe("UK markets contract (SD-097)", () => {
+  const clone = () => JSON.parse(JSON.stringify(marketUk));
+  it("accepts the generated fixture", () => {
+    expect(isUkMarkets(marketUk)).toBe(true);
+  });
+  it("never accepts upgraded provenance or enabled execution", () => {
+    expect(isUkMarkets({ ...clone(), execution_enabled: true })).toBe(false);
+    expect(isUkMarkets({ ...clone(), broker_execution: "ENABLED" })).toBe(false);
+    const realWithoutScan = clone(); realWithoutScan.genuine.provenance = "REAL_DATA";
+    expect(isUkMarkets(realWithoutScan)).toBe(false);
+    const fixtureAsReal = clone(); fixtureAsReal.fixture.provenance = "REAL_DATA";
+    expect(isUkMarkets(fixtureAsReal)).toBe(false);
+    const unavailableWithRows = clone(); unavailableWithRows.genuine.memberships = [{ canonical_id: "UK:X", index_id: "FTSE100", start: "2026-10-22", end: null, basis: "SNAPSHOT" }];
+    expect(isUkMarkets(unavailableWithRows)).toBe(false);
+    const evidence = clone(); evidence.evidence.provenance = "REAL_DATA";
+    expect(isUkMarkets(evidence)).toBe(false);
+  });
+  it("formats pounds without inventing values", () => {
+    expect(gbp("4.5")).toBe("£4.50");
+    expect(gbp(null)).toBe("—");
+    expect(gbp("abc")).toBe("—");
   });
 });
