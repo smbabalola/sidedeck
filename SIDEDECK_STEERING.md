@@ -283,7 +283,35 @@ protected eToro Demo baseline, and never uses the MSFT authorization for a UK in
   units, horizon signals, auditable simulated trade) and *UK Demo execution acceptance* (approved
   broker buy-and-close with genuine broker evidence and reconciliation). Never conflate them.
 
-## 14. Autonomous Demo execution — verified versus blocked (owner directive 2026-10-23)
+## 14. Execution-First Demo Completion Controller (owner directive 2026-10-23)
+
+Until SideDeck has completed one genuine eToro Demo stock lifecycle—broker-confirmed buy,
+fill, full close, final reconciliation and a flat SideDeck position—this is the controlling
+milestone. Engineering batches, tests, simulations, signed documents, CI and authorization
+proposals are supporting evidence, not milestone completion.
+
+The durable controller state is maintained in `TODO.md` and must always identify:
+
+- current broker execution state;
+- latest verified broker evidence;
+- current blocking defect;
+- next independently executable action;
+- required owner authorization or operator action;
+- next execution-readiness gate; and
+- the actual success or failure outcome.
+
+The operating cycle is: obtain bounded broker evidence → diagnose the actual failure → fix the
+smallest verified defect → independent review and CI → prepare a fresh signed Demo pilot →
+owner-operated execution → broker-confirmed buy/fill/close/reconciliation. A failure returns to
+diagnosis; no broker request is automatically repeated and no expired authorization, signature,
+budget or window is reused. Codex never signs on the owner's behalf and never enables eToro Real.
+
+The current state is `ABORTED_PREFLIGHT` for SD-058: no order writes or SideDeck positions,
+transport re-locked, and the eligibility response is not locally available for diagnosis. The
+next executable engineering action is a bounded, read-only diagnostic authorization proposal;
+execution requires a separate owner-signed authorization and owner-operated command.
+
+## 15. Autonomous Demo execution — verified versus blocked (owner directive 2026-10-23)
 
 SD-063 passed an independent review (six passes) and offline remediation; SD-074's input boundary
 is implemented offline. **No autonomous eToro Demo order is authorized.** The USD 1000 / 7-day

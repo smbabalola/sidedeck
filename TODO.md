@@ -162,9 +162,10 @@ approved window rather than rolling it forward.
   The operator path is resolved absolutely, so changing working directory does not redirect the
   evidence store.
 - Verification: focused SD-054/audit tests `34 passed`; full suite `1439 passed, 1 skipped, 3
-  warnings`; Ruff passed; mypy passed; SQLite Alembic upgrade passed. PostgreSQL remains CI-only.
-  No broker request, transport unlock, credential read, or new pilot authorization occurred.
-- **Next READY:** after exact-HEAD CI, prepare a bounded, read-only diagnostic authorization
+  warnings`; Ruff passed; mypy passed; SQLite Alembic upgrade passed. Exact-head CI run
+  `39968609561` passed for `699c664`; PostgreSQL evidence is included there. No broker request,
+  transport unlock, credential read, or new pilot authorization occurred.
+- **Next READY:** prepare a bounded, read-only diagnostic authorization
   proposal that requests only the missing eligibility evidence; do not execute it automatically.
   Keep the USD gate and `UNLOCKED_PILOT_DIGEST = None` unchanged until authenticated evidence is
   reviewed.
