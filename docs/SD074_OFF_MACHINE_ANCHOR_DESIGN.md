@@ -55,3 +55,16 @@ store needs separate owner provisioning and review.
 Rollback to an older consistent pair, deletion of both files, replacement with a forged pair, remote
 unavailability, clock skew, concurrent writers, and revocation in only one store, each shown to
 fail closed in tests and in an independent review.
+
+## Hard requirements on the real store (from the independent review)
+
+1. **No deletion or truncation**, even by the trading host: a deleted latest checkpoint leaves a
+   valid prefix the keeper cannot distinguish from a shorter history.
+2. **Compare-and-append:** accept a checkpoint only if the store's current latest equals the
+   checkpoint's `prev` (atomically), otherwise refuse; concurrent publishers then retry instead of
+   forking the chain.
+3. **Atomic, durable writes:** a torn write must never become visible.
+4. **One chain per policy:** the chain id is derived from the policy digest
+   (`ledger_id_for(policy_digest)`), so a fresh restart under another id is impossible.
+5. Preferably signing on a separate host: with the device key on the trading host, an attacker can
+   add forged higher checkpoints (denial of service), not remove history.

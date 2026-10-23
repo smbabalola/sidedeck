@@ -164,3 +164,10 @@ bounded Demo operating period. Nothing here activates the USD 1000 allocation.
 | — | — | Research `as_of` compared with no skew | **FIXED** (5 s skew) |
 
 Residuals: the device key is symmetric and on the host (a host attacker can add forged checkpoints to a write-once log, a denial of service, not a rollback) — the real design uses a separate signing host; checkpoint `at` freshness is not checked.
+
+Re-verification of `3be2d87`: E1-E4 FIXED. New: **N1 (MEDIUM)** a second chain under a caller-chosen
+ledger id cleared the kill-switch — **FIXED** (id derived from the policy digest); **N2 (MEDIUM)**
+concurrent publishers could fork and brick the chain — **FIXED** (compare-and-append under a lock in
+the stand-in; required of the real store); **N3 (LOW)** torn writes — **FIXED** (temp file, fsync,
+atomic hard link). Not detectable by the keeper and therefore a store requirement: deletion of the
+latest checkpoint (`docs/SD074_OFF_MACHINE_ANCHOR_DESIGN.md`, hard requirements).
