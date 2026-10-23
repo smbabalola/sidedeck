@@ -495,27 +495,73 @@ def test_n1_reconciliation_values_are_bounded(env):
                        avg_price=Decimal("469"))
 
 
-def test_n2_crash_between_anchor_and_commit_needs_owner_recovery_and_trips_kill_switch(env):
-    ledger = env.ledger
-    with ledger.transaction():
-        count, head = ledger._head()
-    ledger._write_anchor(count + 1, "f" * 64, prev=(count, head))   # anchor ahead, no row
-    ledger.close()
+class _CommitFails:
+    """Connection proxy whose COMMIT raises (simulated crash after the anchor write)."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, *args: object):
+        if sql.strip().upper() == "COMMIT":
+            raise sqlite3.OperationalError("disk I/O error")
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+
+def _recover(env: _Env) -> PolicyLedger:
+    return PolicyLedger.recover_last_transaction(
+        env.tmp / "sd063.sqlite3", env.policy.digest(),
+        anchor_path=env.tmp / "sd063.anchor.json", at=env.clock.now)
+
+
+def test_n2_crash_in_a_multi_row_transaction_is_replayed_and_trips_kill_switch(env):
+    real = env.ledger._conn
+    env.ledger._conn = _CommitFails(real)                     # type: ignore[assignment]
+    with pytest.raises(sqlite3.OperationalError):
+        env.entry()                                           # EQUITY_MARK + ENTRY_PROPOSED
+    env.ledger._conn = real
+    env.ledger.close()
     with pytest.raises(PolicyRefused, match="anchor"):
         env.open_ledger()
-    recovered = PolicyLedger.recover_uncommitted_append(
-        env.tmp / "sd063.sqlite3", env.policy.digest(),
-        anchor_path=env.tmp / "sd063.anchor.json", at=NOW)
+    recovered = _recover(env)
     try:
-        assert recovered.kill_switch_engaged()
+        state = recovered.state()
+        assert state.killed
+        assert [e.outcome for e in state.entries.values()] == [None]   # replayed, still pending
     finally:
         recovered.close()
-    env.ledger = env.open_ledger()                                    # consistent again
+    env.ledger = env.open_ledger()                            # consistent again
+
+
+def test_n2_deleted_last_transaction_is_restored_not_hidden(env):
+    proposal = env.open_position()                            # last txn: ENTRY_RESOLVED
     env.ledger.close()
-    with pytest.raises(PolicyRefused, match="one uncommitted append"):
-        PolicyLedger.recover_uncommitted_append(
-            env.tmp / "sd063.sqlite3", env.policy.digest(),
-            anchor_path=env.tmp / "sd063.anchor.json", at=NOW)
+    conn = sqlite3.connect(env.tmp / "sd063.sqlite3")
+    try:
+        conn.execute("DROP TRIGGER events_no_delete")
+        conn.execute("CREATE TRIGGER events_no_delete BEFORE DELETE ON events BEGIN SELECT 1; END")
+        conn.execute("DELETE FROM events WHERE seq = (SELECT MAX(seq) FROM events)")
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(PolicyRefused, match="anchor"):
+        env.open_ledger()
+    recovered = _recover(env)
+    try:
+        assert recovered.kill_switch_engaged()
+        assert [p.entry_reference for p in recovered.open_positions()] == [proposal.reference_id]
+    finally:
+        recovered.close()
+    env.ledger = env.open_ledger()
+
+
+def test_n2_recovery_refuses_a_consistent_or_unrelated_ledger(env):
+    env.entry()
+    env.ledger.close()
+    with pytest.raises(PolicyRefused, match="last anchored transaction"):
+        _recover(env)
     env.ledger = env.open_ledger()
 
 

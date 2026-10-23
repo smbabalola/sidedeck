@@ -11,7 +11,7 @@ transport, credentials or network access, and it is not wired to the order path 
 | Reviewer | separate read-only reviewer agent (no repo writes, no network, no `.env`) |
 | Method | source and interface inspection, executed repro scripts, re-verification of the fixes |
 | Code | `src/sidedeck/application/sd063_autonomous_demo_policy.py` |
-| Tests | `tests/test_sd063_autonomous_demo_policy.py` (80; regression tests `test_f*`, `test_n*`) |
+| Tests | `tests/test_sd063_autonomous_demo_policy.py` (82; regression tests `test_f*`, `test_n*`) |
 
 ## Summary
 
@@ -46,14 +46,17 @@ New issues raised by the re-verification of v2:
 | ID | Sev. | Finding | Status |
 |---|---|---|---|
 | N1 | MEDIUM | Reconciliation fill price/time unbounded | **FIXED** — entry fill in (stop, limit] within 15 min of the proposal; exit fill within 10 % of the planned bid; resolution never before the proposal |
-| N2 | MEDIUM | Crash between anchor write and COMMIT bricked the ledger | **FIXED** — anchor records the previous state; owner-run `recover_uncommitted_append` accepts only an exactly-one-ahead anchor and always trips the kill-switch |
+| N2 | MEDIUM | Crash between anchor write and COMMIT bricked the ledger | **FIXED (after third pass)** — the anchor holds a write-ahead copy of the last transaction's rows; owner-run `recover_last_transaction` takes the write lock, checks the rows chain from the ledger head to the anchor head, **replays** them (multi-row transactions included) and trips the kill-switch. The third pass had shown that a first version (discard and accept "one append ahead") could hide a deleted last row and could not recover multi-row transactions (N2-A/N2-B/N2-C); deleting the last transaction now restores it (`test_n2_deleted_last_transaction_is_restored_not_hidden`) |
 | N3 | LOW-MED | Caller marks can hide unrealized loss | **OPEN** — residual R2 |
 | N4 | LOW | Daily-loss baseline taken late; marks grew the ledger on every call | **FIXED** — first mark per session written before the decision; further marks only on a new high |
 | N5 | LOW | UNRESOLVED exit or revoked grant leaves only alerts | **BY DESIGN** — the order may have executed / privilege was removed; owner close runbook required (R5) |
 | N6 | LOW | Evidence checked by hash only, read fully each call | **OPEN** — residual R1 |
 
-The N1/N2/N4 fixes were made after the reviewer's re-verification and are covered by
-`test_n1_*`, `test_n2_*`, `test_n4_*`; they have not yet had a third independent pass.
+Third independent pass (on `4f3decc`): N1 FIXED, N4 FIXED, N2 PARTIALLY FIXED → reworked as
+above. Remaining LOW notes: in-band false fill reports (≤ 25 % of notional on entry, ≤ 10 % of the
+bid on exit) are accepted (bounded; see R4); a single inflated mark can raise the recorded peak,
+which only makes the drawdown gate fire earlier (a trusted-caller denial of service, not a bypass).
+The reworked N2 recovery has not had a fourth independent pass.
 
 ## Residual risks (must be closed or accepted before any release)
 

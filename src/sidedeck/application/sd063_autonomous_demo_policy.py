@@ -463,6 +463,7 @@ class PolicyLedger:
         self._conn = conn
         self._anchor = anchor
         self._staged_anchor: tuple[int, str] | None = None
+        self._staged: list[tuple[Any, ...]] = []
         self._in_txn = False
         self.policy_digest = policy_digest
 
@@ -554,25 +555,31 @@ class PolicyLedger:
             raise PolicyRefused("ledger does not match its anchor (edited, truncated or replaced)")
         return count, head
 
-    def _write_anchor(self, count: int, head: str, prev: tuple[int, str] | None = None) -> None:
+    def _write_anchor(self, count: int, head: str, prev: tuple[int, str] | None = None,
+                      pending: Sequence[Sequence[Any]] = ()) -> None:
+        """Anchor = committed head plus a write-ahead copy of the last transaction's rows."""
         prev_count, prev_head = prev or (count, head)
         tmp = self._anchor.with_name(self._anchor.name + ".tmp")
         tmp.write_text(json.dumps({"policy_digest": self.policy_digest, "count": count,
                                    "head": head, "prev_count": prev_count,
-                                   "prev_head": prev_head}), encoding="utf-8")
+                                   "prev_head": prev_head,
+                                   "last_rows": [list(r) for r in pending]}), encoding="utf-8")
         os.replace(tmp, self._anchor)
 
     @classmethod
-    def recover_uncommitted_append(cls, path: Path, policy_digest: str, *,
-                                   anchor_path: Path, at: datetime) -> "PolicyLedger":
-        """Owner-run recovery when a crash hit between the anchor write and COMMIT.
+    def recover_last_transaction(cls, path: Path, policy_digest: str, *,
+                                 anchor_path: Path, at: datetime) -> "PolicyLedger":
+        """Owner-run recovery when the ledger is behind its anchor by the last transaction.
 
-        Only accepted when the anchor is exactly one append ahead and its recorded previous
-        state equals the ledger. Recovery always trips the kill-switch (deleting the last row
-        and "recovering" can therefore never re-enable entries; exits still run)."""
+        That happens after a crash between the anchor write and COMMIT, or if someone deleted
+        the last committed transaction. Either way the anchor holds a write-ahead copy of those
+        rows; recovery replays exactly them (hash-chain checked from the ledger head to the
+        anchor head), so nothing is discarded or hidden, then trips the kill-switch."""
         conn = sqlite3.connect(str(path), isolation_level=None, timeout=10)
         ledger = cls(conn, policy_digest, Path(anchor_path))
         try:
+            conn.execute("BEGIN IMMEDIATE")                  # take the write lock first
+            ledger._in_txn = True
             triggers = {n for (n,) in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'trigger'")}
             if not _LEDGER_TRIGGERS <= triggers:
@@ -581,16 +588,36 @@ class PolicyLedger:
                 raise PolicyRefused("ledger belongs to a different policy")
             count, head = ledger._head()
             anchor = ledger._read_anchor()
-            if (anchor.get("count"), anchor.get("prev_count"), anchor.get("prev_head")) != \
-                    (count + 1, count, head):
-                raise PolicyRefused("anchor is not exactly one uncommitted append ahead")
-            ledger._write_anchor(count, head)
-            with ledger.transaction():
-                ledger._append(at, "KILL_SWITCH",
-                               detail={"reason": "ANCHOR_RECOVERED_AFTER_UNCOMMITTED_APPEND"})
+            rows = anchor.get("last_rows") or []
+            if (anchor.get("prev_count"), anchor.get("prev_head")) != (count, head) or not rows \
+                    or anchor.get("count") != count + len(rows):
+                raise PolicyRefused("ledger is not exactly the last anchored transaction behind")
+            cursor = head
+            for r in rows:
+                if not isinstance(r, list) or len(r) != 8 or r[6] != cursor \
+                        or cls._hash(cursor, r[:6]) != r[7]:
+                    raise PolicyRefused("anchored write-ahead rows do not chain from the ledger")
+                cursor = r[7]
+            if cursor != anchor.get("head"):
+                raise PolicyRefused("anchored write-ahead rows do not reach the anchor head")
+            for r in rows:
+                conn.execute("INSERT INTO events (at, event, track, reference, session_date, "
+                             "detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", r)
+            ledger._staged = []
+            ledger._staged_anchor = (count + len(rows), cursor)
+            ledger._append(at, "KILL_SWITCH", detail={
+                "reason": "LAST_TRANSACTION_REPLAYED_FROM_ANCHOR", "replayed": len(rows)})
+            assert ledger._staged_anchor is not None
+            ledger._write_anchor(*ledger._staged_anchor, prev=(count + len(rows), cursor),
+                                 pending=ledger._staged)
+            conn.execute("COMMIT")
         except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             conn.close()
             raise
+        finally:
+            ledger._in_txn, ledger._staged_anchor, ledger._staged = False, None, []
         return ledger
 
     @contextmanager
@@ -604,13 +631,13 @@ class PolicyLedger:
             before = self._verify()
             yield
             if self._staged_anchor is not None:
-                self._write_anchor(*self._staged_anchor, prev=before)
+                self._write_anchor(*self._staged_anchor, prev=before, pending=self._staged)
             self._conn.execute("COMMIT")
         except BaseException:
             self._conn.execute("ROLLBACK")
             raise
         finally:
-            self._in_txn, self._staged_anchor = False, None
+            self._in_txn, self._staged_anchor, self._staged = False, None, []
 
     def _append(self, at: datetime, event: str, *, track: str | None = None,
                 reference: str | None = None, session_date: date | None = None,
@@ -625,6 +652,7 @@ class PolicyLedger:
         self._conn.execute("INSERT INTO events (at, event, track, reference, session_date, "
                            "detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                            (*row, head, digest))
+        self._staged.append((*row, head, digest))
         self._staged_anchor = (count + 1, digest)
 
     # derived state
