@@ -86,12 +86,27 @@ def route_for(method: str, path: str) -> tuple[str, str | None]:
 
 
 class PilotBudget:
-    """Persistent per-route request caps, reserved before each send."""
+    """Persistent per-route request caps, reserved before each send.
 
-    def __init__(self, path: str) -> None:
+    With ``pilot_id`` the caps are scoped to that one signed pilot in a separate table of
+    the same file: an earlier pilot's recorded usage is kept untouched (never read, reset
+    or rewritten) and does not count against a later, separately signed pilot. Restarting
+    the same pilot reuses its rows, so it never gets a fresh allowance. Without
+    ``pilot_id`` the legacy single-budget table is used unchanged.
+    """
+
+    def __init__(self, path: str, *, pilot_id: str | None = None) -> None:
+        if pilot_id is not None and str(uuid.UUID(pilot_id)) != pilot_id:
+            raise PilotError("pilot budget id must be a canonical UUID")
+        self._pilot_id = pilot_id
         self._db = sqlite3.connect(Path(path), isolation_level=None)
-        self._db.execute("CREATE TABLE IF NOT EXISTS sd046_pilot_budget "
-                         "(route TEXT PRIMARY KEY, used INTEGER NOT NULL)")
+        if pilot_id is None:
+            self._db.execute("CREATE TABLE IF NOT EXISTS sd046_pilot_budget "
+                             "(route TEXT PRIMARY KEY, used INTEGER NOT NULL)")
+        else:
+            self._db.execute("CREATE TABLE IF NOT EXISTS sd046_pilot_budget_scoped "
+                             "(pilot_id TEXT NOT NULL, route TEXT NOT NULL, "
+                             "used INTEGER NOT NULL, PRIMARY KEY (pilot_id, route))")
 
     def close(self) -> None:
         self._db.close()
@@ -99,21 +114,32 @@ class PilotBudget:
     def reserve(self, route: str) -> None:
         self._db.execute("BEGIN IMMEDIATE")
         try:
-            row = self._db.execute("SELECT used FROM sd046_pilot_budget WHERE route=?",
-                                   (route,)).fetchone()
-            used = 0 if row is None else int(row[0])
+            used = self._used().get(route, 0)
             if used >= ROUTE_CAPS[route]:
                 raise PilotBudgetExhausted(f"pilot {route} budget {ROUTE_CAPS[route]} exhausted")
-            self._db.execute("INSERT INTO sd046_pilot_budget VALUES (?, 1) ON CONFLICT(route) "
-                             "DO UPDATE SET used = used + 1", (route,))
+            if self._pilot_id is None:
+                self._db.execute("INSERT INTO sd046_pilot_budget VALUES (?, 1) "
+                                 "ON CONFLICT(route) DO UPDATE SET used = used + 1", (route,))
+            else:
+                self._db.execute("INSERT INTO sd046_pilot_budget_scoped VALUES (?, ?, 1) "
+                                 "ON CONFLICT(pilot_id, route) DO UPDATE SET used = used + 1",
+                                 (self._pilot_id, route))
             self._db.execute("COMMIT")
         except BaseException:
             if self._db.in_transaction:
                 self._db.execute("ROLLBACK")
             raise
 
+    def _used(self) -> dict[str, int]:
+        if self._pilot_id is None:
+            rows = self._db.execute("SELECT route, used FROM sd046_pilot_budget")
+        else:
+            rows = self._db.execute("SELECT route, used FROM sd046_pilot_budget_scoped "
+                                    "WHERE pilot_id=?", (self._pilot_id,))
+        return {str(route): int(used) for route, used in rows}
+
     def usage(self) -> dict[str, int]:
-        rows = dict(self._db.execute("SELECT route, used FROM sd046_pilot_budget"))
+        rows = self._used()
         return {route: int(rows.get(route, 0)) for route in ROUTE_CAPS}
 
 

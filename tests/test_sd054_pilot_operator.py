@@ -432,3 +432,102 @@ def test_unlock_for_one_pilot_does_not_open_the_network_for_another(keys, tmp_pa
     factory.validate()                                   # unlocked digest + valid credentials
     with pytest.raises(BrokerExecutionDisabled, match="differs"):
         factory(type("R", (), {"digest": "f" * 64})(), str(tmp_path / "l.sqlite3"))
+
+
+# ---- per-pilot budget isolation (SD-058 abort -> fresh Friday pilot) -------------------
+def _legacy_budget_rows(path):
+    import sqlite3
+    with sqlite3.connect(path) as db:
+        return sorted(db.execute("SELECT route, used FROM sd046_pilot_budget"))
+
+
+def test_fresh_pilot_gets_own_budget_and_old_usage_stays_recorded(keys, tmp_path):
+    from sidedeck.application.sd046_etoro_demo_pilot import PilotBudget
+    (tmp_path / "op").mkdir()
+    budget_file = str(tmp_path / "op" / "budget.sqlite3")
+    legacy = PilotBudget(budget_file)            # the aborted pilot's unscoped record
+    legacy.reserve("pnl")
+    legacy.reserve("eligibility")
+    legacy.close()
+    aborted = Rig(keys, tmp_path, ask="101")     # an aborted scoped pilot, too
+    assert aborted.run()["result"] == "ABORTED_PREFLIGHT"
+    aborted_usage = PilotBudget(budget_file, pilot_id=aborted.intent.pilot_id).usage()
+    assert sum(aborted_usage.values()) > 0
+
+    fresh = Rig(keys, tmp_path)
+    report = fresh.run()
+    assert report["result"] == "COMPLETE"
+    assert len(fresh.opener.requests) <= 12 and len(fresh.posts()) == 2
+    assert _legacy_budget_rows(budget_file) == [("eligibility", 1), ("pnl", 1)]
+    assert PilotBudget(budget_file, pilot_id=aborted.intent.pilot_id).usage() == aborted_usage
+
+
+def test_same_pilot_never_gets_a_fresh_budget_on_restart(keys, tmp_path):
+    from sidedeck.application.sd046_etoro_demo_pilot import PilotBudget, PilotBudgetExhausted
+    rig = Rig(keys, tmp_path, ask="101")
+    assert rig.run()["result"] == "ABORTED_PREFLIGHT"
+    with pytest.raises(PilotReleaseRefused):     # single-use release, same digest
+        rig.run()
+    budget_file = str(tmp_path / "op" / "budget.sqlite3")
+    reopened = PilotBudget(budget_file, pilot_id=rig.intent.pilot_id)
+    assert reopened.usage()["eligibility"] == 1
+    with pytest.raises(PilotBudgetExhausted):
+        reopened.reserve("eligibility")
+    with pytest.raises(Exception):               # non-canonical id cannot alias a pilot
+        PilotBudget(budget_file, pilot_id=rig.intent.pilot_id.upper())
+
+
+def test_concurrent_reservers_cannot_exceed_a_pilot_cap(tmp_path):
+    import threading
+    from sidedeck.application.sd046_etoro_demo_pilot import PilotBudget, PilotBudgetExhausted
+    path, pilot = str(tmp_path / "budget.sqlite3"), str(uuid.uuid4())
+    PilotBudget(path, pilot_id=pilot).close()
+    wins, losses, barrier = [], [], threading.Barrier(8)
+
+    def worker():
+        budget = PilotBudget(path, pilot_id=pilot)
+        barrier.wait()
+        try:
+            budget.reserve("eligibility")
+            wins.append(1)
+        except PilotBudgetExhausted:
+            losses.append(1)
+        except sqlite3_locked() as exc:          # a busy writer also never over-spends
+            losses.append(exc)
+        finally:
+            budget.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(wins) == 1 and len(losses) == 7
+    assert PilotBudget(path, pilot_id=pilot).usage()["eligibility"] == 1
+
+
+def sqlite3_locked():
+    import sqlite3
+    return sqlite3.OperationalError
+
+
+def test_unresolved_pilot_still_blocks_the_next_signed_pilot(keys, tmp_path):
+    first = Rig(keys, tmp_path, decline={"close"})   # position left OPEN, kill switch trips
+    assert first.run()["result"] == UNRESOLVED
+    second = Rig(keys, tmp_path)
+    with pytest.raises(PilotReleaseRefused):
+        second.run()
+    assert second.opener.requests == []
+
+
+def test_real_routes_stay_excluded_for_scoped_pilots(keys, tmp_path):
+    from sidedeck.domain.etoro_demo_orders import RealExecutionExcluded, require_demo_route
+    rig = Rig(keys, tmp_path)
+    assert rig.run()["result"] == "COMPLETE"
+    assert all("/demo/" in urlsplit(r.full_url).path or "market-data" in r.full_url
+               for r in rig.opener.requests)
+    for method, path in (("POST", "/api/v2/trading/execution/orders"),
+                         ("POST", "/api/v1/trading/execution/market-close-orders/positions/1"),
+                         ("GET", "/api/v1/trading/info/pnl")):
+        with pytest.raises(RealExecutionExcluded):
+            require_demo_route(method, path)

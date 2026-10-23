@@ -106,7 +106,7 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
     approval_verifier = SshSignatureVerifier(signers_path, principal,
                                              namespace=APPROVAL_NAMESPACE)
     controls = ApprovalKillSwitch(paths.controls, approval_verifier)
-    budget = PilotBudget(paths.budget)
+    budget = PilotBudget(paths.budget, pilot_id=intent.pilot_id)   # scoped to this signed pilot
     store = PilotReleaseStore(paths.releases)
     lineage = EtoroDemoLineage(paths.lineage,
                                baseline_position_ids=[b.position_id for b in baseline],
