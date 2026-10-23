@@ -1,0 +1,85 @@
+# SD-063 autonomous eToro Demo policy — independent security review
+
+**Status:** remediated offline; **not released**. The USD 1000 / 7-day figures are design
+ceilings, not an authorized allocation. No autonomous broker execution exists: SD-063 holds no
+transport, credentials or network access, and it is not wired to the order path (SD-074).
+
+| | |
+|---|---|
+| Reviewed commit | `11fc7a7` (SD-063 v1) |
+| Remediated in | SD-063 v2, policy schema `sidedeck-autonomous-demo-policy/2` |
+| Reviewer | separate read-only reviewer agent (no repo writes, no network, no `.env`) |
+| Method | source and interface inspection, executed repro scripts, re-verification of the fixes |
+| Code | `src/sidedeck/application/sd063_autonomous_demo_policy.py` |
+| Tests | `tests/test_sd063_autonomous_demo_policy.py` (80; regression tests `test_f*`, `test_n*`) |
+
+## Summary
+
+v1 validated the policy document well but trusted nearly every runtime input: decisions,
+admissions, positions, equity and time came from the caller; no SD-064 grant was checked; the
+ledger had no concurrency control or tamper evidence; exits stopped under the kill-switch.
+v2 is a runtime object (`AutonomousDemoRuntime`) that re-verifies the signed grant on every call,
+runs the decision engine itself, derives positions/exposure/equity from its own hash-chained
+ledger and serialises every operation.
+
+## Findings and status (after re-verification)
+
+| ID | Sev. | Finding (v1) | v2 status |
+|---|---|---|---|
+| F1 | CRITICAL | Revoked/expired/absent SD-064 grant did not stop proposals; caller-supplied `now` | **FIXED** — `UnlockAuthority.check` + `check_grant_binding` (issuer, kind, digest, equal window) on every call; runtime clock only |
+| F2 | CRITICAL | Decision, admission and NATIVE signals forgeable by the caller | **PARTIALLY FIXED** — SD-063 runs `decide()` itself; strategy counts only if its evidence file (inside `evidence_root`) hashes to the owner-signed SHA-256 and an ADMITTED admission cites it. Residual R1 |
+| F3 | HIGH | No exposure accounting; USD 1000 not enforced at runtime | **FIXED** — positions, fills, pending + UNRESOLVED reservations, cash, realized P&L from the ledger; open + pending ≤ track capital; one position per instrument |
+| F4 | HIGH | TOCTOU race across workers | **FIXED** — `BEGIN IMMEDIATE` around every operation; integrity re-verified in the transaction; 3-worker test |
+| F5 | HIGH | Exits trusted caller positions; repeat exits after a fill | **FIXED** — exits only for ledger positions, units = filled − exited; pending exit blocks a duplicate |
+| F6 | HIGH | Kill-switch blocked protective exits | **FIXED** — blocks entries only; reduce-only exits continue with an alert |
+| F7 | HIGH | Positions stranded at weekend/holiday expiry; entries inside flatten window | **FIXED** — flatten from 1 h before the last full XNYS session close inside the window; entries stop at that session's open; window without a full session refused; post-expiry alert |
+| F8 | MEDIUM | No tamper evidence; deleting rows/file reset the kill-switch | **FIXED** — hash chain + separate anchor file; dropped triggers, edited/deleted rows, deleted ledger, stale anchor fail closed. Residual R3 |
+| F9 | MEDIUM | Caller-trusted equity; no cumulative loss limit | **PARTIALLY FIXED** — equity from ledger + marks, `max_loss_pct`, missing mark refused. Residual R2 |
+| F10 | MEDIUM | No stop/horizon/ask sanity; numeric crashes | **FIXED** — stop ≤ 25 % below limit, horizon within track bounds, ask within 2 % of decision price, min notional; numeric errors → refusal |
+| F11 | LOW | Calendar gap suppressed a stop | **FIXED** — stop evaluated before calendar math |
+| F12 | LOW | Unsanitised references in audit log | **FIXED** — reference format validated; details JSON-encoded |
+| F13 | LOW | Protected set could be empty | **FIXED** — must be non-empty |
+| F14 | PLAUSIBLE | Anyone with a ledger handle can resolve a live entry | **OPEN** — residual R4 |
+
+New issues raised by the re-verification of v2:
+
+| ID | Sev. | Finding | Status |
+|---|---|---|---|
+| N1 | MEDIUM | Reconciliation fill price/time unbounded | **FIXED** — entry fill in (stop, limit] within 15 min of the proposal; exit fill within 10 % of the planned bid; resolution never before the proposal |
+| N2 | MEDIUM | Crash between anchor write and COMMIT bricked the ledger | **FIXED** — anchor records the previous state; owner-run `recover_uncommitted_append` accepts only an exactly-one-ahead anchor and always trips the kill-switch |
+| N3 | LOW-MED | Caller marks can hide unrealized loss | **OPEN** — residual R2 |
+| N4 | LOW | Daily-loss baseline taken late; marks grew the ledger on every call | **FIXED** — first mark per session written before the decision; further marks only on a new high |
+| N5 | LOW | UNRESOLVED exit or revoked grant leaves only alerts | **BY DESIGN** — the order may have executed / privilege was removed; owner close runbook required (R5) |
+| N6 | LOW | Evidence checked by hash only, read fully each call | **OPEN** — residual R1 |
+
+The N1/N2/N4 fixes were made after the reviewer's re-verification and are covered by
+`test_n1_*`, `test_n2_*`, `test_n4_*`; they have not yet had a third independent pass.
+
+## Residual risks (must be closed or accepted before any release)
+
+- **R1 Authenticated research inputs.** Signals, admissions (`oos_*` fields) and `MarketContext`
+  are still caller-built; a forged NATIVE signal for an in-scope strategy and instrument can pass.
+  Bounded by the owner-signed strategy/instrument scope, evidence digest, notional caps and risk
+  gates. Close in SD-074 by sourcing signals from the in-process native strategy runner and
+  deriving admission from the hashed evidence content.
+- **R2 Authenticated quotes and marks.** Marks, entry asks and exit bids come from the caller.
+  SD-074 must take them from one authenticated broker quote path and cross-check marks against
+  exit quotes.
+- **R3 Ledger + anchor deleted together** resets local state (same residual as SD-064). Bounded by
+  the signed window and the SD-064 caps; an off-host anchor is a release blocker for autonomous
+  trading (already recorded under SD-064).
+- **R4 Who may resolve.** `resolve` must be callable only by the broker reconciliation path
+  (SD-059-style lookup evidence), not by research workers.
+- **R5 Owner runbook** for UNRESOLVED exits, revoked grants and positions open after expiry
+  (manual close in the eToro Demo UI, then record the outcome).
+- **R6 Send-time caps.** SD-063 does not consume SD-064 request/write caps; the transport must call
+  `UnlockAuthority.authorize_request(write=True, reference_id=proposal.reference_id)` before every
+  send (single-use reference, persistent caps).
+- **R7 Fees/financing** are not modelled in ledger P&L.
+
+## Release position
+
+G4 remains **NOT_ASSESSED / NO_GO**. Next steps (after the SD-058 MSFT pilot and re-lock): SD-064
+grant wiring into the transport, R1/R2/R4/R6 closed in SD-074, independent review of the full
+grant-to-order path, end-to-end simulated autonomous run, then a separate owner release for a
+bounded Demo operating period. Nothing here activates the USD 1000 allocation.
