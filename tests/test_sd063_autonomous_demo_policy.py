@@ -64,6 +64,14 @@ def _policy(**changes: object) -> AutonomousDemoPolicy:
     return replace(base, **changes)  # type: ignore[arg-type]
 
 
+def _fill(reference: str, outcome: str, at: datetime, *, filled_units: Decimal = Decimal(0),
+          avg_price: Decimal = Decimal(0)) -> sd063.FillEvidence:
+    """Test stand-in for SD-074 verified reconciliation evidence."""
+    return sd063._new_fill_evidence(reference=reference, outcome=outcome, units=filled_units,
+                                    price=avg_price, at=at, source_id="test-reconciliation",
+                                    broker_order_id="demo-order-1", lookup_sha256="c" * 64)
+
+
 class _Clock:
     def __init__(self, now: datetime) -> None:
         self.now = now
@@ -161,8 +169,8 @@ class _Env:
         assert isinstance(proposal, EntryProposal), proposal
         filled = Decimal(units) if units else proposal.units
         outcome = "FILLED" if filled == proposal.units else "PARTIALLY_FILLED"
-        self.ledger.resolve(proposal.reference_id, outcome, self.clock.now,
-                            filled_units=filled, avg_price=Decimal(price))
+        self.ledger.resolve(_fill(proposal.reference_id, outcome, self.clock.now,
+                            filled_units=filled, avg_price=Decimal(price)))
         return proposal
 
 
@@ -353,7 +361,7 @@ def test_entries_only_inside_the_exchange_session(env):
 def test_duplicate_signal_set_is_single_use(env):
     first = env.entry()
     assert isinstance(first, EntryProposal)
-    env.ledger.resolve(first.reference_id, "NOT_FILLED", env.clock.now)
+    env.ledger.resolve(_fill(first.reference_id, "NOT_FILLED", env.clock.now))
     env.clock.now += timedelta(minutes=1)
     signals = (env.signal(),)
     # The same signals again (same signal ids) can never open a second order.
@@ -363,7 +371,7 @@ def test_duplicate_signal_set_is_single_use(env):
                                       45, True),),
         market=env.market(), quote=env.quote(), marks={})
     assert isinstance(again, EntryProposal)                      # new signal ids: allowed
-    env.ledger.resolve(again.reference_id, "NOT_FILLED", env.clock.now)
+    env.ledger.resolve(_fill(again.reference_id, "NOT_FILLED", env.clock.now))
     repeat = env.rt.propose_entry(
         track="SWING", signals=signals,
         admissions=(StrategyAdmission("sma_cross", "1.0.0", "SWING", "ADMITTED", "SD022.md",
@@ -408,7 +416,7 @@ def test_f3_missing_mark_for_an_open_position_refuses(env):
 
 def test_f3_unresolved_entries_stay_reserved(env):
     proposal = env.entry()
-    env.ledger.resolve(proposal.reference_id, "UNRESOLVED", env.clock.now)
+    env.ledger.resolve(_fill(proposal.reference_id, "UNRESOLVED", env.clock.now))
     state = env.ledger.state()
     assert state.killed and state.entries[proposal.reference_id].outcome == "UNRESOLVED"
     assert env.entry(AAPL) == Refusal(("KILL_SWITCH_ENGAGED",))
@@ -451,48 +459,48 @@ def test_f4_concurrent_workers_cannot_exceed_one_pending_entry(env, monkeypatch)
 
 def test_resolve_validates_fills(env):
     with pytest.raises(PolicyRefused, match="unknown"):
-        env.ledger.resolve("0" * 32, "FILLED", NOW)
+        env.ledger.resolve(_fill("0" * 32, "FILLED", NOW))
     with pytest.raises(PolicyRefused, match="unknown"):
-        env.ledger.resolve("not-a-ref; DROP TABLE", "FILLED", NOW)
+        env.ledger.resolve(_fill("not-a-ref; DROP TABLE", "FILLED", NOW))
     proposal = env.entry()
     ref = proposal.reference_id
     with pytest.raises(PolicyRefused, match="outcome"):
-        env.ledger.resolve(ref, "MAYBE", NOW)
+        env.ledger.resolve(_fill(ref, "MAYBE", NOW))
     with pytest.raises(PolicyRefused, match="exactly"):
-        env.ledger.resolve(ref, "FILLED", NOW, filled_units=Decimal("0.1"), avg_price=Decimal("500"))
+        env.ledger.resolve(_fill(ref, "FILLED", NOW, filled_units=Decimal("0.1"), avg_price=Decimal("500")))
     with pytest.raises(PolicyRefused, match="units"):
-        env.ledger.resolve(ref, "PARTIALLY_FILLED", NOW, filled_units=Decimal("5"),
-                           avg_price=Decimal("500"))
+        env.ledger.resolve(_fill(ref, "PARTIALLY_FILLED", NOW, filled_units=Decimal("5"),
+                           avg_price=Decimal("500")))
     with pytest.raises(PolicyRefused, match="above the limit"):
-        env.ledger.resolve(ref, "FILLED", NOW, filled_units=proposal.units,
-                           avg_price=Decimal("503"))
+        env.ledger.resolve(_fill(ref, "FILLED", NOW, filled_units=proposal.units,
+                           avg_price=Decimal("503")))
     with pytest.raises(PolicyRefused, match="only fill outcomes"):
-        env.ledger.resolve(ref, "NOT_FILLED", NOW, filled_units=Decimal("0.1"))
-    env.ledger.resolve(ref, "FILLED", NOW, filled_units=proposal.units, avg_price=Decimal("500"))
+        env.ledger.resolve(_fill(ref, "NOT_FILLED", NOW, filled_units=Decimal("0.1")))
+    env.ledger.resolve(_fill(ref, "FILLED", NOW, filled_units=proposal.units, avg_price=Decimal("500")))
     with pytest.raises(PolicyRefused, match="already resolved"):
-        env.ledger.resolve(ref, "FILLED", NOW, filled_units=proposal.units,
-                           avg_price=Decimal("500"))
+        env.ledger.resolve(_fill(ref, "FILLED", NOW, filled_units=proposal.units,
+                           avg_price=Decimal("500")))
 
 
 def test_n1_reconciliation_values_are_bounded(env):
     proposal = env.entry()
     ref, units = proposal.reference_id, proposal.units
     with pytest.raises(PolicyRefused, match="below the stop"):
-        env.ledger.resolve(ref, "FILLED", NOW, filled_units=units, avg_price=Decimal("0.01"))
+        env.ledger.resolve(_fill(ref, "FILLED", NOW, filled_units=units, avg_price=Decimal("0.01")))
     with pytest.raises(PolicyRefused, match="IOC fill window"):
-        env.ledger.resolve(ref, "FILLED", NOW + timedelta(days=30), filled_units=units,
-                           avg_price=Decimal("500"))
+        env.ledger.resolve(_fill(ref, "FILLED", NOW + timedelta(days=30), filled_units=units,
+                           avg_price=Decimal("500")))
     with pytest.raises(PolicyRefused, match="precedes"):
-        env.ledger.resolve(ref, "FILLED", NOW - timedelta(minutes=1), filled_units=units,
-                           avg_price=Decimal("500"))
-    env.ledger.resolve(ref, "FILLED", NOW, filled_units=units, avg_price=Decimal("500"))
+        env.ledger.resolve(_fill(ref, "FILLED", NOW - timedelta(minutes=1), filled_units=units,
+                           avg_price=Decimal("500")))
+    env.ledger.resolve(_fill(ref, "FILLED", NOW, filled_units=units, avg_price=Decimal("500")))
     env.clock.now += timedelta(hours=1)
     exit_ = env.rt.plan_exits(bids=env.bids("470")).exits[0]
     with pytest.raises(PolicyRefused, match="planned bid"):
-        env.ledger.resolve(exit_.reference_id, "FILLED", env.clock.now, filled_units=units,
-                           avg_price=Decimal("100000"))
-    env.ledger.resolve(exit_.reference_id, "FILLED", env.clock.now, filled_units=units,
-                       avg_price=Decimal("469"))
+        env.ledger.resolve(_fill(exit_.reference_id, "FILLED", env.clock.now, filled_units=units,
+                           avg_price=Decimal("100000")))
+    env.ledger.resolve(_fill(exit_.reference_id, "FILLED", env.clock.now, filled_units=units,
+                       avg_price=Decimal("469")))
 
 
 class _CommitFails:
@@ -646,7 +654,7 @@ def test_polling_exit_plans_does_not_grow_alert_rows(env):
 
 def test_kill_switch_persists_across_restart(env):
     proposal = env.entry()
-    env.ledger.resolve(proposal.reference_id, "UNRESOLVED", env.clock.now)
+    env.ledger.resolve(_fill(proposal.reference_id, "UNRESOLVED", env.clock.now))
     env.ledger.close()
     env.ledger = env.open_ledger()
     env.rt = env.runtime(env.ledger, env.authority)
@@ -666,8 +674,8 @@ def test_f5_stop_exit_closes_exactly_the_filled_units_once(env):
     assert plan.exits[0].submission == "OFFLINE_PROPOSAL_NOT_SUBMITTED"
     again = env.rt.plan_exits(bids=env.bids("470"))
     assert again.exits == () and again.alerts == (f"EXIT_PENDING:{entry.reference_id}",)
-    env.ledger.resolve(plan.exits[0].reference_id, "FILLED", env.clock.now,
-                       filled_units=Decimal("0.1500"), avg_price=Decimal("479"))
+    env.ledger.resolve(_fill(plan.exits[0].reference_id, "FILLED", env.clock.now,
+                       filled_units=Decimal("0.1500"), avg_price=Decimal("479")))
     assert env.ledger.open_positions() == ()
     assert env.rt.plan_exits(bids=env.bids("470")).exits == ()
 
@@ -676,7 +684,7 @@ def test_f5_not_filled_exit_is_retried_with_a_new_reference(env):
     env.open_position()
     env.clock.now += timedelta(hours=1)
     first = env.rt.plan_exits(bids=env.bids("470")).exits[0]
-    env.ledger.resolve(first.reference_id, "NOT_FILLED", env.clock.now)
+    env.ledger.resolve(_fill(first.reference_id, "NOT_FILLED", env.clock.now))
     second = env.rt.plan_exits(bids=env.bids("470")).exits[0]
     assert second.reference_id != first.reference_id
 
@@ -714,7 +722,7 @@ def test_f7_flatten_uses_the_last_session_before_a_weekend_expiry(tmp_path):
         e.clock.now = datetime(2026, 11, 6, 20, 15, tzinfo=UTC)              # last hour
         plan = e.rt.plan_exits(bids=e.bids("500"))
         assert [x.reason for x in plan.exits] == ["POLICY_EXPIRY_FLATTEN"]
-        e.ledger.resolve(plan.exits[0].reference_id, "NOT_FILLED", e.clock.now)
+        e.ledger.resolve(_fill(plan.exits[0].reference_id, "NOT_FILLED", e.clock.now))
         e.clock.now = datetime(2026, 11, 9, 13, 30, tzinfo=UTC)              # after expiry
         late = e.rt.plan_exits(bids=e.bids("500"))
         assert late.exits == ()
@@ -742,8 +750,8 @@ def test_f9_realized_losses_drive_the_cumulative_loss_limit(tmp_path):
         e.open_position()
         e.clock.now += timedelta(hours=1)
         exit_ = e.rt.plan_exits(bids=e.bids("470")).exits[0]
-        e.ledger.resolve(exit_.reference_id, "FILLED", e.clock.now, filled_units=exit_.units,
-                         avg_price=Decimal("470"))
+        e.ledger.resolve(_fill(exit_.reference_id, "FILLED", e.clock.now, filled_units=exit_.units,
+                         avg_price=Decimal("470")))
         e.clock.now = datetime(2026, 11, 3, 15, 0, tzinfo=UTC)
         assert e.entry(AAPL) == Refusal(("CUMULATIVE_LOSS_LIMIT",))
     finally:

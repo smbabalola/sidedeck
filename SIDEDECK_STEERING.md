@@ -282,3 +282,27 @@ protected eToro Demo baseline, and never uses the MSFT authorization for a UK in
 - Acceptance is two separate milestones: *UK research acceptance* (sourced instruments, LSE hours,
   units, horizon signals, auditable simulated trade) and *UK Demo execution acceptance* (approved
   broker buy-and-close with genuine broker evidence and reconciliation). Never conflate them.
+
+## 14. Autonomous Demo execution — verified versus blocked (owner directive 2026-10-23)
+
+SD-063 passed an independent review (six passes) and offline remediation; SD-074's input boundary
+is implemented offline. **No autonomous eToro Demo order is authorized.** The USD 1000 / 7-day
+values are design ceilings, never an allocated budget. Never wire the policy into the SD-058 MSFT
+pilot or change its reviewed execution behaviour. eToro Real is excluded permanently.
+
+| Requirement | Status |
+|---|---|
+| Signed autonomous policy (Demo only, ≤ 7 days, ≤ USD 1000, SWING/POSITION) | VERIFIED offline (SD-063) |
+| Grant re-verified on every call; runtime clock only | VERIFIED offline |
+| Strategy evidence pinned by owner-signed SHA-256; decision engine run internally | VERIFIED offline |
+| Exposure, cash, equity, loss limits from the ledger | VERIFIED offline |
+| Concurrency (`BEGIN IMMEDIATE`), single-use references, kill-switch (entries only) | VERIFIED offline |
+| Tamper-evident ledger; crash/tamper recovery quarantines, never trusts anchored rows | VERIFIED offline |
+| Authenticated signals/quotes/fills (sealed envelopes, roles, replay protection) | IMPLEMENTED offline (SD-074); broker adapters pending |
+| Unknown outcomes settled only by sealed broker reconciliation evidence | IMPLEMENTED offline |
+| Protective-exit authority after expiry/revocation (reduce-only) | IMPLEMENTED offline |
+| Incident report and runbook | IMPLEMENTED (`docs/SD074_OPERATOR_INCIDENT_RUNBOOK.md`) |
+| Off-machine ledger/revocation anchoring | BLOCKED — design only (`docs/SD074_OFF_MACHINE_ANCHOR_DESIGN.md`) |
+| SD-064 grants wired into the Demo order transport; send-time caps | BLOCKED until the SD-058 pilot completes and the transport is re-locked |
+| Independent review of the full policy-to-transport lifecycle | BLOCKED on the wiring above |
+| Owner release of a bounded autonomous Demo operating period | BLOCKED_OWNER |

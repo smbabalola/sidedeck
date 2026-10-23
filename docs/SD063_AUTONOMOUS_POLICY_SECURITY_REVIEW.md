@@ -125,3 +125,17 @@ G4 remains **NOT_ASSESSED / NO_GO**. Next steps (after the SD-058 MSFT pilot and
 grant wiring into the transport, R1/R2/R4/R6 closed in SD-074, independent review of the full
 grant-to-order path, end-to-end simulated autonomous run, then a separate owner release for a
 bounded Demo operating period. Nothing here activates the USD 1000 allocation.
+
+## Residual status after SD-074 offline work (2026-10-23)
+
+| Residual | Status |
+|---|---|
+| R1 authenticated research inputs | Boundary IMPLEMENTED (`sd074_trusted_inputs`, sealed native-runner signals); research features (ATR, sector, correlations) still pipeline-supplied |
+| R2 authenticated quotes/marks | Boundary IMPLEMENTED (sealed broker-quote envelopes; decision price = verified ask); real broker quote adapter pending wiring |
+| R3 ledger + anchor deletion | OPEN — off-machine anchoring designed (`docs/SD074_OFF_MACHINE_ANCHOR_DESIGN.md`), release blocker |
+| R4 who may resolve | IMPLEMENTED — `resolve`/`reconcile_unknown` accept only verifier-built `FillEvidence` |
+| R5 owner runbook | IMPLEMENTED — `incident_report()` + `docs/SD074_OPERATOR_INCIDENT_RUNBOOK.md` |
+| R6 send-time caps | OPEN — SD-064 wiring after the SD-058 pilot |
+| R7 fees | OPEN |
+| R8 lost-fill quarantine alert-only | MITIGATED — owner notice via incident report; protective-exit authority; settled by `reconcile_unknown` |
+| R9 quarantine resolution | IMPLEMENTED — `reconcile_unknown` with sealed broker evidence |

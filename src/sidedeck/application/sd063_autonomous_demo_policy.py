@@ -49,7 +49,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from pathlib import Path
@@ -385,6 +385,14 @@ class AutonomousDemoPolicy:
             raise PolicyRefused(f"malformed policy: {type(exc).__name__}") from None
 
 
+def protective_subject(policy: AutonomousDemoPolicy) -> str:
+    """SD-064 subject digest of a separate owner-signed protective-exit grant for a policy.
+
+    Such a grant authorizes only reduce-only exits of positions recorded under this policy
+    (e.g. after expiry or revocation of the policy grant); it never authorizes entries."""
+    return hashlib.sha256(f"{policy.digest()}|protective-exit".encode("utf-8")).hexdigest()
+
+
 def check_grant_binding(policy: AutonomousDemoPolicy, grant: UnlockGrant, now: datetime) -> None:
     """Bind an already-verified SD-064 grant to exactly this policy."""
     if grant.broker != BROKER:
@@ -703,7 +711,7 @@ class PolicyLedger:
                                       Decimal(d["units"]), Decimal(d["limit"]),
                                       Decimal(d["stop"]), d["horizon"],
                                       datetime.fromisoformat(at))
-            elif event == "ENTRY_RESOLVED":
+            elif event in ("ENTRY_RESOLVED", "ENTRY_RECONCILED"):
                 e = entries[ref]
                 e.outcome, e.filled = d["outcome"], Decimal(d["units"])
                 e.avg_price = Decimal(d["price"])
@@ -711,7 +719,7 @@ class PolicyLedger:
             elif event == "EXIT_PROPOSED":
                 exits[ref] = _Exit(ref, d["entry"], Decimal(d["units"]), Decimal(d["bid"]),
                                    datetime.fromisoformat(at))
-            elif event == "EXIT_RESOLVED":
+            elif event in ("EXIT_RESOLVED", "EXIT_RECONCILED"):
                 x = exits[ref]
                 x.outcome = d["outcome"]
                 e = entries[x.entry]
@@ -742,27 +750,91 @@ class PolicyLedger:
         with self.transaction():
             self._append(at, "KILL_SWITCH", detail={"reason": reason[:200]})
 
-    def resolve(self, reference: str, outcome: str, at: datetime, *,
-                filled_units: Decimal = ZERO, avg_price: Decimal = ZERO) -> None:
-        """Record the reconciled broker outcome. UNRESOLVED trips the persistent kill-switch
-        and keeps the reservation counted. Fill quantities are bounded by the proposal."""
-        if not isinstance(reference, str) or not _REF.fullmatch(reference):
+    def _target(self, st: _State, evidence: "FillEvidence") -> _Entry | _Exit:
+        if not isinstance(evidence, FillEvidence):
+            raise PolicyRefused("only verified broker-reconciliation evidence can resolve")
+        target = st.entries.get(evidence.reference) or st.exits.get(evidence.reference)
+        if target is None:
             raise PolicyRefused("unknown proposal reference")
-        if outcome not in OUTCOMES:
-            raise PolicyRefused(f"invalid outcome; expected one of {OUTCOMES}")
+        return target
+
+    def _record(self, kind: str, event: str, evidence: "FillEvidence", units: Decimal,
+                price: Decimal) -> None:
+        filled = evidence.outcome in ("FILLED", "PARTIALLY_FILLED")
+        self._append(evidence.at, f"{kind}_{event}", reference=evidence.reference, detail={
+            "outcome": evidence.outcome, "units": str(units if filled else ZERO),
+            "price": str(price if filled else ZERO), "source": evidence.source_id,
+            "broker_order_id": evidence.broker_order_id, "lookup_sha256": evidence.lookup_sha256})
+
+    def resolve(self, evidence: "FillEvidence") -> None:
+        """Record the reconciled broker outcome from verified evidence (SD-074). UNRESOLVED
+        trips the persistent kill-switch and keeps the reservation counted."""
         with self.transaction():
-            st = self.state()
-            target = st.entries.get(reference) or st.exits.get(reference)
-            if target is None:
-                raise PolicyRefused("unknown proposal reference")
-            units, price = _check_resolution(target, outcome, filled_units, avg_price, at)
-            filled = outcome in ("FILLED", "PARTIALLY_FILLED")
+            target = self._target(self.state(), evidence)
+            units, price = _check_resolution(target, evidence.outcome, evidence.units,
+                                             evidence.price, evidence.at)
             kind = "ENTRY" if isinstance(target, _Entry) else "EXIT"
-            self._append(at, f"{kind}_RESOLVED", reference=reference,
-                         detail={"outcome": outcome, "units": str(units if filled else ZERO),
-                                 "price": str(price if filled else ZERO)})
-            if outcome == "UNRESOLVED":
-                self._append(at, "KILL_SWITCH", detail={"reason": f"UNRESOLVED_{kind}:{reference}"})
+            self._record(kind, "RESOLVED", evidence, units, price)
+            if evidence.outcome == "UNRESOLVED":
+                self._append(evidence.at, "KILL_SWITCH",
+                             detail={"reason": f"UNRESOLVED_{kind}:{evidence.reference}"})
+
+    def reconcile_unknown(self, evidence: "FillEvidence") -> None:
+        """Settle an UNRESOLVED or QUARANTINED proposal with independent broker evidence.
+
+        Operator approval is not an input: only verified reconciliation evidence (with the
+        broker order lookup digest) can turn it into a position or release its reservation.
+        The kill-switch stays engaged."""
+        with self.transaction():
+            target = self._target(self.state(), evidence)
+            if target.outcome not in _UNKNOWN_OUTCOMES:
+                raise PolicyRefused("only UNRESOLVED or QUARANTINED proposals are reconciled")
+            if evidence.outcome == "UNRESOLVED":
+                raise PolicyRefused("reconciliation needs a final broker outcome")
+            units, price = _check_resolution(replace(target, outcome=None), evidence.outcome,
+                                             evidence.units, evidence.price, evidence.at)
+            kind = "ENTRY" if isinstance(target, _Entry) else "EXIT"
+            self._record(kind, "RECONCILED", evidence, units, price)
+
+
+_EVIDENCE_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class FillEvidence:
+    """Broker-reconciliation evidence for one proposal reference.
+
+    Built only by the SD-074 input verifier from an envelope sealed by the registered
+    broker-reconciliation source (``_new_fill_evidence`` is the in-process constructor). The
+    private token is a guard against accidental construction, not the security boundary."""
+    reference: str
+    outcome: str
+    units: Decimal
+    price: Decimal
+    at: datetime
+    source_id: str
+    broker_order_id: str
+    lookup_sha256: str
+    _token: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._token is not _EVIDENCE_TOKEN:
+            raise PolicyRefused("fill evidence must come from the verified reconciliation path")
+        if not isinstance(self.reference, str) or not _REF.fullmatch(self.reference):
+            raise PolicyRefused("unknown proposal reference")
+        if self.outcome not in OUTCOMES:
+            raise PolicyRefused(f"invalid outcome; expected one of {OUTCOMES}")
+        if not isinstance(self.lookup_sha256, str) or not _HEX64.fullmatch(self.lookup_sha256):
+            raise PolicyRefused("fill evidence needs the broker lookup digest")
+        if not (isinstance(self.broker_order_id, str) and self.broker_order_id.strip()
+                and isinstance(self.source_id, str) and self.source_id.strip()):
+            raise PolicyRefused("fill evidence needs a broker order id and source")
+        if not isinstance(self.at, datetime) or self.at.tzinfo is None:
+            raise PolicyRefused("fill evidence time must be timezone-aware")
+
+
+def _new_fill_evidence(**fields: Any) -> FillEvidence:
+    return FillEvidence(**fields, _token=_EVIDENCE_TOKEN)
 
 
 def _check_resolution(target: _Entry | _Exit, outcome: str, filled_units: Any, avg_price: Any,
@@ -860,6 +932,7 @@ class ExitProposal:
     reason: str
     proposed_at: datetime
     submission: str = SUBMISSION
+    authority: str = "policy"              # "policy" or "protective" (SD-064 grant to use)
 
 
 @dataclass(frozen=True)
@@ -899,12 +972,15 @@ class AutonomousDemoRuntime:
     def __init__(self, policy: AutonomousDemoPolicy, ledger: PolicyLedger, *,
                  authority: UnlockAuthority, grant_document: Mapping[str, Any],
                  grant_signature: str, evidence_root: Path,
-                 clock: Callable[[], datetime] = _utc_now) -> None:
+                 clock: Callable[[], datetime] = _utc_now,
+                 protective_grant: tuple[Mapping[str, Any], str] | None = None) -> None:
         if ledger.policy_digest != policy.digest():
             raise PolicyRefused("ledger belongs to a different policy")
         self.policy, self.ledger = policy, ledger
         self._authority, self._clock = authority, clock
         self._grant_document, self._grant_signature = dict(grant_document), grant_signature
+        self._protective = None if protective_grant is None else \
+            (dict(protective_grant[0]), protective_grant[1])
         self._evidence_root = Path(evidence_root).resolve()
 
     def _now(self) -> datetime:
@@ -1135,12 +1211,18 @@ class AutonomousDemoRuntime:
                    if q not in st.entries and q not in st.exits]
         if not positions:
             return self._finish(now, (), alerts)
-        if not policy.active(now):
-            return self._finish(now, (), alerts + [f"POLICY_EXPIRED_POSITION_OPEN:{p.entry_reference}"
-                                                   for p in positions])
-        if not self._grant_valid(now):
-            return self._finish(now, (), alerts + [f"GRANT_NOT_VALID_POSITION_OPEN:{p.entry_reference}"
-                                                   for p in positions])
+        authority = "policy"
+        if not (policy.active(now) and self._grant_valid(now)):
+            if self._protective_valid(now):
+                # Separate owner-signed protective-exit authority: reduce-only, no entries.
+                authority = "protective"
+                alerts.append("PROTECTIVE_EXIT_AUTHORITY_IN_USE")
+            elif not policy.active(now):
+                return self._finish(now, (), alerts + [
+                    f"POLICY_EXPIRED_POSITION_OPEN:{p.entry_reference}" for p in positions])
+            else:
+                return self._finish(now, (), alerts + [
+                    f"GRANT_NOT_VALID_POSITION_OPEN:{p.entry_reference}" for p in positions])
         market_open = _session_open(now)
         _, flatten_at = policy.schedule()
         day = now.astimezone(NEW_YORK).date()
@@ -1166,6 +1248,8 @@ class AutonomousDemoRuntime:
                 continue                                    # wait for the session
             if quote.bid <= p.stop_price:                   # stop first: needs no calendar math
                 reason = "STOP_BREACHED"
+            elif authority == "protective":
+                reason = "PROTECTIVE_FLATTEN"
             elif now >= flatten_at:
                 reason = "POLICY_EXPIRY_FLATTEN"
             else:
@@ -1183,10 +1267,75 @@ class AutonomousDemoRuntime:
             ledger._append(now, "EXIT_PROPOSED", track=p.track, reference=exit_ref,
                            session_date=day,
                            detail={"entry": ref, "units": str(p.units), "reason": reason,
-                                   "bid": str(quote.bid)})
+                                   "bid": str(quote.bid), "authority": authority})
             exits.append(ExitProposal(exit_ref, ref, policy.digest(), p.track, p.canonical_id,
-                                      p.etoro_instrument_id, p.units, reason, now))
+                                      p.etoro_instrument_id, p.units, reason, now,
+                                      authority=authority))
         return self._finish(now, tuple(exits), alerts)
+
+    def _protective_valid(self, now: datetime) -> bool:
+        if self._protective is None:
+            return False
+        document, signature = self._protective
+        try:
+            grant = self._authority.check(document=document, signature=signature,
+                                          subject_digest=protective_subject(self.policy), now=now)
+        except GrantRefused:
+            return False
+        return (grant.kind == "autonomous_policy" and grant.issued_by == OWNER_PRINCIPAL
+                and grant.broker == BROKER and grant.not_before >= self.policy.not_before)
+
+    def incident_report(self) -> dict[str, Any]:
+        """Owner-facing incident summary: what needs a human, and what to do (runbook R5)."""
+        with self.ledger.transaction():
+            now = self._now()
+            st = self.ledger.state()
+            policy_active = self.policy.active(now)
+            grant_ok = policy_active and self._grant_valid(now)
+            protective_ok = self._protective_valid(now)
+        positions = _open_positions(st)
+
+        def refs(items: Any, outcome: str | None) -> list[str]:
+            return sorted(i.reference for i in items if i.outcome == outcome)
+
+        report: dict[str, Any] = {
+            "policy_digest": self.policy.digest(), "generated_at": now.isoformat(),
+            "kill_switch": st.killed, "policy_active": policy_active,
+            "grant_valid": grant_ok, "protective_exit_authority": protective_ok,
+            "open_positions": [{"entry_reference": p.entry_reference, "canonical_id":
+                                p.canonical_id, "units": str(p.units),
+                                "stop_price": str(p.stop_price)} for p in positions],
+            "pending_entries": refs(st.entries.values(), None),
+            "pending_exits": refs(st.exits.values(), None),
+            "unresolved_entries": refs(st.entries.values(), "UNRESOLVED"),
+            "quarantined_entries": refs(st.entries.values(), "QUARANTINED"),
+            "unresolved_exits": refs(st.exits.values(), "UNRESOLVED"),
+            "quarantined_exits": refs(st.exits.values(), "QUARANTINED"),
+            "unknown_quarantined_references": sorted(
+                q for q in st.quarantined if q not in st.entries and q not in st.exits),
+            "submission": SUBMISSION,
+        }
+        actions = []
+        for ref in report["unresolved_entries"] + report["quarantined_entries"]:
+            actions.append(f"Entry {ref}: look the order up in eToro Demo by its reference; "
+                           "record the result as verified reconciliation evidence "
+                           "(reconcile_unknown). A position may exist and is not exit-managed.")
+        for ref in report["unresolved_exits"] + report["quarantined_exits"]:
+            actions.append(f"Exit {ref}: confirm in eToro Demo whether the close executed; "
+                           "record verified reconciliation evidence; close manually if still open.")
+        for ref in report["unknown_quarantined_references"]:
+            actions.append(f"Reference {ref} came only from a recovered anchor; check the broker "
+                           "for any order or position carrying it.")
+        if positions and not grant_ok and not protective_ok:
+            actions.append("Open positions have no exit authority (policy expired or grant not "
+                           "valid): close them manually in the eToro Demo UI, or sign a "
+                           "protective-exit grant.")
+        if st.killed:
+            actions.append("Kill-switch engaged: new entries are blocked for this policy; a new "
+                           "owner-signed policy is required to resume entries.")
+        report["owner_actions"] = actions
+        report["status"] = "ACTION_REQUIRED" if actions else "OK"
+        return report
 
     def _finish(self, now: datetime, exits: tuple[ExitProposal, ...],
                 alerts: list[str]) -> ExitPlan:
