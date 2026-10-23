@@ -22,8 +22,8 @@ def test_intent_parameters_are_the_owner_configuration():
     assert doc["units"] == "0.09" and doc["max_limit_rate"] == "552.56"
     assert Decimal(doc["units"]) * Decimal(doc["max_limit_rate"]) <= Decimal("50")
     assert doc["max_notional_usd"] == "50" and doc["strategy"] == "tradingagents"
-    assert doc["not_before"] == "2026-10-26T14:00:00+00:00"
-    assert doc["expires_at"] == "2026-10-26T15:30:00+00:00"
+    assert doc["not_before"] == "2026-10-23T16:00:00+00:00"
+    assert doc["expires_at"] == "2026-10-23T19:30:00+00:00"
     caps = doc["request_caps"]
     assert sum(caps.values()) == 12 and caps["open"] + caps["close"] == 2
     sd053.offline_checks(intent, PROTECTED)
