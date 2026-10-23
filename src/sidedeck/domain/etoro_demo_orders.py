@@ -452,6 +452,21 @@ STOCK_TYPE_ID = 5          # eToro instrumentTypeID for stocks (6 = ETF, 10 = cr
 USD_CURRENCY_ID = 1        # eToro currency id for USD (as in accountCurrencyId)
 _STOCK_WORDS = ("stock", "equit", "share")
 BROKER_VERIFIED, DERIVED = "BROKER_VERIFIED", "DERIVED"
+_ISO_CURRENCY = re.compile(r"[A-Z]{3}")
+
+
+def normalize_currency_code(value: Any) -> str | None:
+    """The one shared currency-code normalizer (parser, row labels, forensic audit).
+    Only a ``str`` whose trimmed, upper-cased form is exactly three ASCII letters is a
+    code; anything else (other types, inner spaces, look-alike or zero-width characters)
+    is ``None`` and therefore never equals "USD"."""
+    if type(value) is not str:
+        return None
+    trimmed = value.strip()
+    if not trimmed.isascii():          # before upper(): e.g. "ſ".upper() == "S"
+        return None
+    code = trimmed.upper()
+    return code if _ISO_CURRENCY.fullmatch(code) else None
 
 
 def identity_conflicts(row: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -464,7 +479,7 @@ def identity_conflicts(row: dict[str, Any]) -> tuple[str | None, str | None]:
             continue
         if "currency" in lowered:
             usd = (value == USD_CURRENCY_ID if type(value) is int
-                   else str(value).strip().upper() == "USD")
+                   else normalize_currency_code(value) == "USD")
             if not usd:
                 raise EtoroDemoOrderError("broker row reports a non-USD currency")
             currency = BROKER_VERIFIED
@@ -492,7 +507,7 @@ class Eligibility:
 def parse_eligibility(payload: Any, *, instrument_id: int, units: Decimal,
                       notional_usd: Decimal) -> Eligibility:
     """eToro Demo eligibility must allow this exact long, 1x, units-based open and close."""
-    if not isinstance(payload, dict) or payload.get("currency") != "USD":
+    if not isinstance(payload, dict) or normalize_currency_code(payload.get("currency")) != "USD":
         raise EtoroDemoOrderError("eligibility response is not USD")
     rows = payload.get("eligibilities")
     if not isinstance(rows, list):

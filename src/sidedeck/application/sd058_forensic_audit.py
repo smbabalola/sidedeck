@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-_CURRENCY_CODE = re.compile(r"^[A-Z]{3}$")
+from sidedeck.domain.etoro_demo_orders import normalize_currency_code
+
 # Currency values are retained only after normalization and membership in this
 # explicit ISO-4217 allowlist; arbitrary three-letter response values are not evidence.
 _SAFE_CURRENCY_CODES = frozenset({
@@ -59,9 +59,11 @@ def summarize_schema(payload: Any) -> dict[str, Any]:
         item: dict[str, Any] = {"path": path or "$", "type": kind}
         key = path.rsplit(".", 1)[-1].lower()
         if "currency" in key and isinstance(value, str):
-            normalized = value.strip().upper()
-            if _CURRENCY_CODE.fullmatch(normalized) and normalized in _SAFE_CURRENCY_CODES:
+            normalized = normalize_currency_code(value)      # same normalizer as the parser
+            if normalized is not None and normalized in _SAFE_CURRENCY_CODES:
                 item["currency_code"] = normalized
+                # Safe boolean only: was the raw value already the exact code?
+                item["currency_exact"] = value == normalized
         fields.append(item)
         if depth >= _MAX_DEPTH:
             return

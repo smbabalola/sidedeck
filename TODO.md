@@ -148,6 +148,27 @@ start SD-074F or alter the MSFT release while this window remains active; after 
 owner-run evidence appears, classify this authorization as expired and require a new separately
 approved window rather than rolling it forward.
 
+**Batch AC9 (2026-10-23; ROOT CAUSE of both "eligibility response is not USD" aborts):**
+
+- **Friday pilot `90b6c0b4…` / `b0be3fe2…` (owner-run, 17:10 UTC):** `ABORTED_PREFLIGHT`, 2 requests
+  (pnl 1, eligibility 1), 0 writes, 0 SideDeck positions, kill switch `CLEAR`. Transport re-locked
+  in `396eaf5`. Release consumed; budget, audit, report and request ledger preserved untouched.
+- **Root cause (confirmed from this run's own `PreflightAudit`, seq 3, written from the exact
+  rejected payload):** top-level `currency` is a `string` that the sanitizer's
+  `strip().upper()` maps to `USD`, but `parse_eligibility` compared it to `"USD"` exactly. The
+  live value is therefore a case/whitespace variant of USD (raw value not retained by design).
+  Row-level labels (`identity_conflicts`) already normalized; the standalone diagnostic never ran
+  the parser, which is why AC7 wrongly concluded "no parser defect".
+- **Fix:** one shared `normalize_currency_code` (domain): `str` only, trimmed, ASCII-checked
+  *before* upper-casing, exactly three ASCII letters, else `None`. Used by `parse_eligibility`,
+  `identity_conflicts` and the forensic sanitizer, which now also records the safe boolean
+  `currency_exact`. Non-USD, missing, non-string, inner-space, fullwidth, zero-width, Cyrillic
+  and case-fold look-alikes (`uſd`) are still rejected. USD gate and capital limits unchanged.
+- **Review:** independent reviewer found the look-alike case-fold issue; fixed and tested before
+  commit. Remaining strict `!= "USD"` (`account_identity.py`) is Alpaca-only, not on this path.
+- **Next:** a fresh owner-signed intent and window (the consumed pilot is never reused), then a
+  separate reviewed digest lock-lift and owner-operated run.
+
 **Batch AC8 (2026-10-23; per-pilot request budget for the urgent Friday pilot, `a79bc59`):**
 
 - **Defect (found in independent review of `9000762`):** the operator's `PilotBudget` used one
