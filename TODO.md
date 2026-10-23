@@ -148,6 +148,28 @@ start SD-074F or alter the MSFT release while this window remains active; after 
 owner-run evidence appears, classify this authorization as expired and require a new separately
 approved window rather than rolling it forward.
 
+**Batch AC10 (2026-10-23; naive live-quote timestamp after the currency fix):**
+
+- **Friday retry pilot `a51e41fa…` / `0e1ab7c2…` (owner-run, 18:01 UTC):** `ABORTED_PREFLIGHT`,
+  3 requests (pnl, eligibility, rates), 0 writes, 0 positions, kill switch `CLEAR`. Eligibility
+  **passed** (AC9 fix confirmed live). Error: `reference quote time must be timezone-aware`.
+  Transport re-locked in `65ff964`; release consumed; all evidence preserved.
+- **Evidence:** audit seq 6/7 shows `results[0].date` is a string that parsed as a naive
+  date-time. eToro's API reference describes `date` only as "date-time of the price in the
+  system" with no offset or example; UTC is **not documented**.
+- **Fix (provider-specific, self-verifying):** a naive stamp is read as UTC and marked
+  `time_basis=NAIVE_AS_UTC` (reported in the preflight step). It is accepted only through the
+  unchanged freshness gate (≤ 60 s old, ≤ 5 s future); every real non-UTC zone is ≥ 30 min away,
+  so a mis-zoned stamp fails closed as stale/future. `date` must be a full date-time string;
+  the local clock must be tz-aware. Price limits and freshness constants unchanged.
+- **Tests (+29):** aware (+00:00, Z, −4, +1), naive fresh, naive local time in six real
+  non-UTC offsets rejected, stale/future (naive and aware), malformed/wrong types, .NET
+  7-digit fractions. Independent review: APPROVE. Full suite 1521 passed / 1 skipped before the
+  extra .NET cases; Ruff, mypy clean.
+- **Next pilot prepared:** `55d66780-bf06-4615-8710-e96e2f0757fd`, digest
+  `4e1cea6fa043cbb13f0ef9fdd83194c6d0558b71727515a9c4a3d637a1b70599`, window 18:45–19:45 UTC,
+  same parameters; owner signature and separate lock-lift approval pending.
+
 **Batch AC9 (2026-10-23; ROOT CAUSE of both "eligibility response is not USD" aborts):**
 
 - **Friday pilot `90b6c0b4…` / `b0be3fe2…` (owner-run, 17:10 UTC):** `ABORTED_PREFLIGHT`, 2 requests

@@ -222,9 +222,9 @@ def recorded_baseline_status(ledger_path: str) -> str:
 
 
 # ---- production entry point (SD-053 MSFT pilot) -------------------------------------
-# Fresh 2026-10-23 retry pilot intent (after the c18cafe currency fix). Older digests,
-# including the consumed urgent b0be3fe2 pilot, are not reusable.
-PINNED_INTENT_DIGEST = "0e1ab7c2535a39a7ad0c44b0382c0ceb556d7824936fccb0ab2d4576e2b21fcc"
+# Fresh 2026-10-23 second retry intent (after the currency and naive-quote-time fixes).
+# Older digests, including the consumed b0be3fe2 and 0e1ab7c2 pilots, are not reusable.
+PINNED_INTENT_DIGEST = "4e1cea6fa043cbb13f0ef9fdd83194c6d0558b71727515a9c4a3d637a1b70599"
 PRINCIPAL = "owner@sidedeck"
 # SHA-256 of the owner's ssh-ed25519 public key blob in data/approval_allowed_signers
 # (verified 2026-10-22). A different or additional signer key is refused.
