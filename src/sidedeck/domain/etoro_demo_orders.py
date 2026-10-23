@@ -410,6 +410,10 @@ class FreshQuote:
     bid: Decimal
     ask: Decimal
     observed_at: datetime
+    time_basis: str = "EXPLICIT_OFFSET"
+
+
+EXPLICIT_OFFSET, NAIVE_AS_UTC = "EXPLICIT_OFFSET", "NAIVE_AS_UTC"
 
 
 def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime) -> FreshQuote:
@@ -427,17 +431,26 @@ def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime) -> Fre
     bid, ask = _dec(row.get("bid"), "bid"), _dec(row.get("ask"), "ask")
     if bid <= 0 or ask <= 0 or ask < bid:
         raise EtoroDemoOrderError("reference quote is not a sane bid/ask")
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise EtoroDemoOrderError("local clock must be timezone-aware")
     stamp = row.get("date")
+    if type(stamp) is not str or len(stamp) < 19 or stamp[10] not in "Tt ":
+        raise EtoroDemoOrderError("reference quote time is invalid")   # full date-time only
     try:
-        observed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        observed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
     except ValueError:
         raise EtoroDemoOrderError("reference quote time is invalid") from None
+    basis = EXPLICIT_OFFSET
     if observed.tzinfo is None:
-        raise EtoroDemoOrderError("reference quote time must be timezone-aware")
+        # eToro Demo live rates send a naive `date` (pilot a51e41fa, 2026-10-23); the API
+        # reference states no offset. Reading it as UTC is accepted ONLY because the
+        # freshness gate below then verifies it: any real non-UTC zone is >= 30 min away,
+        # far outside the 60 s age / 5 s skew window, so a mis-zoned stamp fails closed.
+        observed, basis = observed.replace(tzinfo=timezone.utc), NAIVE_AS_UTC
     age = (now - observed).total_seconds()
     if age > MAX_QUOTE_AGE_SECONDS or age < -MAX_QUOTE_SKEW_SECONDS:
         raise EtoroDemoOrderError("reference quote is stale or future-dated")
-    return FreshQuote(instrument_id, bid, ask, observed.astimezone(timezone.utc))
+    return FreshQuote(instrument_id, bid, ask, observed.astimezone(timezone.utc), basis)
 
 
 def derive_limit(ask: Decimal, signed_max: Decimal, premium: Decimal) -> Decimal:

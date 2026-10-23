@@ -290,7 +290,9 @@ class EtoroDemoPilot:
         return self._result("READY_FOR_OPEN_APPROVAL", "preflight",
                             fractional=eligibility.fractional,
                             instrument_type_evidence=eligibility.instrument_type_evidence,
-                            currency_evidence=eligibility.currency_evidence)
+                            currency_evidence=eligibility.currency_evidence,
+                            quote_time_basis=quote.time_basis,
+                            quote_observed_at=quote.observed_at.isoformat())
 
     def open_approval_scope(self) -> tuple[DemoOpenRequest, str]:
         """The exact open request and the SD-033 scope the owner must sign."""
