@@ -457,7 +457,10 @@ def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime,
         observed, basis = observed.replace(tzinfo=timezone.utc), NAIVE_AS_UTC
     age = (now - observed).total_seconds()
     if age > MAX_QUOTE_AGE_SECONDS or age < -MAX_QUOTE_SKEW_SECONDS:
-        raise EtoroDemoOrderError("reference quote is stale or future-dated")
+        # The age is safe diagnostic evidence (a number, not a price or identifier).
+        raise EtoroDemoOrderError(f"reference quote is stale or future-dated (age {age:.1f} s, "
+                                  f"limits -{MAX_QUOTE_SKEW_SECONDS}..{MAX_QUOTE_AGE_SECONDS} s,"
+                                  f" basis {basis})")
     return FreshQuote(instrument_id, bid, ask, observed.astimezone(timezone.utc), basis)
 
 

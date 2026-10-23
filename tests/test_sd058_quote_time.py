@@ -106,3 +106,9 @@ def test_audit_records_only_the_timestamp_shape():
     aware = summarize_schema({"date": "2026-10-23T18:01:17+00:00"})["fields"]
     assert [f for f in aware if f["path"] == "date"][0]["format_shape"].endswith("+99:99")
     assert "2026" not in str(fields)
+
+
+def test_stale_rejection_records_the_age_for_diagnosis():
+    stamp = naive(NOW - timedelta(seconds=73))
+    with pytest.raises(EtoroDemoOrderError, match=r"age 73\.0 s.*basis NAIVE_AS_UTC"):
+        parse_fresh_quote(quote(stamp), instrument_id=1004, now=NOW, allow_naive_utc=True)

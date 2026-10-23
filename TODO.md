@@ -8,19 +8,20 @@
 
 ### Milestone 0 — first eToro Demo MSFT trade (steering §10, §14.1; highest priority)
 
-> **CONTROLLER (2026-10-23, steering §14.1) — status: NOT COMPLETE.** Broker state: no order ever
-> written; 0 SideDeck positions; kill switch CLEAR; transport LOCKED (`17d0e17`). Last evidence:
-> pilot `55d66780…` / `4e1cea6f…` passed ALL live preflight (pnl, eligibility, rates; quote
-> `NAIVE_AS_UTC`, shape `9999-99-99T99:99:99.999`, ~30 s old; pnl timestamps carry `Z`) and
-> reached READY_FOR_OPEN_APPROVAL (limit 526.39, 0.09 units); then ABORTED_OPEN_NOT_APPROVED
-> (Enter pressed 18 s later with no signature file; release consumed, 0 writes, no approvals).
-> Fix: operator now tells the owner to sign in a SECOND PowerShell window and re-prompts
-> instead of aborting on an early Enter (bounded; NO still declines). **Next:** owner signs
-> pilot `84da8dcc-e253-4938-b3ad-c7ef52970146`, digest
-> `bff0fef68ddd80b234915810c565572150e30fc917a38b414e113521f0214fbf` (window 19:15–19:50 UTC,
-> last open ≈19:30); separate lock-lift approval → owner run → re-lock → reconcile. COMPLETE
-> only on broker records of open fill, close fill, flat pilot position, MATCHED
-> reconciliation, baseline unchanged and transport re-locked.
+> **CONTROLLER (steering §14.1) — status: NOT COMPLETE.** Broker state: no order ever written;
+> 0 SideDeck positions; kill switch CLEAR; transport LOCKED (`799e7bb`). Friday 2026-10-23
+> attempts (all 0 writes, releases consumed, evidence preserved): `b0be3fe2` currency (fixed
+> `c18cafe`); `0e1ab7c2` naive quote time (pilot-only `NAIVE_AS_UTC`, owner-accepted per pilot);
+> `4e1cea6f` passed all preflight, open not signed (prompt fixed `0faabfe`); `bff0fef6`
+> (19:17 UTC) eligibility passed, quote rejected `stale or future-dated` — age not recorded;
+> earlier quote was ~30 s old on arrival, so eToro's rate `date` may lag. Rejections now record
+> the age (seconds) for diagnosis. **Owner decision pending:** keep the 60 s freshness limit or
+> widen it for the pilot (the IOC limit ≤ ask × 1.005 and ≤ 552.56 still caps price).
+> **Next pilot:** Monday 2026-10-26 14:00–16:00 UTC (= UK), `af2213c5-95c4-4207-a119-44df0ad0f78b`,
+> digest `1ab4d2c8f85c94ef6fca78164b3e1e593929cc6e3cf7c52c82eae135c3d7fd4a`; needs owner
+> signature, per-pilot `NAIVE_AS_UTC` acceptance and separate lock-lift approval. COMPLETE only
+> on broker records of open fill, close fill, flat pilot position, MATCHED reconciliation,
+> baseline unchanged and transport re-locked.
 
 - [x] **SD-055 | P0 | VERIFIED | deps: SD-053 | Pilot intent and owner-signature verification.** Owner signed 2026-10-22; SideDeck verifier `signature_valid: true` and independent `ssh-keygen -Y verify` Good (owner@sidedeck, ED25519 SHA256:7qb8dAz9…/rUI, namespace `sidedeck-etoro-pilot-release`); SHA-256(canonical) = pinned digest `71e111b3…9a62`; signer key pinned; release not consumed.
 - [x] **SD-056 | P0 | VERIFIED | deps: SD-054 | Final broker execution transport review.** Independent read-only security review of the full order path: **0 critical, 0 high**. Fixed with tests: (M1) any interruption after the open write trips the kill-switch and writes an UNRESOLVED 'position may be OPEN' report; (M2) the production factory validates lock + credentials before the single-use release is consumed; (M3) open refused with < 20 min of window left, close TTL clipped to window end; (M4) SD-041 guard also catches `from … import` and string references, constructor lock test is `is True`; (M5) dedicated `sidedeck-etoro-pilot-approval` namespace and a signing command that re-checks the digest file against the on-screen digest; lows: lost open acknowledgement → UNRESOLVED immediately, stray pending orders block COMPLETE, stale approval signatures removed, signer key pinned by SHA-256. Accepted lows: transport close URL bound by the desk (not the transport); derived P&L caveated; stale recorded baseline gate superseded by the live preflight reconcile.
