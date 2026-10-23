@@ -148,6 +148,25 @@ start SD-074F or alter the MSFT release while this window remains active; after 
 owner-run evidence appears, classify this authorization as expired and require a new separately
 approved window rather than rolling it forward.
 
+**Batch AC8 (2026-10-23; per-pilot request budget for the urgent Friday pilot, `a79bc59`):**
+
+- **Defect (found in independent review of `9000762`):** the operator's `PilotBudget` used one
+  unscoped table in `data/sd054/budget.sqlite3`, which still holds the aborted SD-058 run's
+  `pnl=1, eligibility=1`. The release gate requires an unused budget, so the signed Friday pilot
+  (`b0be3fe2…0f0098`) would have been refused with `PILOT_BUDGET_USED` before any request.
+- **Fix (minimal):** `PilotBudget(path, pilot_id=…)` scopes caps to the signed pilot's canonical
+  UUID in a new `sd046_pilot_budget_scoped` table in the same file; the legacy table and the
+  aborted run's rows are never read, reset or rewritten. Restarting the same pilot reuses its
+  rows (no fresh allowance); its release stays single-use. Kill switch, lineage, outbox and the
+  digest-keyed transport ledger remain shared. No evidence file was moved or edited.
+- **Tests (+5):** old usage preserved; fresh pilot completes with its own allowance; same pilot
+  cannot regain budget on restart; 8 concurrent reservers cannot exceed a cap; an UNRESOLVED
+  pilot (kill switch tripped) still blocks the next signed pilot with 0 requests; Real routes
+  stay excluded. Full suite `1456 passed, 1 skipped`; Ruff, mypy (174 files), Alembic passed.
+  Scratch-copy check of the real budget file: Friday pilot usage all zero, legacy rows intact.
+- No broker request, credential read or order. Transport stays locked
+  (`UNLOCKED_PILOT_DIGEST = None`); the digest-specific lock-lift needs separate owner approval.
+
 **Batch AC4 (2026-10-23; SD-058 forensic evidence hardening):**
 
 - Added `sd058_forensic_audit.PreflightAudit`, an absolute-path, append-only SQLite ledger with
