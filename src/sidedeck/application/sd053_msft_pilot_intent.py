@@ -11,7 +11,8 @@ Fixed parameters (owner configuration 2026-10-22):
 * the actual limit is derived at preflight: min(552.56, fresh realtime ask x 1.005);
 * ``reference_price`` 526.25 is the SD-052 search ``currentRate``: a **planning**
   reference that bounds the signed maximum (+5 %); it is never used as an executable ask;
-* window Friday 2026-10-23 12:10-15:30 America/New_York (EDT) = 16:10-19:30 UTC;
+* window Friday 2026-10-23 14:00-15:45 America/New_York (EDT) = 18:00-19:45 UTC
+  (retry after the currency-normalization fix ``c18cafe``; fresh pilot id and digest);
 * request caps: the reviewed 12-request / 2-write plan (``ROUTE_CAPS``).
 
 Usage::
@@ -37,10 +38,11 @@ REFERENCE_PRICE = Decimal("526.25")          # planning reference only (SD-052 c
 MAX_LIMIT_RATE = (REFERENCE_PRICE * (1 + MAX_PLANNING_HEADROOM)).quantize(
     Decimal("0.01"), rounding=ROUND_DOWN)    # 552.56
 MAX_NOTIONAL_USD = Decimal("50")
-NOT_BEFORE = datetime(2026, 10, 23, 16, 10, tzinfo=timezone.utc)   # 12:10 EDT
-EXPIRES_AT = datetime(2026, 10, 23, 19, 30, tzinfo=timezone.utc)  # 15:30 EDT
-# Preserve both prior signed intents; this urgent attempt has its own file and digest.
-INTENT_PATH = lookup.DATA_DIR / "sd053-msft-pilot-intent-20261023-urgent.json"
+NOT_BEFORE = datetime(2026, 10, 23, 18, 0, tzinfo=timezone.utc)   # 14:00 EDT
+EXPIRES_AT = datetime(2026, 10, 23, 19, 45, tzinfo=timezone.utc)  # 15:45 EDT
+# Preserve all prior signed intents (incl. the consumed urgent b0be3fe2 pilot); this
+# retry has its own file and digest.
+INTENT_PATH = lookup.DATA_DIR / "sd053-msft-pilot-intent-20261023-retry.json"
 
 
 class IntentRefused(RuntimeError):
