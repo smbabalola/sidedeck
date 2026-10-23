@@ -24,6 +24,7 @@ import hmac
 import json
 import os
 import re
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,7 @@ from sidedeck.application.sd063_autonomous_demo_policy import GENESIS, PolicyLed
 _ID = re.compile(r"policy-[0-9a-f]{32}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _NAME = re.compile(r"(?P<id>policy-[0-9a-f]{32})\.(?P<count>[0-9]{12})\.json")
+LOCK_TIMEOUT_SECONDS = 60
 _FIELDS = {"ledger_id", "policy_digest", "count", "head", "prev_count", "prev_head", "at", "mac"}
 
 
@@ -79,13 +81,12 @@ class WriteOnceDirectoryAnchor:
                 or not 0 <= checkpoint.count < 10**12:
             raise PolicyRefused("invalid checkpoint identity")
         lock = self._dir / f"{checkpoint.ledger_id}.lock"
+        self._take_lock(lock)
         try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            raise PolicyRefused("concurrent publish in progress; retry") from None
-        os.close(fd)
-        try:
-            history = sorted(self.history(checkpoint.ledger_id), key=lambda c: c.count)
+            try:
+                history = sorted(self.history(checkpoint.ledger_id), key=lambda c: c.count)
+            except (OSError, ValueError, TypeError, KeyError):
+                raise PolicyRefused("external anchor unavailable; failing closed") from None
             latest = (history[-1].count, history[-1].head) if history else (-1, "")
             if latest != (checkpoint.prev_count, checkpoint.prev_head):
                 raise PolicyRefused("store head moved; checkpoint does not extend it (retry)")
@@ -104,6 +105,26 @@ class WriteOnceDirectoryAnchor:
                 tmp.unlink(missing_ok=True)
         finally:
             lock.unlink(missing_ok=True)
+
+    @staticmethod
+    def _take_lock(lock: Path) -> None:
+        """Exclusive lock file stamped with its creation time; a lock older than
+        ``LOCK_TIMEOUT_SECONDS`` (a crashed publisher) is broken once, then retried."""
+        for attempt in (1, 2):
+            try:
+                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    stamp = float(lock.read_text(encoding="utf-8") or "0")
+                except (OSError, ValueError):
+                    stamp = 0.0
+                if attempt == 1 and time.time() - stamp > LOCK_TIMEOUT_SECONDS:
+                    lock.unlink(missing_ok=True)          # stale: its holder is gone
+                    continue
+                raise PolicyRefused("concurrent publish in progress; retry") from None
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(str(time.time()))
+            return
 
     def history(self, ledger_id: str) -> list[Checkpoint]:
         out = []

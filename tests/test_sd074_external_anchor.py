@@ -235,3 +235,20 @@ def test_n3_publish_is_atomic_and_leaves_no_partial_files(setup):
     assert not any(n.endswith(".tmp") or n.endswith(".lock") for n in names)
     for name in names:
         json.loads((tmp / "remote" / name).read_text(encoding="utf-8"))
+
+
+def test_m1_a_stale_lock_is_broken_but_a_live_one_is_respected(setup):
+    env, _, keeper, tmp = setup
+    from sidedeck.application.sd074_external_anchor import ledger_id_for as lid
+    lock = tmp / "remote" / f"{lid(env.policy.digest())}.lock"
+    env.ledger.trip_kill_switch("a", NOW)
+    lock.write_text("0", encoding="utf-8")                            # crashed holder, 1970
+    keeper.publish(env.ledger, NOW)
+    assert not lock.exists()
+    import time as _time
+    lock.write_text(str(_time.time()), encoding="utf-8")              # live holder
+    env.ledger.trip_kill_switch("b", NOW)
+    with pytest.raises(PolicyRefused, match="concurrent publish"):
+        keeper.publish(env.ledger, NOW)
+    lock.unlink()
+    keeper.publish(env.ledger, NOW)

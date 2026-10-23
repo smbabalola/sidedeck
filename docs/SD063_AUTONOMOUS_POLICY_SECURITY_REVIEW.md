@@ -171,3 +171,11 @@ concurrent publishers could fork and brick the chain — **FIXED** (compare-and-
 the stand-in; required of the real store); **N3 (LOW)** torn writes — **FIXED** (temp file, fsync,
 atomic hard link). Not detectable by the keeper and therefore a store requirement: deletion of the
 latest checkpoint (`docs/SD074_OFF_MACHINE_ANCHOR_DESIGN.md`, hard requirements).
+
+Re-verification of `951133d`: N1, N2, N3 FIXED; no cross-policy checkpoint bypass. **M1 (MEDIUM,
+stand-in)** a crashed publisher's lock blocked publishing (and therefore the publish-before-send
+gate) forever — **FIXED** (time-stamped lock broken after 60 s); a corrupt file found under the
+lock is now a clean refusal. Open design decision for SD-074F: whether reduce-only protective
+exits are exempt from the publish-before-send gate or get a defined degraded path when the store
+is unavailable. LOW residuals: no directory fsync after the link; `os.link` needs a filesystem
+with hard links (fails closed otherwise).
