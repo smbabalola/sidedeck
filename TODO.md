@@ -172,6 +172,25 @@ approved window rather than rolling it forward.
 - Proposal prepared: `docs/SD058_ELIGIBILITY_DIAGNOSTIC_AUTHORIZATION.md`. It is not signed or
   executed; owner authorization is required for the single bounded eligibility request.
 
+**Batch AC5 (2026-10-23; SD-058 one-request diagnostic implementation):**
+
+- Implemented `application/sd058_eligibility_diagnostic.py` as a standalone, owner-signed,
+  Demo-only diagnostic. It accepts only instrument `1004`, the exact eligibility POST and USD
+  body; uses a distinct SSH namespace and pinned signer; rejects altered, expired, replayed or
+  Real/alternate-route intents before network access; and never signs on the owner's behalf.
+- Added a fixed absolute diagnostic ledger with `BEGIN IMMEDIATE`, durable reserve-before-send,
+  single-use outcome consumption and uncertain-outcome replay refusal. The existing
+  `PreflightAudit` is written before network access and records only sanitized response schema,
+  field types and non-sensitive currency codes. No caller-selected ledger, retry, order route or
+  transport unlock is available.
+- Security regression coverage includes forged/changed/expired/replayed signatures, exact
+  endpoint/body, concurrency, restart/uncertain outcome, audit failure, malformed/non-USD
+  responses, route isolation and credential-leak checks. No broker request was made.
+- **Target state after exact-head CI:** `READY_FOR_OWNER_DIAGNOSTIC_AUTHORIZATION` — not
+  executed, not approved, and not trade-ready. The owner must create a fresh intent, sign its
+  printed digest locally and operate the one-request command; the prior pilot signature is not
+  reused.
+
 **Batch AC3 (2026-10-23; Codex recovery and independent UK verification):**
 
 - Recovered Claude's uncommitted P5 work without resetting or overwriting the nested checkout: SD-094 authorization package, SD-094A offline runner, SD-097 UK read-only workstation/API, and SD-098 licensed-file importer, plus the associated SD-096 follow-ups and UI contract/E2E coverage.

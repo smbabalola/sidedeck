@@ -307,9 +307,11 @@ diagnosis; no broker request is automatically repeated and no expired authorizat
 budget or window is reused. Codex never signs on the owner's behalf and never enables eToro Real.
 
 The current state is `ABORTED_PREFLIGHT` for SD-058: no order writes or SideDeck positions,
-transport re-locked, and the eligibility response is not locally available for diagnosis. The
-next executable engineering action is a bounded, read-only diagnostic authorization proposal;
-execution requires a separate owner-signed authorization and owner-operated command.
+transport re-locked, and the original eligibility response is not locally available for
+diagnosis. The standalone one-request diagnostic runner is now implemented and independently
+tested offline. Its release state is `READY_FOR_OWNER_DIAGNOSTIC_AUTHORIZATION`: execution still
+requires a fresh, separate owner-signed authorization and owner-operated command. It is not
+executed, approved, or trade-ready, and no prior pilot signature or unlock may be reused.
 
 ## 15. Autonomous Demo execution — verified versus blocked (owner directive 2026-10-23)
 

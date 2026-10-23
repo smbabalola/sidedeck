@@ -35,10 +35,11 @@ def test_no_module_combines_network_access_with_etoro_write_paths():
 
 AUTHENTICATED_CLIENTS = {Path("infrastructure/etoro_demo_client.py"),            # GET /pnl only
                          Path("infrastructure/etoro_demo_write_transport.py"),   # C7, locked
-                         Path("application/sd050_msft_instrument_lookup.py")}   # 1 GET, owner-authorized
+                         Path("application/sd050_msft_instrument_lookup.py"),    # 1 GET, owner-authorized
+                         Path("application/sd058_eligibility_diagnostic.py")}    # 1 POST, owner-authorized diagnostic only
 
 
-def test_only_two_modules_can_send_authenticated_etoro_requests():
+def test_only_reviewed_modules_can_send_authenticated_etoro_requests():
     found = set()
     for path in SRC.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
