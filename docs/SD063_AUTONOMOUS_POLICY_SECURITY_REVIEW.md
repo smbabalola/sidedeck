@@ -139,3 +139,15 @@ bounded Demo operating period. Nothing here activates the USD 1000 allocation.
 | R7 fees | OPEN |
 | R8 lost-fill quarantine alert-only | MITIGATED — owner notice via incident report; protective-exit authority; settled by `reconcile_unknown` |
 | R9 quarantine resolution | IMPLEMENTED — `reconcile_unknown` with sealed broker evidence |
+
+## SD-074 batch review (independent, on `89d51d4`) and remediation
+
+| ID | Sev. | Finding | Status |
+|---|---|---|---|
+| S1 | HIGH | MAC computed over `json.dumps(payload)` but a different `dict(payload)` view was used; a crafted Mapping swapped verified content | **FIXED** — payload must be an exact `dict`; one JSON snapshot is MAC-checked and used; header fields must be `str`; non-JSON keys → refusal |
+| S2 | HIGH | Raw `AutonomousDemoRuntime.propose_entry/plan_exits` accepted caller-built inputs (authenticity by convention) | **FIXED (in-process guard)** — raw calls return `UNVERIFIED_INPUTS_REFUSED` unless the runtime is built with `allow_unverified_inputs=True` (tests only); only `AuthenticatedRuntime` passes the verified-input token; fill events record the envelope MAC and nonce. Residual: in-process Python cannot enforce a hard boundary — research workers must never hold the runtime/ledger (process isolation in SD-074F) |
+| S3 | MEDIUM | Research context (ATR, sector, correlations, eligibility) unauthenticated | **FIXED** — sealed by a `research_pipeline` role; may not carry a price; session status re-derived from the calendar |
+| S4 | MEDIUM | Reconciliation not bound to the submitted broker order | **OPEN** — needs the order id captured at submission (transport, SD-074F); in-band false fills bounded by the fill bands |
+| S5 | MED-LOW | Anyone able to revoke the main grant could force a protective liquidation | **FIXED** — protective exits only after policy expiry; revocation or transient failure → alerts only |
+| S6 | LOW | `incident_report` writes SD-064 audit rows and takes the write lock | **ACCEPTED, documented** — the audit rows are intended; no secrets in the output |
+| S7 | LOW | Mixed-type keys escaped as `TypeError`; unbounded nonce store; lock errors; shared keys; substring self-claims | **FIXED** except nested self-claim keys (top-level only; accepted) — nonces pruned after 8 days (> longest max age), lock errors → refusal, distinct keys required |

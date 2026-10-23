@@ -125,7 +125,7 @@ class _Env:
         kwargs: dict[str, object] = dict(
             authority=authority, grant_document=self.grant_document,
             grant_signature=self.signature, evidence_root=self.tmp / "evidence",
-            clock=self.clock)
+            clock=self.clock, allow_unverified_inputs=True)
         kwargs.update(changes)
         return AutonomousDemoRuntime(self.policy, ledger, **kwargs)  # type: ignore[arg-type]
 
@@ -848,4 +848,5 @@ def test_runtime_api_takes_no_caller_time_decision_or_positions():
     import inspect
     params = set(inspect.signature(AutonomousDemoRuntime.propose_entry).parameters)
     assert not params & {"now", "decision", "open_positions", "equity"}
-    assert set(inspect.signature(AutonomousDemoRuntime.plan_exits).parameters) == {"self", "bids"}
+    exit_params = set(inspect.signature(AutonomousDemoRuntime.plan_exits).parameters)
+    assert exit_params == {"self", "bids", "_verified"}

@@ -764,7 +764,8 @@ class PolicyLedger:
         self._append(evidence.at, f"{kind}_{event}", reference=evidence.reference, detail={
             "outcome": evidence.outcome, "units": str(units if filled else ZERO),
             "price": str(price if filled else ZERO), "source": evidence.source_id,
-            "broker_order_id": evidence.broker_order_id, "lookup_sha256": evidence.lookup_sha256})
+            "broker_order_id": evidence.broker_order_id, "lookup_sha256": evidence.lookup_sha256,
+            "envelope_mac": evidence.envelope_mac, "envelope_nonce": evidence.envelope_nonce})
 
     def resolve(self, evidence: "FillEvidence") -> None:
         """Record the reconciled broker outcome from verified evidence (SD-074). UNRESOLVED
@@ -798,6 +799,7 @@ class PolicyLedger:
 
 
 _EVIDENCE_TOKEN = object()
+_VERIFIED_INPUTS = object()      # passed only by sd074.AuthenticatedRuntime (in-process guard)
 
 
 @dataclass(frozen=True)
@@ -815,6 +817,8 @@ class FillEvidence:
     source_id: str
     broker_order_id: str
     lookup_sha256: str
+    envelope_mac: str = ""
+    envelope_nonce: str = ""
     _token: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -973,12 +977,14 @@ class AutonomousDemoRuntime:
                  authority: UnlockAuthority, grant_document: Mapping[str, Any],
                  grant_signature: str, evidence_root: Path,
                  clock: Callable[[], datetime] = _utc_now,
-                 protective_grant: tuple[Mapping[str, Any], str] | None = None) -> None:
+                 protective_grant: tuple[Mapping[str, Any], str] | None = None,
+                 allow_unverified_inputs: bool = False) -> None:
         if ledger.policy_digest != policy.digest():
             raise PolicyRefused("ledger belongs to a different policy")
         self.policy, self.ledger = policy, ledger
         self._authority, self._clock = authority, clock
         self._grant_document, self._grant_signature = dict(grant_document), grant_signature
+        self._allow_unverified = allow_unverified_inputs is True
         self._protective = None if protective_grant is None else \
             (dict(protective_grant[0]), protective_grant[1])
         self._evidence_root = Path(evidence_root).resolve()
@@ -1024,9 +1030,15 @@ class AutonomousDemoRuntime:
     def propose_entry(
         self, *, track: str, signals: Sequence[ResearchSignal],
         admissions: Sequence[StrategyAdmission], market: MarketContext, quote: EntryQuote,
-        marks: Mapping[str, Decimal],
+        marks: Mapping[str, Decimal], _verified: object = None,
     ) -> EntryProposal | Refusal:
-        """Run the decision engine and every policy gate; return one unsent proposal."""
+        """Run the decision engine and every policy gate; return one unsent proposal.
+
+        Production callers go through ``sd074.AuthenticatedRuntime``; direct calls with
+        caller-built inputs are refused unless the runtime was built with
+        ``allow_unverified_inputs=True`` (offline tests only)."""
+        if not (self._allow_unverified or _verified is _VERIFIED_INPUTS):
+            return Refusal(("UNVERIFIED_INPUTS_REFUSED",))
         try:
             with self.ledger.transaction():
                 return self._propose_entry(track, signals, admissions, market, quote, marks)
@@ -1191,8 +1203,11 @@ class AutonomousDemoRuntime:
             units=units, limit_price=limit, stop_price=stop, horizon_max_days=horizon,
             strategies=strategies, proposed_at=now)
 
-    def plan_exits(self, *, bids: Mapping[str, ExitQuote]) -> ExitPlan:
+    def plan_exits(self, *, bids: Mapping[str, ExitQuote],
+                   _verified: object = None) -> ExitPlan:
         """Reduce-only exits for ledger positions: stop, horizon, pre-expiry flatten."""
+        if not (self._allow_unverified or _verified is _VERIFIED_INPUTS):
+            return ExitPlan((), ("UNVERIFIED_INPUTS_REFUSED",))
         try:
             with self.ledger.transaction():
                 return self._plan_exits(bids)
@@ -1213,7 +1228,9 @@ class AutonomousDemoRuntime:
             return self._finish(now, (), alerts)
         authority = "policy"
         if not (policy.active(now) and self._grant_valid(now)):
-            if self._protective_valid(now):
+            # Protective authority only after expiry: a revocation (anyone may revoke) or a
+            # transient grant failure must not force a liquidation.
+            if not policy.active(now) and self._protective_valid(now):
                 # Separate owner-signed protective-exit authority: reduce-only, no entries.
                 authority = "protective"
                 alerts.append("PROTECTIVE_EXIT_AUTHORITY_IN_USE")

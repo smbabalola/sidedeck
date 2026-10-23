@@ -23,11 +23,12 @@ from test_sd063_autonomous_demo_policy import AAPL, MSFT, NOW, _Env, _grant
 
 UTC = timezone.utc
 KEYS = {name: (name * 8).encode()[:40].ljust(40, b"k") for name in
-        ("native", "agent", "quotes", "recon")}
+        ("native", "agent", "quotes", "recon", "research")}
 SOURCES = [TrustedSource("native-runner", "native_strategy_runner", KEYS["native"]),
            TrustedSource("ta-adapter", "agent_adapter", KEYS["agent"]),
            TrustedSource("etoro-demo-quotes", "broker_quotes", KEYS["quotes"]),
-           TrustedSource("etoro-demo-recon", "broker_reconciliation", KEYS["recon"])]
+           TrustedSource("etoro-demo-recon", "broker_reconciliation", KEYS["recon"]),
+           TrustedSource("research-pipeline", "research_pipeline", KEYS["research"])]
 ADMISSIONS = (StrategyAdmission("sma_cross", "1.0.0", "SWING", "ADMITTED", "SD022.md", 45, True),)
 LOOKUP = "d" * 64
 
@@ -55,6 +56,14 @@ class _Kit:
         payload.update(changes)
         return self.signers["native-runner"].seal(payload)
 
+    def research(self, cid: str = MSFT, atr: str = "10", **changes: object):
+        payload = {"canonical_id": cid, "atr": atr, "sector": "Technology",
+                   "correlations": {o: "0.1" for o in (MSFT, AAPL, "US:XNAS:NVDA",
+                                                       "US:XNAS:AMZN") if o != cid},
+                   "execution_eligible": True, "as_of": self.env.clock.now.isoformat()}
+        payload.update(changes)
+        return self.signers["research-pipeline"].seal(payload)
+
     def quote(self, cid: str = MSFT, bid: str = "499.9", ask: str = "500",
               signer: str = "etoro-demo-quotes"):
         return self.signers[signer].seal({"canonical_id": cid, "bid": bid, "ask": ask,
@@ -70,7 +79,7 @@ class _Kit:
 
     def entry(self, cid: str = MSFT, **changes: object):
         kwargs: dict[str, object] = dict(track="SWING", signals=[self.native(cid)],
-                                         admissions=ADMISSIONS, research=self.env.market(cid),
+                                         admissions=ADMISSIONS, research=self.research(cid),
                                          quote=self.quote(cid), marks=[])
         kwargs.update(changes)
         return self.art.propose_entry(**kwargs)  # type: ignore[arg-type]
@@ -204,11 +213,74 @@ def test_forged_quote_never_reaches_the_policy(kit):
     assert kit.env.ledger.state().entries == {}
 
 
-def test_decision_price_comes_from_the_verified_quote_not_research(kit):
-    research = replace(kit.env.market(), last_price=Decimal("1"))   # research price ignored
-    proposal = kit.entry(research=research)
-    assert isinstance(proposal, EntryProposal)
-    assert proposal.limit_price == Decimal("502.50")
+def test_decision_price_comes_only_from_the_verified_quote(kit):
+    priced = kit.research(last_price="1")                 # research may not carry a price
+    result = kit.entry(research=priced)
+    assert isinstance(result, Refusal) and "exactly" in result.reasons[0]
+    proposal = kit.entry()
+    assert isinstance(proposal, EntryProposal) and proposal.limit_price == Decimal("502.50")
+
+
+def test_research_context_must_be_sealed_by_the_research_pipeline(kit):
+    wrong = kit.signers["etoro-demo-quotes"].seal({"canonical_id": MSFT, "atr": "10"})
+    result = kit.entry(research=wrong)
+    assert isinstance(result, Refusal) and result.reasons[0].startswith("INPUT_REFUSED:")
+    result = kit.entry(research=kit.research(atr="0"))
+    assert isinstance(result, Refusal) and "ATR" in result.reasons[0]
+
+
+def test_mapping_payload_tricks_cannot_swap_verified_content(kit):
+    real = kit.quote()
+
+    class Evil(dict):
+        def items(self):                                   # what json.dumps would see
+            return real.payload.items()
+
+        def __iter__(self):
+            return iter(real.payload)
+
+    swapped = replace(real, payload=Evil({**real.payload, "bid": "1.0", "ask": "1.01"}))
+    with pytest.raises(InputRefused, match="plain JSON object"):
+        kit.verifier.quote(swapped)
+    with pytest.raises(InputRefused, match="plain JSON"):
+        kit.verifier.quote(replace(real, payload={**real.payload, 1: "x"}))
+
+
+def test_raw_runtime_refuses_unverified_inputs_in_production(tmp_path):
+    env = _Env(tmp_path)
+    try:
+        production = env.runtime(env.ledger, env.authority, allow_unverified_inputs=False)
+        result = production.propose_entry(track="SWING", signals=(env.signal(),),
+                                          admissions=ADMISSIONS, market=env.market(),
+                                          quote=env.quote(), marks={})
+        assert result == Refusal(("UNVERIFIED_INPUTS_REFUSED",))
+        assert production.plan_exits(bids=env.bids("470")).alerts == \
+            ("UNVERIFIED_INPUTS_REFUSED",)
+    finally:
+        env.ledger.close()
+
+
+def test_sources_must_not_share_keys():
+    with pytest.raises(InputRefused, match="own key"):
+        SourceRegistry([TrustedSource("a", "broker_quotes", KEYS["quotes"]),
+                        TrustedSource("b", "broker_reconciliation", KEYS["quotes"])])
+
+
+def test_nonces_are_pruned_after_retention(kit):
+    kit.verifier.quote(kit.quote())
+    assert kit.nonces.count() == 1
+    kit.env.clock.now += timedelta(days=9)
+    kit.verifier.quote(kit.quote())
+    assert kit.nonces.count() == 1                         # the 9-day-old nonce was pruned
+
+
+def test_fill_provenance_is_recorded_in_the_ledger(kit):
+    proposal = kit.entry()
+    fill = kit.fill(proposal.reference_id, units=str(proposal.units))
+    kit.art.resolve(fill)
+    detail = json.loads(kit.env.ledger._conn.execute(
+        "SELECT detail FROM events WHERE event = 'ENTRY_RESOLVED'").fetchone()[0])
+    assert (detail["envelope_mac"], detail["envelope_nonce"]) == (fill.mac, fill.nonce)
 
 
 def test_fill_from_a_quote_source_or_replayed_fill_is_refused(kit):
@@ -292,15 +364,16 @@ def test_protective_authority_flattens_after_policy_expiry_but_never_enters(tmp_
         env.ledger.close()
 
 
-def test_protective_authority_covers_a_revoked_policy_grant(tmp_path):
+def test_revocation_never_triggers_a_protective_liquidation(tmp_path):
     env = _Env(tmp_path)
     kit = _Kit(tmp_path, env, protective_grant=_protective(env))
     try:
-        kit.open()
-        env.authority.revoke(env.grant_document["grant_id"], "owner revoked")
+        proposal = kit.open()
+        env.authority.revoke(env.grant_document["grant_id"], "anyone may revoke")
         env.clock.now = datetime(2026, 11, 3, 15, 0, tzinfo=UTC)
         plan = kit.art.plan_exits(bids=[kit.quote(bid="500", ask="500.1")])
-        assert [x.authority for x in plan.exits] == ["protective"]
+        assert plan.exits == ()
+        assert f"GRANT_NOT_VALID_POSITION_OPEN:{proposal.reference_id}" in plan.alerts
         assert kit.entry(AAPL, marks=[kit.quote(bid="500", ask="500.1")]) == \
             Refusal(("GRANT_NOT_VALID",))
     finally:

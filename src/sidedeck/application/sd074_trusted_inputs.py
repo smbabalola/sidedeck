@@ -17,6 +17,8 @@ Rules (all fail closed):
 * **Envelope:** constant-time MAC check over the canonical JSON; issued_at tz-aware, not in the
   future (5 s skew), within the per-kind maximum age; nonce single-use, persisted in SQLite so a
   replay is refused across restarts and workers.
+* **Snapshot:** the payload must be a plain ``dict``; it is serialised once and both the MAC
+  check and every later use read that one snapshot (no Mapping tricks).
 * **Conversion:** strict payload shapes; Decimal parsing; quote bid <= ask; a fill carries the
   broker order id and the SHA-256 of the broker order lookup it came from.
 
@@ -40,8 +42,8 @@ from pathlib import Path
 from typing import Any
 
 from sidedeck.application.sd063_autonomous_demo_policy import (
-    AutonomousDemoRuntime, EntryProposal, EntryQuote, ExitPlan, ExitQuote, FillEvidence,
-    PolicyLedger, Refusal, _new_fill_evidence,
+    _VERIFIED_INPUTS, AutonomousDemoRuntime, EntryProposal, EntryQuote, ExitPlan, ExitQuote,
+    FillEvidence, PolicyLedger, Refusal, _new_fill_evidence,
 )
 from sidedeck.application.sd070_research_signal import (
     EvidenceRef, ResearchSignal, SignalError, normalize_signal,
@@ -49,9 +51,11 @@ from sidedeck.application.sd070_research_signal import (
 from sidedeck.application.sd071_decision_engine import MarketContext, StrategyAdmission
 
 ROLES = {"native_strategy_runner": "signal", "agent_adapter": "signal",
-         "broker_quotes": "quote", "broker_reconciliation": "fill"}
+         "broker_quotes": "quote", "broker_reconciliation": "fill",
+         "research_pipeline": "research"}
 MAX_AGE = {"signal": timedelta(hours=24), "quote": timedelta(seconds=60),
-           "fill": timedelta(days=7)}
+           "fill": timedelta(days=7), "research": timedelta(hours=24)}
+NONCE_RETENTION = timedelta(days=8)      # > the longest MAX_AGE, so pruning cannot re-open replay
 CLOCK_SKEW = timedelta(seconds=5)
 MIN_KEY_BYTES = 32
 _SELF_CLAIMS = ("authenticated", "verified", "trusted", "signature", "mac", "source_id",
@@ -91,6 +95,8 @@ class SourceRegistry:
                 raise InputRefused("source keys must be at least 32 bytes")
             if not isinstance(s.source_id, str) or not s.source_id.strip():
                 raise InputRefused("source id required")
+        if len({s.key for s in sources}) != len(sources):
+            raise InputRefused("each source needs its own key")
         self._sources = {s.source_id: s for s in sources}
 
     def get(self, source_id: str) -> TrustedSource | None:
@@ -143,11 +149,18 @@ class NonceStore:
                            "PRIMARY KEY (source_id, nonce))")
 
     def consume(self, source_id: str, nonce: str, at: datetime) -> None:
+        stamp = at.astimezone(timezone.utc).isoformat()
         try:
-            self._conn.execute("INSERT INTO nonces VALUES (?, ?, ?)",
-                               (source_id, nonce, at.isoformat()))
+            self._conn.execute("INSERT INTO nonces VALUES (?, ?, ?)", (source_id, nonce, stamp))
+            self._conn.execute("DELETE FROM nonces WHERE seen_at < ?",
+                               ((at - NONCE_RETENTION).astimezone(timezone.utc).isoformat(),))
         except sqlite3.IntegrityError:
             raise InputRefused("replayed envelope (nonce already used)") from None
+        except sqlite3.OperationalError:
+            raise InputRefused("nonce store unavailable; refusing input") from None
+
+    def count(self) -> int:
+        return int(self._conn.execute("SELECT COUNT(*) FROM nonces").fetchone()[0])
 
     def close(self) -> None:
         self._conn.close()
@@ -201,13 +214,23 @@ class InputVerifier:
         self._registry, self._nonces, self._clock = registry, nonces, clock
 
     def verify(self, envelope: Envelope, kind: str) -> tuple[TrustedSource, dict[str, Any]]:
-        if not isinstance(envelope, Envelope) or envelope.kind != kind:
+        if type(envelope) is not Envelope or envelope.kind != kind:
             raise InputRefused(f"expected a {kind} envelope")
+        if not all(type(v) is str for v in (envelope.kind, envelope.source_id,
+                                             envelope.issued_at, envelope.nonce, envelope.mac)):
+            raise InputRefused("envelope header fields must be strings")
+        if type(envelope.payload) is not dict:
+            raise InputRefused("envelope payload must be a plain JSON object")
+        try:                                  # one snapshot: MAC and use see the same bytes
+            body = json.loads(json.dumps(envelope.payload, sort_keys=True, allow_nan=False))
+        except (TypeError, ValueError):
+            raise InputRefused("envelope payload is not plain JSON") from None
         source = self._registry.get(envelope.source_id)
         if source is None or source.kind != kind:
             raise InputRefused("envelope source is not registered for this input kind")
-        expected = hmac.new(source.key, envelope.canonical(), hashlib.sha256).hexdigest()
-        if not isinstance(envelope.mac, str) or not hmac.compare_digest(expected, envelope.mac):
+        canonical = _canonical(kind, envelope.source_id, envelope.issued_at, envelope.nonce, body)
+        expected = hmac.new(source.key, canonical, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, envelope.mac):
             raise InputRefused("envelope MAC does not verify")
         if not isinstance(envelope.nonce, str) or not _NONCE.fullmatch(envelope.nonce):
             raise InputRefused("envelope nonce is malformed")
@@ -215,7 +238,7 @@ class InputVerifier:
         issued = _time(envelope.issued_at, "issued_at")
         if issued > now + CLOCK_SKEW or now - issued > MAX_AGE[kind]:
             raise InputRefused("envelope is stale or from the future")
-        payload = dict(envelope.payload)
+        payload = body
         claims = sorted(k for k in payload if any(c in str(k).lower() for c in _SELF_CLAIMS))
         if claims:
             raise InputRefused(f"payload cannot assert its own authentication: {claims}")
@@ -272,11 +295,38 @@ class InputVerifier:
                 units=_dec(payload["units"], "units"), price=_dec(payload["price"], "price"),
                 at=_time(payload["filled_at"], "filled_at"), source_id=source.source_id,
                 broker_order_id=str(payload["broker_order_id"]),
-                lookup_sha256=payload["lookup_sha256"])
+                lookup_sha256=payload["lookup_sha256"], envelope_mac=envelope.mac,
+                envelope_nonce=envelope.nonce)
         except PermissionError as exc:
             if isinstance(exc, InputRefused):
                 raise
             raise InputRefused(str(exc)) from None
+
+
+@dataclass(frozen=True)
+class ResearchContext:
+    """Sealed research features (ATR, sector, correlations, broker eligibility)."""
+    canonical_id: str
+    atr: Decimal
+    sector: str
+    correlations: dict[str, Decimal]
+    execution_eligible: bool
+    as_of: datetime
+
+
+def _research(verifier: "InputVerifier", envelope: Envelope) -> ResearchContext:
+    _, payload = verifier.verify(envelope, "research")
+    _exact(payload, {"canonical_id", "atr", "sector", "correlations", "execution_eligible",
+                     "as_of"})
+    if type(payload["execution_eligible"]) is not bool or type(payload["correlations"]) is not dict:
+        raise InputRefused("research context has malformed fields")
+    atr = _dec(payload["atr"], "atr")
+    if atr <= 0:
+        raise InputRefused("research ATR must be positive")
+    return ResearchContext(str(payload["canonical_id"]), atr, str(payload["sector"]),
+                           {str(k): _dec(v, "correlation") for k, v in
+                            payload["correlations"].items()},
+                           payload["execution_eligible"], _time(payload["as_of"], "as_of"))
 
 
 class AuthenticatedRuntime:
@@ -300,32 +350,37 @@ class AuthenticatedRuntime:
 
     def propose_entry(
         self, *, track: str, signals: Sequence[Envelope],
-        admissions: Sequence[StrategyAdmission], research: MarketContext,
+        admissions: Sequence[StrategyAdmission], research: Envelope,
         quote: Envelope, marks: Sequence[Envelope],
     ) -> EntryProposal | Refusal:
-        """``research`` supplies ATR, sector, correlations and broker eligibility from the
-        research pipeline; its price and price time are replaced by the verified quote."""
+        """Every market input is sealed: signals (strategy runner / agents), research features
+        (research pipeline), the decision price and marks (broker quotes). Admissions are bound
+        by the owner-signed evidence digest inside the policy."""
         try:
             verified = [self._verifier.signal(e) for e in signals]
+            context = _research(self._verifier, research)
             q = self._verifier.quote(quote)
             mark_quotes = self._quotes(marks)
         except InputRefused as exc:
             return Refusal((f"INPUT_REFUSED:{exc}",))
-        if q.canonical_id != research.canonical_id:
+        if q.canonical_id != context.canonical_id:
             return Refusal(("QUOTE_INSTRUMENT_MISMATCH",))
-        market = MarketContext(research.canonical_id, q.ask, q.quote_time, research.atr,
-                               research.sector, research.session_open,
-                               research.execution_eligible, research.correlations)
+        # session_open is re-derived by the runtime from the exchange calendar.
+        market = MarketContext(context.canonical_id, q.ask, q.quote_time, context.atr,
+                               context.sector, True, context.execution_eligible,
+                               context.correlations)
         return self.runtime.propose_entry(
             track=track, signals=verified, admissions=admissions, market=market,
-            quote=q.entry(), marks={c: m.bid for c, m in mark_quotes.items()})
+            quote=q.entry(), marks={c: m.bid for c, m in mark_quotes.items()},
+            _verified=_VERIFIED_INPUTS)
 
     def plan_exits(self, *, bids: Sequence[Envelope]) -> ExitPlan:
         try:
             quotes = self._quotes(bids)
         except InputRefused as exc:
             return ExitPlan((), (f"INPUT_REFUSED:{exc}",))
-        return self.runtime.plan_exits(bids={c: q.exit() for c, q in quotes.items()})
+        return self.runtime.plan_exits(bids={c: q.exit() for c, q in quotes.items()},
+                                       _verified=_VERIFIED_INPUTS)
 
     def resolve(self, fill: Envelope) -> None:
         self.ledger.resolve(self._verifier.fill(fill))
