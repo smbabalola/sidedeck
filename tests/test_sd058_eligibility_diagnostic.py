@@ -207,5 +207,22 @@ def test_prepare_has_fixed_scope_and_no_signature(monkeypatch, tmp_path):
                                                                          tzinfo=UTC),
                                                 intent_id="11111111-1111-1111-1111-111111111111")
     paths = diagnostic.fixed_paths()
-    assert intent.instrument_id == 1004 and digest.read_text().strip() == intent.digest()
+    assert intent.instrument_id == 1004 and digest.read_bytes() == intent.digest().encode("ascii")
     assert paths["intent"].is_file() and not paths["signature"].exists()
+
+
+def test_prepare_file_sign_verify_workflow(monkeypatch, tmp_path, signing_material):
+    key, allowed, pin = signing_material
+    monkeypatch.setattr(diagnostic, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(diagnostic, "PINNED_SIGNER_KEY_SHA256", pin)
+    intent, digest_path = diagnostic.prepare_intent(minutes=30, now=datetime.now(UTC))
+    subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key), "-n",
+                    diagnostic.DIAGNOSTIC_NAMESPACE, str(digest_path)], check=True,
+                   capture_output=True)
+    signature_path = diagnostic.fixed_paths()["signature"]
+    assert signature_path == digest_path.with_name("intent.digest.sig")
+    result = diagnostic.run_diagnostic(
+        intent=intent, signature=signature_path.read_text(encoding="ascii"),
+        env={"ETORO_DEMO_TRADE_API_KEY": "k", "ETORO_DEMO_TRADE_USER_KEY": "u"},
+        allowed_signers=allowed, opener=Opener({"currency": "USD", "eligibilities": []}))
+    assert result["outcome"] == "RESPONSE_CAPTURED"

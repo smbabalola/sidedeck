@@ -108,7 +108,10 @@ def prepare_intent(*, minutes: int = 30, now: datetime | None = None,
     paths = fixed_paths()
     paths["root"].mkdir(parents=True, exist_ok=True)
     paths["intent"].write_bytes(intent.canonical())
-    paths["digest"].write_text(intent.digest() + "\n", encoding="ascii")
+    # Sign the exact 64-byte digest, matching the supervised pilot workflow.
+    # A trailing newline would change the signed message and make verification
+    # dependent on the shell/file transport rather than canonical bytes.
+    paths["digest"].write_text(intent.digest(), encoding="ascii", newline="")
     paths["signature"].unlink(missing_ok=True)
     return intent, paths["digest"]
 

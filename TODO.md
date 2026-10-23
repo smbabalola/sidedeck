@@ -206,6 +206,23 @@ approved window rather than rolling it forward.
   fresh owner-authorized read-only diagnostic only if the missing code is still required. Do not
   reuse the consumed SD-058 authorization or alter the USD gate.
 
+**Batch AC7 (2026-10-23; SD-058 USD evidence and pilot-preparation review):**
+
+- The fresh owner-run diagnostic captured `currency_code: USD` at the top level for instrument
+  `1004`; its sanitized schema contains the fields required by `parse_eligibility`, including
+  instrument identity, open/close permissions, units, minimum exposure and leverage configs.
+  The parser already validates the top-level USD field and does not require a row-level currency
+  field. No parser defect is demonstrated by this evidence, so USD and eligibility gates remain
+  unchanged.
+- Fixed the diagnostic digest writer to emit exactly the 64-byte canonical digest with no
+  trailing newline, and added a real prepare → OpenSSH file-sign → verify/run regression test.
+  Focused verification: 113 passed; full suite: 1451 passed, 1 skipped, 3 existing warnings;
+  Ruff and mypy passed. No broker request occurred during this engineering review.
+- The original supervised pilot intent and its pinned digest are expired/consumed, while the
+  order transport remains explicitly locked (`UNLOCKED_PILOT_DIGEST = None`). A fresh pilot
+  therefore requires a new owner-signed intent and a separate reviewed lock-lift; no old
+  signature or transport release may be reused.
+
 **Batch AC3 (2026-10-23; Codex recovery and independent UK verification):**
 
 - Recovered Claude's uncommitted P5 work without resetting or overwriting the nested checkout: SD-094 authorization package, SD-094A offline runner, SD-097 UK read-only workstation/API, and SD-098 licensed-file importer, plus the associated SD-096 follow-ups and UI contract/E2E coverage.
