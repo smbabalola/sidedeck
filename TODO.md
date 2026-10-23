@@ -191,6 +191,21 @@ approved window rather than rolling it forward.
   printed digest locally and operate the one-request command; the prior pilot signature is not
   reused.
 
+**Batch AC6 (2026-10-23; SD-058 captured-evidence review):**
+
+- Read the owner-run `data/sd058-diagnostic/audit.sqlite3` locally without broker access. The
+  persisted eligibility row confirms `currency` exists as a string and the response schema is
+  otherwise present, but contains no `currency_code`; the raw response was not retained. The
+  actual broker currency is therefore unrecoverable from SideDeck and must not be inferred.
+- Hardened `summarize_schema` to normalize case/whitespace and retain only explicitly allowlisted
+  ISO currency codes. Arbitrary currency-like values, sensitive fields and raw response values
+  remain excluded. Added regression coverage for safe normalization, unallowlisted values,
+  malformed/missing/non-USD evidence and append-only persistence.
+- No diagnostic replay, eToro request, credential read or order occurred during this review.
+- **Next READY:** independently verify this sanitizer correction, then prepare the smallest
+  fresh owner-authorized read-only diagnostic only if the missing code is still required. Do not
+  reuse the consumed SD-058 authorization or alter the USD gate.
+
 **Batch AC3 (2026-10-23; Codex recovery and independent UK verification):**
 
 - Recovered Claude's uncommitted P5 work without resetting or overwriting the nested checkout: SD-094 authorization package, SD-094A offline runner, SD-097 UK read-only workstation/API, and SD-098 licensed-file importer, plus the associated SD-096 follow-ups and UI contract/E2E coverage.

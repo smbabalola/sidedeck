@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import Any
 
 _CURRENCY_CODE = re.compile(r"^[A-Z]{3}$")
+# Currency values are retained only after normalization and membership in this
+# explicit ISO-4217 allowlist; arbitrary three-letter response values are not evidence.
+_SAFE_CURRENCY_CODES = frozenset({
+    "AUD", "CAD", "CHF", "CZK", "DKK", "EUR", "GBP", "HKD", "HUF", "ILS",
+    "JPY", "MXN", "NOK", "NZD", "PLN", "SEK", "SGD", "USD", "ZAR",
+})
 _SENSITIVE = frozenset({"authorization", "cookie", "set-cookie", "token", "secret",
                         "apikey", "api-key", "accountid", "account_id", "balance",
                         "email", "name", "phone"})
@@ -52,8 +58,10 @@ def summarize_schema(payload: Any) -> dict[str, Any]:
         kind = _kind(value)
         item: dict[str, Any] = {"path": path or "$", "type": kind}
         key = path.rsplit(".", 1)[-1].lower()
-        if "currency" in key and isinstance(value, str) and _CURRENCY_CODE.fullmatch(value):
-            item["currency_code"] = value
+        if "currency" in key and isinstance(value, str):
+            normalized = value.strip().upper()
+            if _CURRENCY_CODE.fullmatch(normalized) and normalized in _SAFE_CURRENCY_CODES:
+                item["currency_code"] = normalized
         fields.append(item)
         if depth >= _MAX_DEPTH:
             return

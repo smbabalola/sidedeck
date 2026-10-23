@@ -22,6 +22,18 @@ def test_schema_summary_keeps_currency_codes_and_redacts_sensitive_values() -> N
     assert "private" not in json.dumps(summary)
 
 
+@pytest.mark.parametrize("value", ["usd", " USD ", "Usd"])
+def test_schema_summary_normalizes_allowlisted_currency_codes(value: str) -> None:
+    fields = {field["path"]: field for field in summarize_schema({"currency": value})["fields"]}
+    assert fields["currency"]["currency_code"] == "USD"
+
+
+def test_schema_summary_does_not_retain_unallowlisted_currency_values() -> None:
+    summary = summarize_schema({"currency": "US Dollar", "otherCurrency": "ABC"})
+    assert "currency_code" not in json.dumps(summary)
+    assert "US Dollar" not in json.dumps(summary)
+
+
 def test_audit_survives_restart_and_is_append_only(tmp_path) -> None:
     path = tmp_path / "nested" / "audit.sqlite3"
     audit = PreflightAudit(path, "a" * 64)
