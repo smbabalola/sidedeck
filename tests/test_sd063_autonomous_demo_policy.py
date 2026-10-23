@@ -518,33 +518,58 @@ def _recover(env: _Env, expected_head: str | None = None) -> PolicyLedger:
         expected_head=head, at=env.clock.now)
 
 
-def test_n2d_anchor_only_edit_cannot_inject_a_forged_fill(env):
-    proposal = env.entry()
+def _forge_anchor(env: _Env, rows: list[list[str | None]]) -> None:
+    """Anchor-only edit: append forged rows with valid (unkeyed) hashes; DB untouched."""
     with env.ledger.transaction():
         count, head = env.ledger._head()
-    row = [env.clock.now.isoformat(), "ENTRY_RESOLVED", None, proposal.reference_id, None,
-           json.dumps({"outcome": "FILLED", "price": "1", "units": str(proposal.units)},
-                      sort_keys=True, separators=(",", ":"))]
-    forged = PolicyLedger._hash(head, row)
-    env.ledger._write_anchor(count + 1, forged, prev=(count, head),
-                             pending=[(*row, head, forged)])
+    cursor, pending = head, []
+    for row in rows:
+        digest = PolicyLedger._hash(cursor, row)
+        pending.append((*row, cursor, digest))
+        cursor = digest
+    env.ledger._write_anchor(count + len(rows), cursor, prev=(count, head), pending=pending)
     env.ledger.close()
+
+
+def _detail(**values: str) -> str:
+    return json.dumps(values, sort_keys=True, separators=(",", ":"))
+
+
+def test_n2d_anchor_only_forgeries_never_become_state(env):
+    real = env.open_position()                                   # one genuine filled position
+    env.clock.now += timedelta(minutes=5)
+    at = env.clock.now.isoformat()
+    phantom, fake_exit = "a" * 32, "b" * 32
+    _forge_anchor(env, [
+        [at, "ENTRY_PROPOSED", "SWING", phantom, None,
+         json.dumps({"canonical_id": "US:XNAS:EVIL", "instrument": 1001, "sector": "x",
+                     "units": "1000", "limit": "500", "stop": "0.01", "horizon": 10,
+                     "strategies": []}, sort_keys=True, separators=(",", ":"))],
+        [at, "ENTRY_RESOLVED", None, phantom, None,
+         _detail(outcome="FILLED", units="1000", price="0.02")],
+        [at, "EXIT_PROPOSED", "SWING", fake_exit, None,
+         _detail(entry=real.reference_id, units=str(real.units), bid="1000000", reason="x")],
+        [at, "EXIT_RESOLVED", None, fake_exit, None,
+         _detail(outcome="FILLED", units=str(real.units), price="1000000")],
+    ])
     with pytest.raises(PolicyRefused, match="anchor"):
         env.open_ledger()
     preview = PolicyLedger.inspect_recovery(env.tmp / "sd063.anchor.json")
-    assert [r["event"] for r in preview["rows"]] == ["ENTRY_RESOLVED"]
-    with pytest.raises(PolicyRefused, match="below the stop"):
-        _recover(env)
+    assert [r["event"] for r in preview["rows"]][:2] == ["ENTRY_PROPOSED", "ENTRY_RESOLVED"]
     with pytest.raises(PolicyRefused, match="owner-confirmed head"):
         _recover(env, expected_head="0" * 64)
-    conn = sqlite3.connect(env.tmp / "sd063.sqlite3")
-    try:
-        events = [e for (e,) in conn.execute("SELECT event FROM events")]
-    finally:
-        conn.close()
-    assert "ENTRY_RESOLVED" not in events                   # nothing was injected
-    env.ledger = PolicyLedger(sqlite3.connect(env.tmp / "sd063.sqlite3"), env.policy.digest(),
-                              env.tmp / "sd063.anchor.json")
+    env.ledger = _recover(env)
+    env.rt = env.runtime(env.ledger, env.authority)
+    state = env.ledger.state()
+    assert state.killed
+    assert set(state.entries) == {real.reference_id}             # no phantom entry
+    assert state.exits == {}                                     # no forged exit
+    assert sum(e.realized for e in state.entries.values()) == 0  # no forged P&L
+    assert [p.entry_reference for p in env.ledger.open_positions()] == [real.reference_id]
+    env.clock.now += timedelta(minutes=5)
+    plan = env.rt.plan_exits(bids=env.bids("470"))               # stop still protects it
+    assert [x.reason for x in plan.exits] == ["STOP_BREACHED"]
+    assert f"QUARANTINED_UNKNOWN_REFERENCE:{phantom}" in plan.alerts
 
 
 def test_n2_crash_in_a_multi_row_transaction_is_replayed_and_trips_kill_switch(env):
@@ -560,13 +585,14 @@ def test_n2_crash_in_a_multi_row_transaction_is_replayed_and_trips_kill_switch(e
     try:
         state = recovered.state()
         assert state.killed
-        assert [e.outcome for e in state.entries.values()] == [None]   # replayed, still pending
+        assert state.entries == {}            # the crashed proposal was never sent: not state
+        assert len(state.quarantined) == 1    # but it is kept, visible, as quarantined data
     finally:
         recovered.close()
     env.ledger = env.open_ledger()                            # consistent again
 
 
-def test_n2_deleted_last_transaction_is_restored_not_hidden(env):
+def test_n2_deleted_last_transaction_is_quarantined_not_hidden(env):
     proposal = env.open_position()                            # last txn: ENTRY_RESOLVED
     env.ledger.close()
     conn = sqlite3.connect(env.tmp / "sd063.sqlite3")
@@ -582,7 +608,8 @@ def test_n2_deleted_last_transaction_is_restored_not_hidden(env):
     recovered = _recover(env)
     try:
         assert recovered.kill_switch_engaged()
-        assert [p.entry_reference for p in recovered.open_positions()] == [proposal.reference_id]
+        entry = recovered.state().entries[proposal.reference_id]
+        assert entry.outcome == "QUARANTINED"           # visible, reserved, owner must check
     finally:
         recovered.close()
     env.ledger = env.open_ledger()

@@ -454,6 +454,10 @@ class _State:
     exits: dict[str, _Exit]
     marks: dict[str, list[tuple[str, Decimal]]]   # track -> [(session_date, equity)]
     killed: bool
+    quarantined: set[str]
+
+
+_UNKNOWN_OUTCOMES = ("UNRESOLVED", "QUARANTINED")   # may exist at the broker; stay reserved
 
 
 class PolicyLedger:
@@ -590,9 +594,9 @@ class PolicyLedger:
         That happens after a crash between the anchor write and COMMIT, or if someone deleted
         the last committed transaction. The anchor holds a write-ahead copy of those rows.
         Recovery requires the owner to confirm ``expected_head`` from ``inspect_recovery``,
-        checks the rows chain from the ledger head to that head, validates every row with the
-        same rules as live writes (so an anchor-only edit cannot inject a forged fill), replays
-        exactly them and trips the kill-switch."""
+        and checks the rows chain from the ledger head to that head. The rows are then stored
+        as quarantined data only (never as state), the proposals they name become QUARANTINED,
+        and the kill-switch is tripped."""
         conn = sqlite3.connect(str(path), isolation_level=None, timeout=10)
         ledger = cls(conn, policy_digest, Path(anchor_path))
         try:
@@ -620,16 +624,19 @@ class PolicyLedger:
                 raise PolicyRefused("anchored write-ahead rows do not reach the anchor head")
             if expected_head != cursor:
                 raise PolicyRefused("owner-confirmed head does not match the anchored rows")
-            for r in rows:
-                _check_replayed_row(ledger.state(), r)
-                conn.execute("INSERT INTO events (at, event, track, reference, session_date, "
-                             "detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", r)
-            ledger._staged = []
-            ledger._staged_anchor = (count + len(rows), cursor)
-            ledger._append(at, "KILL_SWITCH", detail={
-                "reason": "LAST_TRANSACTION_REPLAYED_FROM_ANCHOR", "replayed": len(rows)})
+            # The anchored rows are never trusted as state (the chain is unkeyed, so an
+            # anchor-only edit could forge them). They are kept verbatim as quarantined data;
+            # our own proposals they name become QUARANTINED (still reserved, alerted, owner
+            # must check the broker and close manually).
+            references = sorted({r[3] for r in rows
+                                 if isinstance(r[3], str) and _REF.fullmatch(r[3])})
+            ledger._staged, ledger._staged_anchor = [], (count, head)
+            ledger._append(at, "RECOVERY_QUARANTINE", detail={
+                "anchored_head": cursor, "references": references,
+                "rows": [list(r[:6]) for r in rows]})
+            ledger._append(at, "KILL_SWITCH", detail={"reason": "LAST_TRANSACTION_QUARANTINED"})
             assert ledger._staged_anchor is not None
-            ledger._write_anchor(*ledger._staged_anchor, prev=(count + len(rows), cursor),
+            ledger._write_anchor(*ledger._staged_anchor, prev=(count, head),
                                  pending=ledger._staged)
             conn.execute("COMMIT")
         except BaseException:
@@ -682,6 +689,7 @@ class PolicyLedger:
         exits: dict[str, _Exit] = {}
         marks: dict[str, list[tuple[str, Decimal]]] = {}
         killed = False
+        quarantined: set[str] = set()
         for event, track, ref, day, at, raw in self._conn.execute(
                 "SELECT event, track, reference, session_date, at, detail FROM events "
                 "ORDER BY seq"):
@@ -710,7 +718,13 @@ class PolicyLedger:
                 units, price = Decimal(d["units"]), Decimal(d["price"])
                 e.exited += units
                 e.realized += units * (price - e.avg_price)
-        return _State(entries, exits, marks, killed)
+            elif event == "RECOVERY_QUARANTINE":
+                for qref in d["references"]:
+                    quarantined.add(qref)
+                    target = entries.get(qref) or exits.get(qref)
+                    if target is not None and target.outcome is None:
+                        target.outcome = "QUARANTINED"
+        return _State(entries, exits, marks, killed, quarantined)
 
     def count_events(self, events: tuple[str, ...], track: str, day: date) -> int:
         marks = ", ".join("?" for _ in events)
@@ -778,51 +792,9 @@ def _check_resolution(target: _Entry | _Exit, outcome: str, filled_units: Any, a
                 raise PolicyRefused("entry fill time is outside the IOC fill window")
         elif abs(price - target.bid) > target.bid * MAX_EXIT_FILL_DEVIATION:
             raise PolicyRefused("exit fill price deviates from the planned bid")
-    elif units != 0 or price != 0:
+    elif units != 0:
         raise PolicyRefused("only fill outcomes carry units")
     return units, price
-
-
-_REPLAYABLE = {"EQUITY_MARK", "ENTRY_PROPOSED", "ENTRY_RESOLVED", "EXIT_PROPOSED",
-               "EXIT_RESOLVED", "KILL_SWITCH", "ALERT"}
-
-
-def _check_replayed_row(st: _State, row: Sequence[Any]) -> None:
-    """Semantic validation of one write-ahead row before recovery inserts it."""
-    at_text, event, track, ref, day, raw = row[:6]
-    try:
-        at = datetime.fromisoformat(at_text)
-        detail = json.loads(raw)
-    except (TypeError, ValueError):
-        raise PolicyRefused("replayed row is malformed") from None
-    if event not in _REPLAYABLE or not isinstance(detail, dict):
-        raise PolicyRefused("replayed row has an unknown event or detail")
-    try:
-        if event == "EQUITY_MARK":
-            _decimal(Decimal(detail["equity"]), "equity")
-        elif event == "ENTRY_PROPOSED":
-            if ref in st.entries or not _REF.fullmatch(str(ref)) or track not in AUTONOMOUS_TRACKS:
-                raise PolicyRefused("replayed entry proposal is invalid")
-            for name in ("units", "limit", "stop"):
-                if _decimal(Decimal(detail[name]), name) <= 0:
-                    raise PolicyRefused("replayed entry proposal is invalid")
-            if not (_is_int(detail["instrument"]) and _is_int(detail["horizon"])):
-                raise PolicyRefused("replayed entry proposal is invalid")
-        elif event == "EXIT_PROPOSED":
-            entry = st.entries.get(detail["entry"])
-            if entry is None or ref in st.exits or not _REF.fullmatch(str(ref)) or \
-                    not ZERO < Decimal(detail["units"]) <= entry.filled - entry.exited or \
-                    _decimal(Decimal(detail["bid"]), "bid") <= 0:
-                raise PolicyRefused("replayed exit proposal is invalid")
-        elif event in ("ENTRY_RESOLVED", "EXIT_RESOLVED"):
-            target = (st.entries if event == "ENTRY_RESOLVED" else st.exits).get(ref)
-            if target is None:
-                raise PolicyRefused("replayed resolution has no proposal")
-            _check_resolution(target, detail["outcome"], Decimal(detail["units"]),
-                              Decimal(detail["price"]), at)
-    except (KeyError, TypeError, ValueError, InvalidOperation):
-        raise PolicyRefused("replayed row detail is malformed") from None
-    del day
 
 
 def _open_positions(st: _State) -> tuple[OpenPosition, ...]:
@@ -1046,7 +1018,7 @@ class AutonomousDemoRuntime:
 
         open_positions = _open_positions(st)
         pending = [e for e in st.entries.values() if e.outcome is None]
-        unresolved = [e for e in st.entries.values() if e.outcome == "UNRESOLVED"]
+        unresolved = [e for e in st.entries.values() if e.outcome in _UNKNOWN_OUTCOMES]
         reserved = {e.reference: e.units * e.limit for e in pending + unresolved}
         track_open_cost = sum((p.units * p.avg_price for p in open_positions if p.track == track),
                               ZERO)
@@ -1157,8 +1129,10 @@ class AutonomousDemoRuntime:
         st = ledger.state()
         alerts: list[str] = ["KILL_SWITCH_ENGAGED"] if st.killed else []
         positions = _open_positions(st)
-        alerts += [f"UNRESOLVED_ENTRY:{e.reference}" for e in st.entries.values()
-                   if e.outcome == "UNRESOLVED"]
+        alerts += [f"{e.outcome}_ENTRY:{e.reference}" for e in st.entries.values()
+                   if e.outcome in _UNKNOWN_OUTCOMES]
+        alerts += [f"QUARANTINED_UNKNOWN_REFERENCE:{q}" for q in sorted(st.quarantined)
+                   if q not in st.entries and q not in st.exits]
         if not positions:
             return self._finish(now, (), alerts)
         if not policy.active(now):
@@ -1176,7 +1150,7 @@ class AutonomousDemoRuntime:
             if any(x.entry == ref and x.outcome is None for x in st.exits.values()):
                 alerts.append(f"EXIT_PENDING:{ref}")
                 continue
-            if any(x.entry == ref and x.outcome == "UNRESOLVED" for x in st.exits.values()):
+            if any(x.entry == ref and x.outcome in _UNKNOWN_OUTCOMES for x in st.exits.values()):
                 alerts.append(f"EXIT_UNRESOLVED:{ref}")
                 continue
             quote = bids.get(p.canonical_id)

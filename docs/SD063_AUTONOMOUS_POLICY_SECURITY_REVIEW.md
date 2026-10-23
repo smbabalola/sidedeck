@@ -52,6 +52,20 @@ New issues raised by the re-verification of v2:
 | N5 | LOW | UNRESOLVED exit or revoked grant leaves only alerts | **BY DESIGN** — the order may have executed / privilege was removed; owner close runbook required (R5) |
 | N6 | LOW | Evidence checked by hash only, read fully each call | **OPEN** — residual R1 |
 
+Fifth independent pass (on `7ca1864`): row-by-row validation of replayed rows was **not
+sufficient** — phantom entries/fills outside the policy scope (HIGH), forged exits with an
+arbitrary planned bid (HIGH), a malformed row bricking `state()` (MEDIUM), naive timestamps (LOW);
+plus a small `resolve` behaviour change (reverted). **Redesigned:** recovery never turns anchor
+content into ledger state. It records the anchored rows verbatim inside one `RECOVERY_QUARANTINE`
+event (data only), marks any of our own pending proposals they name `QUARANTINED` (reserved like
+`UNRESOLVED`, alerted on every exit plan, owner must check the broker and close manually), alerts
+unknown references, and trips the kill-switch. Forged rows therefore cannot create positions,
+fills, exits or P&L (`test_n2d_anchor_only_forgeries_never_become_state`); a deleted last
+transaction is quarantined and alerted, not hidden. Trade-off: a genuine crashed transaction is
+not replayed either — its proposal was never returned or sent, so nothing is lost; a deleted fill
+leaves that entry QUARANTINED for the owner's manual reconciliation (runbook R5). Not yet
+re-reviewed.
+
 Fourth independent pass (on `b8c9f32`): N2-A, N2-B, N2-C **FIXED**; kill-switch clearing,
 multi-transaction deletion and racing a live worker all fail closed. New **N2-D (MEDIUM)**: the
 unkeyed chain let an anchor-only edit plus an owner-run recovery inject a forged row (e.g. a fill
