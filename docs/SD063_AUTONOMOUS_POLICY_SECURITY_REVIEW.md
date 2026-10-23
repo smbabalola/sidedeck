@@ -11,7 +11,7 @@ transport, credentials or network access, and it is not wired to the order path 
 | Reviewer | separate read-only reviewer agent (no repo writes, no network, no `.env`) |
 | Method | source and interface inspection, executed repro scripts, re-verification of the fixes |
 | Code | `src/sidedeck/application/sd063_autonomous_demo_policy.py` |
-| Tests | `tests/test_sd063_autonomous_demo_policy.py` (82; regression tests `test_f*`, `test_n*`) |
+| Tests | `tests/test_sd063_autonomous_demo_policy.py` (83; regression tests `test_f*`, `test_n*`) |
 
 ## Summary
 
@@ -51,6 +51,15 @@ New issues raised by the re-verification of v2:
 | N4 | LOW | Daily-loss baseline taken late; marks grew the ledger on every call | **FIXED** — first mark per session written before the decision; further marks only on a new high |
 | N5 | LOW | UNRESOLVED exit or revoked grant leaves only alerts | **BY DESIGN** — the order may have executed / privilege was removed; owner close runbook required (R5) |
 | N6 | LOW | Evidence checked by hash only, read fully each call | **OPEN** — residual R1 |
+
+Fourth independent pass (on `b8c9f32`): N2-A, N2-B, N2-C **FIXED**; kill-switch clearing,
+multi-transaction deletion and racing a live worker all fail closed. New **N2-D (MEDIUM)**: the
+unkeyed chain let an anchor-only edit plus an owner-run recovery inject a forged row (e.g. a fill
+at USD 1). **FIXED:** recovery needs the owner to inspect the rows (`inspect_recovery`) and pass
+the exact `expected_head`; every replayed row is validated with the same rules as live writes
+(known events, well-formed details, the `resolve` fill bands); the anchor is fsynced before the
+rename (LOW: power-loss truncation). `test_n2d_anchor_only_edit_cannot_inject_a_forged_fill`.
+Not yet re-reviewed. Any recovery leaves the kill-switch on permanently (runbook R5).
 
 Third independent pass (on `4f3decc`): N1 FIXED, N4 FIXED, N2 PARTIALLY FIXED → reworked as
 above. Remaining LOW notes: in-band false fill reports (≤ 25 % of notional on entry, ≤ 10 % of the

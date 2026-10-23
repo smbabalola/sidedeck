@@ -560,21 +560,39 @@ class PolicyLedger:
         """Anchor = committed head plus a write-ahead copy of the last transaction's rows."""
         prev_count, prev_head = prev or (count, head)
         tmp = self._anchor.with_name(self._anchor.name + ".tmp")
-        tmp.write_text(json.dumps({"policy_digest": self.policy_digest, "count": count,
-                                   "head": head, "prev_count": prev_count,
-                                   "prev_head": prev_head,
-                                   "last_rows": [list(r) for r in pending]}), encoding="utf-8")
+        payload = json.dumps({"policy_digest": self.policy_digest, "count": count,
+                              "head": head, "prev_count": prev_count, "prev_head": prev_head,
+                              "last_rows": [list(r) for r in pending]}).encode("utf-8")
+        with open(tmp, "wb") as handle:                      # durable before the rename
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, self._anchor)
 
+    @staticmethod
+    def inspect_recovery(anchor_path: Path) -> dict[str, Any]:
+        """Read-only: what ``recover_last_transaction`` would replay, for the owner to check
+        (event, track, reference and detail of every row) before confirming its head."""
+        try:
+            anchor = json.loads(Path(anchor_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise PolicyRefused("ledger anchor is missing or unreadable") from None
+        rows = anchor.get("last_rows") or []
+        return {"expected_head": anchor.get("head"), "count": anchor.get("count"),
+                "rows": [{"at": r[0], "event": r[1], "track": r[2], "reference": r[3],
+                          "detail": r[5]} for r in rows if isinstance(r, list) and len(r) == 8]}
+
     @classmethod
-    def recover_last_transaction(cls, path: Path, policy_digest: str, *,
-                                 anchor_path: Path, at: datetime) -> "PolicyLedger":
+    def recover_last_transaction(cls, path: Path, policy_digest: str, *, anchor_path: Path,
+                                 expected_head: str, at: datetime) -> "PolicyLedger":
         """Owner-run recovery when the ledger is behind its anchor by the last transaction.
 
         That happens after a crash between the anchor write and COMMIT, or if someone deleted
-        the last committed transaction. Either way the anchor holds a write-ahead copy of those
-        rows; recovery replays exactly them (hash-chain checked from the ledger head to the
-        anchor head), so nothing is discarded or hidden, then trips the kill-switch."""
+        the last committed transaction. The anchor holds a write-ahead copy of those rows.
+        Recovery requires the owner to confirm ``expected_head`` from ``inspect_recovery``,
+        checks the rows chain from the ledger head to that head, validates every row with the
+        same rules as live writes (so an anchor-only edit cannot inject a forged fill), replays
+        exactly them and trips the kill-switch."""
         conn = sqlite3.connect(str(path), isolation_level=None, timeout=10)
         ledger = cls(conn, policy_digest, Path(anchor_path))
         try:
@@ -600,7 +618,10 @@ class PolicyLedger:
                 cursor = r[7]
             if cursor != anchor.get("head"):
                 raise PolicyRefused("anchored write-ahead rows do not reach the anchor head")
+            if expected_head != cursor:
+                raise PolicyRefused("owner-confirmed head does not match the anchored rows")
             for r in rows:
+                _check_replayed_row(ledger.state(), r)
                 conn.execute("INSERT INTO events (at, event, track, reference, session_date, "
                              "detail, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", r)
             ledger._staged = []
@@ -720,38 +741,88 @@ class PolicyLedger:
             target = st.entries.get(reference) or st.exits.get(reference)
             if target is None:
                 raise PolicyRefused("unknown proposal reference")
-            if target.outcome is not None:
-                raise PolicyRefused("proposal already resolved")
-            if at.tzinfo is None or at < target.proposed_at:
-                raise PolicyRefused("resolution time precedes the proposal")
-            try:
-                units, price = _decimal(filled_units, "filled units"), \
-                    _decimal(avg_price, "average price")
-            except PolicyRefused:
-                raise PolicyRefused("fill outcome needs finite units and price") from None
+            units, price = _check_resolution(target, outcome, filled_units, avg_price, at)
             filled = outcome in ("FILLED", "PARTIALLY_FILLED")
-            if filled:
-                if not (ZERO < units <= target.units and price > 0):
-                    raise PolicyRefused("fill outcome must have 0 < units <= proposed and price > 0")
-                if outcome == "FILLED" and units != target.units:
-                    raise PolicyRefused("FILLED must fill the proposed units exactly")
-                if isinstance(target, _Entry):
-                    if price > target.limit:
-                        raise PolicyRefused("entry fill price above the limit")
-                    if price <= target.stop:
-                        raise PolicyRefused("entry fill price at or below the stop is implausible")
-                    if at > target.proposed_at + MAX_ENTRY_FILL_DELAY:
-                        raise PolicyRefused("entry fill time is outside the IOC fill window")
-                elif abs(price - target.bid) > target.bid * MAX_EXIT_FILL_DEVIATION:
-                    raise PolicyRefused("exit fill price deviates from the planned bid")
-            elif units != 0:
-                raise PolicyRefused("only fill outcomes carry units")
             kind = "ENTRY" if isinstance(target, _Entry) else "EXIT"
             self._append(at, f"{kind}_RESOLVED", reference=reference,
                          detail={"outcome": outcome, "units": str(units if filled else ZERO),
                                  "price": str(price if filled else ZERO)})
             if outcome == "UNRESOLVED":
                 self._append(at, "KILL_SWITCH", detail={"reason": f"UNRESOLVED_{kind}:{reference}"})
+
+
+def _check_resolution(target: _Entry | _Exit, outcome: str, filled_units: Any, avg_price: Any,
+                      at: datetime) -> tuple[Decimal, Decimal]:
+    """Shared plausibility rules for live resolutions and replayed (recovered) rows."""
+    if outcome not in OUTCOMES:
+        raise PolicyRefused(f"invalid outcome; expected one of {OUTCOMES}")
+    if target.outcome is not None:
+        raise PolicyRefused("proposal already resolved")
+    if at.tzinfo is None or at < target.proposed_at:
+        raise PolicyRefused("resolution time precedes the proposal")
+    try:
+        units, price = _decimal(filled_units, "filled units"), _decimal(avg_price, "average price")
+    except PolicyRefused:
+        raise PolicyRefused("fill outcome needs finite units and price") from None
+    if outcome in ("FILLED", "PARTIALLY_FILLED"):
+        if not (ZERO < units <= target.units and price > 0):
+            raise PolicyRefused("fill outcome must have 0 < units <= proposed and price > 0")
+        if outcome == "FILLED" and units != target.units:
+            raise PolicyRefused("FILLED must fill the proposed units exactly")
+        if isinstance(target, _Entry):
+            if price > target.limit:
+                raise PolicyRefused("entry fill price above the limit")
+            if price <= target.stop:
+                raise PolicyRefused("entry fill price at or below the stop is implausible")
+            if at > target.proposed_at + MAX_ENTRY_FILL_DELAY:
+                raise PolicyRefused("entry fill time is outside the IOC fill window")
+        elif abs(price - target.bid) > target.bid * MAX_EXIT_FILL_DEVIATION:
+            raise PolicyRefused("exit fill price deviates from the planned bid")
+    elif units != 0 or price != 0:
+        raise PolicyRefused("only fill outcomes carry units")
+    return units, price
+
+
+_REPLAYABLE = {"EQUITY_MARK", "ENTRY_PROPOSED", "ENTRY_RESOLVED", "EXIT_PROPOSED",
+               "EXIT_RESOLVED", "KILL_SWITCH", "ALERT"}
+
+
+def _check_replayed_row(st: _State, row: Sequence[Any]) -> None:
+    """Semantic validation of one write-ahead row before recovery inserts it."""
+    at_text, event, track, ref, day, raw = row[:6]
+    try:
+        at = datetime.fromisoformat(at_text)
+        detail = json.loads(raw)
+    except (TypeError, ValueError):
+        raise PolicyRefused("replayed row is malformed") from None
+    if event not in _REPLAYABLE or not isinstance(detail, dict):
+        raise PolicyRefused("replayed row has an unknown event or detail")
+    try:
+        if event == "EQUITY_MARK":
+            _decimal(Decimal(detail["equity"]), "equity")
+        elif event == "ENTRY_PROPOSED":
+            if ref in st.entries or not _REF.fullmatch(str(ref)) or track not in AUTONOMOUS_TRACKS:
+                raise PolicyRefused("replayed entry proposal is invalid")
+            for name in ("units", "limit", "stop"):
+                if _decimal(Decimal(detail[name]), name) <= 0:
+                    raise PolicyRefused("replayed entry proposal is invalid")
+            if not (_is_int(detail["instrument"]) and _is_int(detail["horizon"])):
+                raise PolicyRefused("replayed entry proposal is invalid")
+        elif event == "EXIT_PROPOSED":
+            entry = st.entries.get(detail["entry"])
+            if entry is None or ref in st.exits or not _REF.fullmatch(str(ref)) or \
+                    not ZERO < Decimal(detail["units"]) <= entry.filled - entry.exited or \
+                    _decimal(Decimal(detail["bid"]), "bid") <= 0:
+                raise PolicyRefused("replayed exit proposal is invalid")
+        elif event in ("ENTRY_RESOLVED", "EXIT_RESOLVED"):
+            target = (st.entries if event == "ENTRY_RESOLVED" else st.exits).get(ref)
+            if target is None:
+                raise PolicyRefused("replayed resolution has no proposal")
+            _check_resolution(target, detail["outcome"], Decimal(detail["units"]),
+                              Decimal(detail["price"]), at)
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        raise PolicyRefused("replayed row detail is malformed") from None
+    del day
 
 
 def _open_positions(st: _State) -> tuple[OpenPosition, ...]:

@@ -510,10 +510,41 @@ class _CommitFails:
         return getattr(self._conn, name)
 
 
-def _recover(env: _Env) -> PolicyLedger:
+def _recover(env: _Env, expected_head: str | None = None) -> PolicyLedger:
+    anchor = env.tmp / "sd063.anchor.json"
+    head = expected_head or PolicyLedger.inspect_recovery(anchor)["expected_head"]
     return PolicyLedger.recover_last_transaction(
-        env.tmp / "sd063.sqlite3", env.policy.digest(),
-        anchor_path=env.tmp / "sd063.anchor.json", at=env.clock.now)
+        env.tmp / "sd063.sqlite3", env.policy.digest(), anchor_path=anchor,
+        expected_head=head, at=env.clock.now)
+
+
+def test_n2d_anchor_only_edit_cannot_inject_a_forged_fill(env):
+    proposal = env.entry()
+    with env.ledger.transaction():
+        count, head = env.ledger._head()
+    row = [env.clock.now.isoformat(), "ENTRY_RESOLVED", None, proposal.reference_id, None,
+           json.dumps({"outcome": "FILLED", "price": "1", "units": str(proposal.units)},
+                      sort_keys=True, separators=(",", ":"))]
+    forged = PolicyLedger._hash(head, row)
+    env.ledger._write_anchor(count + 1, forged, prev=(count, head),
+                             pending=[(*row, head, forged)])
+    env.ledger.close()
+    with pytest.raises(PolicyRefused, match="anchor"):
+        env.open_ledger()
+    preview = PolicyLedger.inspect_recovery(env.tmp / "sd063.anchor.json")
+    assert [r["event"] for r in preview["rows"]] == ["ENTRY_RESOLVED"]
+    with pytest.raises(PolicyRefused, match="below the stop"):
+        _recover(env)
+    with pytest.raises(PolicyRefused, match="owner-confirmed head"):
+        _recover(env, expected_head="0" * 64)
+    conn = sqlite3.connect(env.tmp / "sd063.sqlite3")
+    try:
+        events = [e for (e,) in conn.execute("SELECT event FROM events")]
+    finally:
+        conn.close()
+    assert "ENTRY_RESOLVED" not in events                   # nothing was injected
+    env.ledger = PolicyLedger(sqlite3.connect(env.tmp / "sd063.sqlite3"), env.policy.digest(),
+                              env.tmp / "sd063.anchor.json")
 
 
 def test_n2_crash_in_a_multi_row_transaction_is_replayed_and_trips_kill_switch(env):
