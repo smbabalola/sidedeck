@@ -139,6 +139,13 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 ## Session control and next autonomous batch
 
+**Batch AC2 (2026-10-23; SD-063 independent review, SD-074 offline boundary):**
+
+- SD-063 independently reviewed (six passes): 2 CRITICAL / 5 HIGH fixed and re-verified; v2 runtime, quarantine recovery. Record: `docs/SD063_AUTONOMOUS_POLICY_SECURITY_REVIEW.md`.
+- SD-074A-E offline: sealed role-bound inputs (signals, research context, quotes, fills), evidence-only reconciliation of unknown outcomes, protective-exit authority (after expiry only), incident report + runbook, off-machine checkpoint chain with publish-before-send gate. Each batch independently reviewed; HIGH/MEDIUM findings fixed (payload Mapping swap, raw-runtime bypass guard, revocation-forced liquidation, checkpoint replay by file name). Open: fill-to-order binding and process isolation (SD-074F), real off-machine store (owner provisioning), fees.
+- Not touched: SD-053/057/058 MSFT pilot (intent, scope, unlock, transport, baseline), nested `sidedeck/` checkout. No authenticated broker request, no paid call, no order. Autonomous execution NOT released; USD 1000 / 7 days are design ceilings only.
+- **Next READY (after the pilot and re-lock):** SD-074F — wire SD-064 `authorize_request` + `require_published` into the Demo transport, capture broker order ids at submission, process isolation for research workers, then an independent review of the full policy-to-transport lifecycle.
+
 **Batch AC1 (2026-10-23; Alpaca PAPER slot-B secret alias, ported from P2 `e11e90e`; secondary broker):**
 
 - Defect: `AlpacaPaperBinding` pins the slot-B secret name `ALPACA_API_SECRET_KEY2`, but SD-035 and the owner's local `.env` use `ALPACA_API_SECRET2`, so `paper_preflight` could never load its secret (fail-closed, not unsafe). `make_paper_get` now accepts either name; conflicting values fail closed before any request; slot A's `ALPACA_API_SECRET` is never used. P2's `paper.py`/`paper_pair.py` do not exist on P5, so this is a targeted patch, not a cherry-pick. P2 test counts are not P5 evidence.
