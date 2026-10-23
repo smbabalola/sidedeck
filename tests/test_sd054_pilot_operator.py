@@ -607,3 +607,11 @@ def test_rehearsal_production_console_approvals_buy_fill_close_reconcile(keys, s
     assert report["steps"][2]["kill_switch"] == "CLEAR"
     err = capsys.readouterr().err
     assert err.count("SECOND PowerShell window") >= 2 and "STOP: no signature file yet" in err
+
+
+def test_open_signed_with_a_different_key_sends_no_order(keys, tmp_path):
+    rig = Rig(keys, tmp_path)
+    rig.approve = lambda label, digest, scope: sign(keys, digest, operator.APPROVAL_NAMESPACE,
+                                                    key="other")
+    report = rig.run()
+    assert report["result"] == "ABORTED_OPEN_NOT_APPROVED" and rig.posts() == []

@@ -112,3 +112,26 @@ def test_stale_rejection_records_the_age_for_diagnosis():
     stamp = naive(NOW - timedelta(seconds=73))
     with pytest.raises(EtoroDemoOrderError, match=r"age 73\.0 s.*basis NAIVE_AS_UTC"):
         parse_fresh_quote(quote(stamp), instrument_id=1004, now=NOW, allow_naive_utc=True)
+
+
+def test_future_dated_rejection_is_distinguishable_from_stale():
+    future = naive(NOW + timedelta(seconds=9))
+    with pytest.raises(EtoroDemoOrderError, match=r"age -9\.0 s.*limits -5\.\.60 s"):
+        parse_fresh_quote(quote(future), instrument_id=1004, now=NOW, allow_naive_utc=True)
+    with pytest.raises(EtoroDemoOrderError, match=r"age 61\.0 s"):
+        parse_fresh_quote(quote(naive(NOW - timedelta(seconds=61))), instrument_id=1004,
+                          now=NOW, allow_naive_utc=True)
+
+
+def test_audit_keeps_the_quote_age_in_the_error_detail(tmp_path):
+    from sidedeck.application.sd058_forensic_audit import PreflightAudit
+    audit = PreflightAudit(str(tmp_path / "audit.sqlite3"), "ab" * 32)
+    try:
+        parse_fresh_quote(quote(naive(NOW + timedelta(seconds=9))), instrument_id=1004,
+                          now=NOW, allow_naive_utc=True)
+    except EtoroDemoOrderError as exc:
+        audit.record(request_type="rates", budget={}, outcome="ABORTED_PREFLIGHT",
+                     payload=quote("x"), error=exc)
+    rows = audit.rows()
+    audit.close()
+    assert "age -9.0 s" in rows[-1]["error_detail"]

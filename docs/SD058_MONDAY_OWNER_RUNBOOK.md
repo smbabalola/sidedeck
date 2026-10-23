@@ -1,7 +1,27 @@
 # SD-058 — Monday 26 October 2026 eToro Demo MSFT pilot: owner runbook
 
 Steering §14.1. The goal is one broker-confirmed Demo buy, fill, full close and MATCHED
-reconciliation. Nothing here authorizes an order by itself.
+reconciliation. Nothing here authorizes an order by itself. This is the **only** current
+operational document; `SD057_FIRST_DEMO_TRADE_RELEASE_REQUEST.md` is historical.
+
+## GO / NO-GO checklist (all must be GO, in order)
+
+| # | Gate | GO when | Who |
+|---|---|---|---|
+| 1 | Code frozen | HEAD contains no change to intent, digest, operator pin or risk limits since `5ad3d94`; exact-HEAD CI green | Claude |
+| 2 | Clock | `w32tm /resync` succeeded; `w32tm /query /status` shows a sync within the last few minutes | Owner |
+| 3 | Intent | `.digest` file equals `1ab4d2c8f85c94ef6fca78164b3e1e593929cc6e3cf7c52c82eae135c3d7fd4a` (script below throws otherwise) | Owner |
+| 4 | Signature | `verify` → `signature_valid: true`, `release_consumed: false`, `requests_sent: 0` | Owner + Claude |
+| 5 | Account / baseline | Demo credentials only; recorded baseline MATCHED with the four protected positions (checked by preflight; any mismatch aborts before a write) | Operator |
+| 6 | Kill switch | CLEAR (no unresolved prior pilot) | Claude (offline read) |
+| 7 | Window | Now ≥ 14:00 UTC and ≤ 15:40 UTC (operator refuses to open with < 20 min left) | Owner |
+| 8 | Owner acceptance | Owner's own message: `NAIVE_AS_UTC` for this pilot + lock-lift approval for the full digest | Owner |
+| 9 | Lock-lift | Only `UNLOCKED_PILOT_DIGEST` changed; exact-HEAD CI green → READY_FOR_OWNER_RUN | Claude |
+| 10 | Buy approval | Signed in the SECOND window **within ~4½ min** of the prompt (open approval and quote both expire after 5 min) | Owner |
+| 11 | Close approval | Signed promptly after the fill (approval valid ≤ 30 min, never beyond 16:00 UTC) | Owner |
+| 12 | Re-lock | `UNLOCKED_PILOT_DIGEST = None` committed and CI green, whatever the outcome | Claude |
+
+Any NO-GO → stop; no broker request is sent before gate 9, and nothing is retried.
 
 ## Pilot (fresh; never signed before)
 
@@ -42,6 +62,9 @@ reconciliation. Nothing here authorizes an order by itself.
    ```
    (`NETWORK_TRANSPORT_ENABLED` stays `False`; every other digest stays locked.)
 
+   **Freeze:** after `9b9da1a` no change may touch the intent, digest, operator pin, request
+   caps, price or freshness limits before the run; only docs/tests are allowed.
+
 ## The run (after READY_FOR_OWNER_RUN, inside the window)
 
 ```powershell
@@ -62,6 +85,13 @@ Sign the close promptly — declining it leaves the position open and trips the 
 Paste the full output to Claude. Claude re-locks immediately, preserves evidence and
 reconciles. COMPLETE only when broker records show open fill, close fill, zero pilot position,
 MATCHED reconciliation, unchanged baseline and transport re-locked.
+
+| Outcome | What the report shows | Response |
+|---|---|---|
+| **A — success** | `result: COMPLETE`; open step `OPEN_FILLED_AWAITING_CLOSE_APPROVAL` with broker `entry`; close step FILLED, 0 SideDeck positions, kill switch CLEAR | Re-lock; verify fills, flat position, MATCHED, baseline unchanged from the saved evidence; mark SD-058 COMPLETE |
+| **B — rejected before opening** | `ABORTED_PREFLIGHT` / `ABORTED_OPEN_NOT_APPROVED` / `ABORTED_WINDOW_TOO_SHORT`; 0 writes | Re-lock; no retry. Read the audit (quote age with sign: negative = future-dated; time basis; timestamp shape); diagnose before any new pilot |
+| **C — bought, close unresolved** | `UNRESOLVED_OPERATOR_INTERVENTION_REQUIRED`, position may be OPEN, kill switch tripped | Re-lock; do **not** rerun or close manually by script. SideDeck never resubmits a close; read lineage + audit offline; check the Demo position in the eToro UI; owner directs recovery |
+
 
 ## Known risk: quote freshness
 
