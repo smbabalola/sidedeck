@@ -11,7 +11,7 @@ Fixed parameters (owner configuration 2026-10-22):
 * the actual limit is derived at preflight: min(552.56, fresh realtime ask x 1.005);
 * ``reference_price`` 526.25 is the SD-052 search ``currentRate``: a **planning**
   reference that bounds the signed maximum (+5 %); it is never used as an executable ask;
-* window Monday 2026-10-26 10:00-11:30 America/New_York (EDT) = 14:00-15:30 UTC;
+* window Friday 2026-10-23 12:10-15:30 America/New_York (EDT) = 16:10-19:30 UTC;
 * request caps: the reviewed 12-request / 2-write plan (``ROUTE_CAPS``).
 
 Usage::
@@ -37,10 +37,10 @@ REFERENCE_PRICE = Decimal("526.25")          # planning reference only (SD-052 c
 MAX_LIMIT_RATE = (REFERENCE_PRICE * (1 + MAX_PLANNING_HEADROOM)).quantize(
     Decimal("0.01"), rounding=ROUND_DOWN)    # 552.56
 MAX_NOTIONAL_USD = Decimal("50")
-NOT_BEFORE = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)   # 10:00 EDT
-EXPIRES_AT = datetime(2026, 10, 26, 15, 30, tzinfo=timezone.utc)  # 11:30 EDT
-# Preserve the expired Friday intent and its evidence; Monday uses its own signed file.
-INTENT_PATH = lookup.DATA_DIR / "sd053-msft-pilot-intent-20261026.json"
+NOT_BEFORE = datetime(2026, 10, 23, 16, 10, tzinfo=timezone.utc)   # 12:10 EDT
+EXPIRES_AT = datetime(2026, 10, 23, 19, 30, tzinfo=timezone.utc)  # 15:30 EDT
+# Preserve both prior signed intents; this urgent attempt has its own file and digest.
+INTENT_PATH = lookup.DATA_DIR / "sd053-msft-pilot-intent-20261023-urgent.json"
 
 
 class IntentRefused(RuntimeError):
