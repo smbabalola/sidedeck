@@ -1190,6 +1190,12 @@ class AutonomousDemoRuntime:
 
     def _finish(self, now: datetime, exits: tuple[ExitProposal, ...],
                 alerts: list[str]) -> ExitPlan:
-        for code in alerts:
-            self.ledger._append(now, "ALERT", detail={"code": code[:200]})
+        # Record each alert code once per session so polling cannot grow the ledger.
+        day = now.astimezone(NEW_YORK).date()
+        logged = {json.loads(raw)["code"] for (raw,) in self.ledger._conn.execute(
+            "SELECT detail FROM events WHERE event = 'ALERT' AND session_date = ?",
+            (day.isoformat(),))}
+        for code in dict.fromkeys(c[:200] for c in alerts):
+            if code not in logged:
+                self.ledger._append(now, "ALERT", session_date=day, detail={"code": code})
         return ExitPlan(exits, tuple(alerts))

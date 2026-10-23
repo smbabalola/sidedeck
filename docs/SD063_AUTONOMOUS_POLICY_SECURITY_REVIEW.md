@@ -11,7 +11,7 @@ transport, credentials or network access, and it is not wired to the order path 
 | Reviewer | separate read-only reviewer agent (no repo writes, no network, no `.env`) |
 | Method | source and interface inspection, executed repro scripts, re-verification of the fixes |
 | Code | `src/sidedeck/application/sd063_autonomous_demo_policy.py` |
-| Tests | `tests/test_sd063_autonomous_demo_policy.py` (83; regression tests `test_f*`, `test_n*`) |
+| Tests | `tests/test_sd063_autonomous_demo_policy.py` (84; regression tests `test_f*`, `test_n*`) |
 
 ## Summary
 
@@ -51,6 +51,22 @@ New issues raised by the re-verification of v2:
 | N4 | LOW | Daily-loss baseline taken late; marks grew the ledger on every call | **FIXED** — first mark per session written before the decision; further marks only on a new high |
 | N5 | LOW | UNRESOLVED exit or revoked grant leaves only alerts | **BY DESIGN** — the order may have executed / privilege was removed; owner close runbook required (R5) |
 | N6 | LOW | Evidence checked by hash only, read fully each call | **OPEN** — residual R1 |
+
+Sixth independent pass (on `d13024b`): **N2-D FIXED** — anchor-only forgeries stay inert data;
+no position, fill, exit or P&L can be forged; the kill-switch cannot be cleared; malformed
+quarantine content did not break `state()`. Remaining (accepted for the offline stage, tracked):
+- **R8 (MEDIUM) Lost fill → QUARANTINED entry is alert-only**, not stop/flatten-managed. Accepted
+  fail-safe (trusting the anchored fill is exactly the N2-D forgery); bounded by
+  `max_position_notional`, the ≤ 7-day grant and the unwired transport. Required before release:
+  owner-facing notice (not only ledger alerts) and runbook R5; optional owner-confirmed protective
+  close proposals for quarantined entries.
+- **R9 (LOW-MEDIUM)** an owner-confirmed recovery can be aimed at genuine pending references,
+  leaving them reserved/unresolvable for the policy; needs an owner-run, broker-checked
+  `resolve_quarantined` operation.
+- **LOW:** a second recovery after deleting the quarantine transaction loses the earlier
+  quarantine marks (proposals revert to pending, still reserved); `inspect_recovery` raises on a
+  non-object anchor; very large `last_rows` cost disk/time. Alert rows growing on every poll was
+  **fixed** (each code logged once per session; `test_polling_exit_plans_does_not_grow_alert_rows`).
 
 Fifth independent pass (on `7ca1864`): row-by-row validation of replayed rows was **not
 sufficient** — phantom entries/fills outside the policy scope (HIGH), forged exits with an

@@ -632,6 +632,18 @@ def test_n4_polling_does_not_grow_equity_marks(env):
     assert len(marks) == 1
 
 
+def test_polling_exit_plans_does_not_grow_alert_rows(env):
+    env.open_position()
+    env.ledger.trip_kill_switch("operator", env.clock.now)
+    env.clock.now += timedelta(hours=1)
+    stale = {MSFT: ExitQuote(MSFT, Decimal("470"), env.clock.now - timedelta(minutes=5))}
+    for _ in range(5):
+        env.rt.plan_exits(bids=stale)
+        env.clock.now += timedelta(seconds=1)
+    alerts = [r for r in env.ledger._conn.execute("SELECT 1 FROM events WHERE event = 'ALERT'")]
+    assert len(alerts) == 2          # KILL_SWITCH_ENGAGED + QUOTE_UNAVAILABLE, once each
+
+
 def test_kill_switch_persists_across_restart(env):
     proposal = env.entry()
     env.ledger.resolve(proposal.reference_id, "UNRESOLVED", env.clock.now)
