@@ -58,7 +58,11 @@ def _synthetic_bars(seed: int, days: tuple[date, ...]) -> tuple[StrategyBar, ...
 
 def run_demo(count: int = 60) -> dict[str, Any]:
     days = expected_regular_sessions(date(2025, 6, 2), CUTOFF)
-    bars = {f"US:SYN{i:03d}": _synthetic_bars(i, days) for i in range(count)}
+    ids = [f"US:SYN{i:03d}" for i in range(count)]
+
+    def load_bars(cid: str) -> tuple[StrategyBar, ...]:
+        # Streamed: bars exist only while one instrument is scanned (memory stays ~flat).
+        return _synthetic_bars(int(cid[6:]), days)
     snapshot = date(2025, 6, 2)
     records = tuple(
         InstrumentRecord(
@@ -68,7 +72,7 @@ def run_demo(count: int = 60) -> dict[str, Any]:
             history_basis="POINT_IN_TIME", provenance=PROVENANCE, listing_date=snapshot,
             coverage=(SourceCoverage(DATA_BASIS, "1D", days[0], days[-1], len(days), PROVENANCE),),
         )
-        for cid in bars
+        for cid in ids
     )
     now = datetime(2026, 10, 22, 12, tzinfo=UTC)
     registry = MarketUniverseRegistry(1, now, "sd076 synthetic", records)
@@ -76,7 +80,7 @@ def run_demo(count: int = 60) -> dict[str, Any]:
     eligible = [r.canonical_id for r in members
                 if evaluate_eligibility(r, CUTOFF, data_source=DATA_BASIS).strategy_eligible]
     benchmark = _synthetic_bars(9999, days)
-    report = run_broad_scan(eligible, bars.__getitem__, CUTOFF, data_basis=DATA_BASIS,
+    report = run_broad_scan(eligible, load_bars, CUTOFF, data_basis=DATA_BASIS,
                             benchmark=benchmark, batch_size=25)
     shortlists = {
         track: build_shortlist(report, cfg) for track, cfg in DEFAULT_SCORING.items()
@@ -96,7 +100,7 @@ def run_demo(count: int = 60) -> dict[str, Any]:
     signal_count = 0
     features = {f.canonical_id: f for f in report.features}
     for cand in shortlists["SWING"].research:
-        signals = daily_signals(cand.canonical_id, bars[cand.canonical_id], CUTOFF,
+        signals = daily_signals(cand.canonical_id, load_bars(cand.canonical_id), CUTOFF,
                                 cutoff_time=cutoff_time, generated_at=now)
         signal_count += len(signals)
         feat = features[cand.canonical_id]
