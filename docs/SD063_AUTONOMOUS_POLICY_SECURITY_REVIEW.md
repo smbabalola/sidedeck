@@ -152,3 +152,15 @@ bounded Demo operating period. Nothing here activates the USD 1000 allocation.
 | S6 | LOW | `incident_report` writes SD-064 audit rows and takes the write lock | **ACCEPTED, documented** — the audit rows are intended; no secrets in the output |
 | S8 | LOW | Re-verification of `5dbf762`: non-ASCII MAC and deeply nested payload escaped as exceptions; research `as_of`/ATR unbounded | **FIXED** — MAC format checked first, payload size cap and `RecursionError` refused, research context must be < 24 h old and ATR within 0.1 %-50 % of the sealed ask |
 | S7 | LOW | Mixed-type keys escaped as `TypeError`; unbounded nonce store; lock errors; shared keys; substring self-claims | **FIXED** except nested self-claim keys (top-level only; accepted) — nonces pruned after 8 days (> longest max age), lock errors → refusal, distinct keys required |
+
+## SD-074D anchor review (independent, on `8048f3e`) and remediation
+
+| ID | Sev. | Finding | Status |
+|---|---|---|---|
+| E1 | MEDIUM | `latest()` trusted file names: an old valid checkpoint copied under a higher name let `verify` pass on a rolled-back ledger | **FIXED** — checkpoints form a MAC'd chain (prev count/head) from a genesis checkpoint; the keeper verifies the whole chain by content; name/content mismatch fails closed |
+| E2 | MEDIUM | Unpublished tail can be rolled back undetected | **MITIGATED** — `require_published` publish-before-send gate (the transport must call it before any order; SD-074F); rollback of never-sent state remains undetectable by design |
+| E3 | LOW | Empty store passed `verify` | **FIXED** — `initialize` publishes genesis at creation; a ledger with events and no published history is refused |
+| E4 | LOW | 12-digit name sort, unvalidated id in the stand-in `append`, junk files | **FIXED** (content-based selection, id validation); junk files fail closed (accepted DoS) |
+| — | — | Research `as_of` compared with no skew | **FIXED** (5 s skew) |
+
+Residuals: the device key is symmetric and on the host (a host attacker can add forged checkpoints to a write-once log, a denial of service, not a rollback) — the real design uses a separate signing host; checkpoint `at` freshness is not checked.

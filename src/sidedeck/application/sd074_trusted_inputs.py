@@ -378,7 +378,7 @@ class AuthenticatedRuntime:
         if q.canonical_id != context.canonical_id:
             return Refusal(("QUOTE_INSTRUMENT_MISMATCH",))
         now = self._verifier.now()
-        if context.as_of > now or now - context.as_of > MAX_RESEARCH_AGE:
+        if context.as_of > now + CLOCK_SKEW or now - context.as_of > MAX_RESEARCH_AGE:
             return Refusal(("RESEARCH_CONTEXT_STALE",))
         if not ATR_BAND[0] <= context.atr / q.ask <= ATR_BAND[1]:
             return Refusal(("RESEARCH_ATR_OUT_OF_BAND",))
