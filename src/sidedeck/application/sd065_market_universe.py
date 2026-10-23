@@ -38,6 +38,29 @@ _CRYPTO_PATTERN = re.compile(
     r"\b(CRYPTO\w*|BITCOIN|ETHEREUM|ETHER|SOLANA|BLOCKCHAIN|DOGECOIN|LITECOIN|BTC|ETH|XRP|SOL)\b"
 )
 BROKER_ENVIRONMENTS: frozenset[str] = frozenset({"DEMO", "PAPER"})
+# Price quotation units. GBX = pence sterling (1/100 GBP); never confused with GBP.
+QUOTE_UNITS: frozenset[str] = frozenset({"USD", "GBP", "GBX", "EUR"})
+QUOTE_UNIT_CURRENCY: dict[str, str] = {"USD": "USD", "GBP": "GBP", "GBX": "GBP", "EUR": "EUR"}
+# Optional identity fields: omitted from the canonical JSON when unset, so registries
+# written before SD-090 keep their digests.
+_OPTIONAL_IDENTITY_FIELDS = ("isin", "quote_unit")
+_ISIN_PATTERN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
+
+
+def isin_is_valid(isin: str) -> bool:
+    """ISO 6166 format and Luhn check digit (letters expand to two digits, A=10)."""
+    if not _ISIN_PATTERN.match(isin):
+        return False
+    digits = "".join(str(int(ch, 36)) for ch in isin[:-1])
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        n = int(ch)
+        if i % 2 == 0:  # rightmost payload digit is doubled (check digit excluded)
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+    return (10 - total % 10) % 10 == int(isin[-1])
 
 FLAGS = (
     "LISTED_ACTIVE",
@@ -74,8 +97,12 @@ MARKETS: dict[str, MarketDefinition] = {
         note="Phase 1. Execution still requires a verified broker mapping and a signed policy.",
     ),
     "UK": MarketDefinition(
-        "UK", 2, "GB", ("LSE",), ("GBP", "GBX"), discovery_enabled=False,
-        note="Phase 2 design only. UK broker execution needs separate owner approval.",
+        "UK", 2, "GB", ("LSE",), ("GBP", "USD", "EUR"), discovery_enabled=True,
+        note=(
+            "Phase 2 research/simulation (owner directive 2026-10-23, SD-088). Records need an "
+            "explicit quote unit (GBX pence vs GBP pounds). UK broker execution needs separate "
+            "owner approval; the MSFT pilot authorization never extends to UK instruments."
+        ),
     ),
     "EU": MarketDefinition(
         "EU", 3, "EU", ("XETRA", "EURONEXT_PARIS", "EURONEXT_AMSTERDAM"), ("EUR",),
@@ -165,6 +192,8 @@ class InstrumentRecord:
     suspensions: tuple[tuple[date, date | None], ...] = ()
     exclusion_reasons: tuple[str, ...] = ()
     last_verified_at: datetime | None = None
+    isin: str | None = None
+    quote_unit: str | None = None  # unit the listing's prices are quoted in (e.g. GBX)
 
     def ticker_on(self, day: date) -> TickerInterval | None:
         matches = [interval for interval in self.tickers if interval.covers(day)]
@@ -263,6 +292,20 @@ def _validate_record(record: InstrumentRecord) -> None:
     for start, end in record.suspensions:
         if end is not None and end < start:
             raise UniverseError(f"{cid}: suspension ends before it starts")
+    if record.isin is not None and not isin_is_valid(record.isin):
+        raise UniverseError(f"{cid}: invalid ISIN")
+    if record.quote_unit is not None:
+        if record.quote_unit not in QUOTE_UNITS:
+            raise UniverseError(f"{cid}: unsupported quote unit {record.quote_unit!r}")
+        if QUOTE_UNIT_CURRENCY[record.quote_unit] != record.currency:
+            raise UniverseError(
+                f"{cid}: quote unit {record.quote_unit} inconsistent with currency {record.currency}"
+            )
+    if record.market_id == "UK":
+        if record.quote_unit is None:
+            raise UniverseError(f"{cid}: LSE listings require an explicit quote unit (GBX or GBP)")
+        if record.currency == "GBX":
+            raise UniverseError(f"{cid}: GBX is a quote unit; the trading currency is GBP")
 
 
 def evaluate_eligibility(
@@ -523,6 +566,11 @@ def _history_rewritten(old: InstrumentRecord, new: InstrumentRecord) -> bool:
         return True
     if not set(old.exclusion_reasons) <= set(new.exclusion_reasons):
         return True
+    # Identity: an ISIN or quote unit may be added once, never silently changed.
+    for name in _OPTIONAL_IDENTITY_FIELDS:
+        before = getattr(old, name)
+        if before is not None and before != getattr(new, name):
+            return True
     if not set(old.broker_mappings) <= set(new.broker_mappings):
         return True
     for start, end in set(old.suspensions) - set(new.suspensions):
@@ -580,8 +628,16 @@ def _default(value: Any) -> Any:
     raise TypeError(type(value).__name__)
 
 
+def _record_dict(record: InstrumentRecord) -> dict[str, Any]:
+    data = asdict(record)
+    for name in _OPTIONAL_IDENTITY_FIELDS:
+        if data.get(name) is None:
+            data.pop(name, None)
+    return data
+
+
 def _canonical_json(records: Sequence[InstrumentRecord]) -> str:
-    return json.dumps([asdict(r) for r in records], sort_keys=True, default=_default,
+    return json.dumps([_record_dict(r) for r in records], sort_keys=True, default=_default,
                       separators=(",", ":"))
 
 
@@ -625,6 +681,7 @@ def _record_from_dict(item: dict[str, Any]) -> InstrumentRecord:
         suspensions=tuple((date.fromisoformat(s[0]), _d(s[1])) for s in item["suspensions"]),
         exclusion_reasons=tuple(item["exclusion_reasons"]),
         last_verified_at=_dt(item["last_verified_at"]),
+        isin=item.get("isin"), quote_unit=item.get("quote_unit"),
     )
 
 

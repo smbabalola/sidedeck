@@ -166,17 +166,63 @@ def test_eligibility_flags_are_independent() -> None:
     assert not r.flags["LISTED_ACTIVE"] and "SUSPENDED" in r.reasons and not r.execution_eligible
 
 
-def test_phase2_and_phase3_markets_are_design_only() -> None:
-    assert MARKETS["US"].discovery_enabled
-    for market in ("UK", "EU", "FX"):
+def test_uk_enabled_for_discovery_only_and_phase3_design_only() -> None:
+    # Owner directive 2026-10-23 (SD-088): UK discovery/research enabled; execution never.
+    assert MARKETS["US"].discovery_enabled and MARKETS["UK"].discovery_enabled
+    for market in ("EU", "FX"):
         assert not MARKETS[market].discovery_enabled
     assert not any(m.execution_enabled for m in MARKETS.values())
     uk = _rec("UK:VOD", "VOD", date(2000, 1, 4), currency="GBP", country="GB",
-              tickers=(TickerInterval("VOD", "LSE", date(2000, 1, 4)),),
+              quote_unit="GBX", tickers=(TickerInterval("VOD", "LSE", date(2000, 1, 4)),),
               coverage=(_cov(date(2010, 1, 4), date(2026, 10, 20), 4000),))
     report = evaluate_eligibility(uk, date(2026, 10, 21))
-    assert "MARKET_NOT_ENABLED_FOR_DISCOVERY" in report.reasons and not report.discovery_eligible
-    assert _registry(uk).universe_as_of(date(2026, 10, 21)).members == ()
+    assert "MARKET_NOT_ENABLED_FOR_DISCOVERY" not in report.reasons and report.discovery_eligible
+    assert not report.execution_eligible and "NO_BROKER_MAPPING" in report.reasons
+    reg = _registry(uk)
+    assert reg.universe_as_of(date(2026, 10, 21)).members == ()  # default slice is US only
+    assert [r.canonical_id for r in reg.universe_as_of(date(2026, 10, 21), markets=("UK",)).members]         == ["UK:VOD"]
+    eu = _rec("EU:SAP", "SAP", date(2000, 1, 4), currency="EUR", country="DE",
+              tickers=(TickerInterval("SAP", "XETRA", date(2000, 1, 4)),),
+              coverage=(_cov(date(2010, 1, 4), date(2026, 10, 20), 4000),))
+    assert "MARKET_NOT_ENABLED_FOR_DISCOVERY" in evaluate_eligibility(eu, date(2026, 10, 21)).reasons
+
+
+def test_uk_records_need_quote_unit_and_valid_isin() -> None:
+    base = _rec("UK:VOD", "VOD", date(2000, 1, 4), currency="GBP", country="GB",
+                tickers=(TickerInterval("VOD", "LSE", date(2000, 1, 4)),))
+    with pytest.raises(UniverseError, match="explicit quote unit"):
+        _registry(base)
+    with pytest.raises(UniverseError, match="inconsistent with currency"):
+        _registry(replace(base, quote_unit="GBX", currency="USD"))
+    with pytest.raises(UniverseError, match="GBX is a quote unit|invalid trading currency|inconsistent"):
+        _registry(replace(base, quote_unit="GBX", currency="GBX"))
+    with pytest.raises(UniverseError, match="unsupported quote unit"):
+        _registry(replace(base, quote_unit="GBp"))
+    with pytest.raises(UniverseError, match="invalid ISIN"):
+        _registry(replace(base, quote_unit="GBX", isin="GB00BH4HKS38"))  # bad check digit
+    ok = _registry(replace(base, quote_unit="GBX", isin="GB00BH4HKS39"))
+    assert ok.get("UK:VOD").isin == "GB00BH4HKS39"
+
+
+def test_optional_identity_fields_keep_legacy_digest_and_round_trip() -> None:
+    us = _rec("US:AAA", "AAA", date(2010, 1, 4))
+    legacy = _registry(us)
+    assert "isin" not in legacy.to_json() and "quote_unit" not in legacy.to_json()
+    uk = _rec("UK:VOD", "VOD", date(2000, 1, 4), currency="GBP", country="GB", quote_unit="GBX",
+              isin="GB00BH4HKS39", tickers=(TickerInterval("VOD", "LSE", date(2000, 1, 4)),))
+    reg = _registry(us, uk)
+    again = MarketUniverseRegistry.from_json(reg.to_json())
+    assert again.digest == reg.digest and again.get("UK:VOD").quote_unit == "GBX"
+
+
+def test_identity_change_is_history_rewrite() -> None:
+    uk = _rec("UK:VOD", "VOD", date(2000, 1, 4), currency="GBP", country="GB", quote_unit="GBX",
+              isin="GB00BH4HKS39", tickers=(TickerInterval("VOD", "LSE", date(2000, 1, 4)),))
+    reg = _registry(uk)
+    with pytest.raises(UniverseError, match="rewrites recorded history"):
+        reg.refresh((replace(uk, quote_unit="GBP"),), created_at=NOW, source_note="x")
+    with pytest.raises(UniverseError, match="rewrites recorded history"):
+        reg.refresh((replace(uk, isin="GB0007980591"),), created_at=NOW, source_note="x")
 
 
 def test_snapshot_records_refused_for_history() -> None:

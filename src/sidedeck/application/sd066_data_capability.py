@@ -103,6 +103,52 @@ CAPABILITY_MATRIX: tuple[SourceCapability, ...] = (
         "must be declared per file", "licence declared by owner per file", 0, 1, "n/a",
         "APPROVED_PUBLIC", "docs/PROVENANCE.md",
     ),
+    # --- UK (SD-092). No UK dataset exists locally; see docs/SD088_UK_EQUITY_INTEGRATION.md.
+    SourceCapability(
+        "OWNER_CSV_IMPORT_UK", "Owner-supplied licensed UK listings / daily bars (GBX or GBP "
+        "declared per file)", ("LSE",), ("COMMON_STOCK", "ETF"), "as supplied (none supplied)",
+        ("1D", "DIRECTORY"), "END_OF_DAY", None, "must be declared per file",
+        "licence and quote unit declared by owner per file", 0, 1, "n/a", "APPROVED_PUBLIC",
+        "docs/SD088_UK_EQUITY_INTEGRATION.md",
+    ),
+    SourceCapability(
+        "ETORO_DEMO_MARKET_DATA_UK", "eToro public API search/rates/candles for LSE instruments",
+        ("LSE",), ("COMMON_STOCK", "ETF"), "UK instrument and candle coverage NOT_VERIFIED",
+        ("RATES", "1D"), "UNKNOWN", None, "UNKNOWN",
+        "authenticated; per-request owner authorization; MSFT pilot budget never reused", 60, 60,
+        "free with account", "OWNER_AUTHORIZATION_PER_RUN", "docs/SD088_UK_EQUITY_INTEGRATION.md",
+    ),
+    SourceCapability(
+        "FTSE_RUSSELL_CONSTITUENTS", "FTSE Russell / LSEG FTSE 100 and FTSE 250 constituents",
+        ("LSE",), ("COMMON_STOCK", "ETF"), "licensed; historical reviews by subscription",
+        ("DIRECTORY",), "SNAPSHOT", None, "NOT_APPLICABLE",
+        "licensed index data; redistribution and derived use restricted", 0, 60, "licence",
+        "NOT_APPROVED", "docs/SD088_UK_EQUITY_INTEGRATION.md",
+    ),
+    SourceCapability(
+        "LSE_WEBSITE", "londonstockexchange.com price and constituent pages", ("LSE",),
+        ("COMMON_STOCK", "ETF"), "varies", ("1D", "QUOTE", "DIRECTORY"), "DELAYED_15M", None,
+        "UNKNOWN", "website terms restrict automated retrieval and reuse", 0, 60, "n/a",
+        "NOT_APPROVED", "docs/SD088_UK_EQUITY_INTEGRATION.md",
+    ),
+    SourceCapability(
+        "GOV_UK_BANK_HOLIDAYS", "gov.uk/bank-holidays.json (England and Wales)", ("LSE",),
+        ("CALENDAR",), "published years only", ("CALENDAR",), "SNAPSHOT", None, "NOT_APPLICABLE",
+        "Open Government Licence v3.0; one public GET proposed in SD-094", 1, 60, "free",
+        "PENDING_POLICY_REVIEW", "docs/SD088_UK_EQUITY_INTEGRATION.md",
+    ),
+    SourceCapability(
+        "STOOQ_UNOFFICIAL_UK", "Stooq CSV downloads for .UK symbols", ("LSE",),
+        ("COMMON_STOCK", "ETF"), "varies", ("1D",), "UNKNOWN", None, "UNKNOWN",
+        "unofficial; terms and redistribution rights unclear", 0, 60, "n/a", "NOT_APPROVED",
+        "docs/SD088_UK_EQUITY_INTEGRATION.md",
+    ),
+    SourceCapability(
+        "YAHOO_UNOFFICIAL_UK", "Yahoo Finance unofficial endpoints for .L symbols (GBp units)",
+        ("LSE",), ("COMMON_STOCK", "ETF"), "varies", ("1D",), "UNKNOWN", None, "UNKNOWN",
+        "unofficial; rate-limited; terms unclear", 0, 60, "n/a", "NOT_APPROVED",
+        "docs/SD088_UK_EQUITY_INTEGRATION.md",
+    ),
 )
 
 
@@ -120,6 +166,7 @@ class DataNeed:
     asset_type: str
     max_delay: str  # strictest acceptable delay
     requires_consolidated: bool = False
+    market: str = "US"
 
 
 _DELAY_RANK = {"REALTIME": 0, "DELAYED_15M": 1, "END_OF_DAY": 2, "SNAPSHOT": 3, "UNKNOWN": 9}
@@ -136,6 +183,16 @@ class SourceSelection:
         return "AVAILABLE" if self.usable else "BLOCKED_EXTERNAL"
 
 
+_EXCHANGE_MARKET = {
+    "NYSE": "US", "NASDAQ": "US", "NYSE_ARCA": "US", "NYSE_AMERICAN": "US", "CBOE_BZX": "US",
+    "LSE": "UK",
+}
+
+
+def _covers_market(cap: SourceCapability, market: str) -> bool:
+    return any(e == market or _EXCHANGE_MARKET.get(e) == market for e in cap.exchanges)
+
+
 def select_sources(need: DataNeed) -> SourceSelection:
     """Return autonomously usable sources for a need, with a reason for every refusal."""
     if need.max_delay not in _DELAY_RANK:
@@ -143,7 +200,9 @@ def select_sources(need: DataNeed) -> SourceSelection:
     usable: list[str] = []
     refused: list[tuple[str, str]] = []
     for cap in CAPABILITY_MATRIX:
-        if need.granularity not in cap.granularities:
+        if not _covers_market(cap, need.market):
+            refused.append((cap.source_id, "MARKET_UNCOVERED"))
+        elif need.granularity not in cap.granularities:
             refused.append((cap.source_id, "GRANULARITY_UNAVAILABLE"))
         elif need.asset_type not in cap.asset_types:
             refused.append((cap.source_id, "ASSET_TYPE_UNCOVERED"))
@@ -163,6 +222,13 @@ TRACK_DATA_NEEDS: dict[str, DataNeed] = {
                     requires_consolidated=True),
     "SWING": DataNeed("daily scan", "1D", "COMMON_STOCK", "END_OF_DAY"),
     "POSITION": DataNeed("daily + fundamentals", "1D", "COMMON_STOCK", "END_OF_DAY"),
+}
+UK_TRACK_DATA_NEEDS: dict[str, DataNeed] = {
+    "DAY": DataNeed("UK intraday scan/entry", "5M", "COMMON_STOCK", "DELAYED_15M",
+                    requires_consolidated=True, market="UK"),
+    "SWING": DataNeed("UK daily scan", "1D", "COMMON_STOCK", "END_OF_DAY", market="UK"),
+    "POSITION": DataNeed("UK daily + fundamentals", "1D", "COMMON_STOCK", "END_OF_DAY",
+                         market="UK"),
 }
 
 
