@@ -416,8 +416,14 @@ class FreshQuote:
 EXPLICIT_OFFSET, NAIVE_AS_UTC = "EXPLICIT_OFFSET", "NAIVE_AS_UTC"
 
 
-def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime) -> FreshQuote:
-    """Exactly one realtime, fresh, sane bid/ask for the instrument; otherwise fail closed."""
+def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime,
+                      allow_naive_utc: bool = False) -> FreshQuote:
+    """Exactly one realtime, fresh, sane bid/ask for the instrument; otherwise fail closed.
+
+    ``allow_naive_utc`` is an owner-accepted, LIMITED operational assumption for the
+    supervised eToro Demo pilot only (2026-10-23). It is not a verified provider
+    convention and must never be enabled for general market data, backtests or
+    autonomous execution."""
     rows = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         raise EtoroDemoOrderError("rates response lacks results")
@@ -442,6 +448,8 @@ def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime) -> Fre
         raise EtoroDemoOrderError("reference quote time is invalid") from None
     basis = EXPLICIT_OFFSET
     if observed.tzinfo is None:
+        if not allow_naive_utc:
+            raise EtoroDemoOrderError("reference quote time must be timezone-aware")
         # eToro Demo live rates send a naive `date` (pilot a51e41fa, 2026-10-23); the API
         # reference states no offset. Reading it as UTC is accepted ONLY because the
         # freshness gate below then verifies it: any real non-UTC zone is >= 30 min away,

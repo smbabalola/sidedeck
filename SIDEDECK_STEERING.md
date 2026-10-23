@@ -313,6 +313,26 @@ tested offline. Its release state is `READY_FOR_OWNER_DIAGNOSTIC_AUTHORIZATION`:
 requires a fresh, separate owner-signed authorization and owner-operated command. It is not
 executed, approved, or trade-ready, and no prior pilot signature or unlock may be reused.
 
+### 14.1 Execution controller — complete the first Demo trade (owner directive 2026-10-23)
+
+The controlling objective is one eToro Demo buy, broker-confirmed fill, complete close and final
+reconciliation. Continue automatically through all safe, unblocked development and verification;
+do not stop at engineering milestones. Only owner signatures, transport lock-lift approvals and
+owner-operated runs wait for the owner. A real defect → investigate saved broker evidence →
+smallest verified fix → test + independent review → continue. No unrelated scanning, dashboards,
+autonomous strategies or architecture work until COMPLETE. Never reuse an expired or consumed
+signature; if a window expires, preserve evidence and prepare the next session's fresh intent.
+
+`NAIVE_AS_UTC` is a **limited operational assumption**, not a verified eToro convention: allowed
+only for the supervised Demo pilot (`parse_fresh_quote(..., allow_naive_utc=True)` in the SD-046
+preflight), only with the 60 s age / 5 s future-skew gate and the signed price limit, and only
+with the owner's specific acceptance. Never for general market data, backtests or autonomous
+execution. The audit records the timestamp's format shape (never its value).
+
+**COMPLETE** only when eToro broker records prove: opening fill, closing fill, zero remaining
+pilot position, final reconciliation MATCHED, protected baseline unchanged, transport re-locked.
+Tests, documents, mocks and successful reads are not sufficient.
+
 ## 15. Autonomous Demo execution — verified versus blocked (owner directive 2026-10-23)
 
 SD-063 passed an independent review (six passes) and offline remediation; SD-074's input boundary

@@ -272,9 +272,9 @@ class EtoroDemoPilot:
             last_payload = self._transport.send(
                 "GET", MARKET_DATA_RATES_PATH, reference_id=str(uuid.uuid4()),
                 query={"instrumentIds": str(s.instrument_id)})
-            quote = parse_fresh_quote(
+            quote = parse_fresh_quote(          # supervised pilot only (owner-accepted)
                 last_payload,
-                instrument_id=s.instrument_id, now=now)
+                instrument_id=s.instrument_id, now=now, allow_naive_utc=True)
             limit = derive_limit(quote.ask, s.max_limit_rate, MAX_LIMIT_PREMIUM)
         except Exception as exc:  # no write has happened; abort cleanly
             if self._audit is not None:

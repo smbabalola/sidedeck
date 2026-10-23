@@ -6,7 +6,17 @@
 
 ## Current execution board — ordered by priority and dependencies
 
-### Milestone 0 — first eToro Demo MSFT trade (steering §10; highest priority)
+### Milestone 0 — first eToro Demo MSFT trade (steering §10, §14.1; highest priority)
+
+> **CONTROLLER (2026-10-23, steering §14.1) — status: NOT COMPLETE.** Broker state: no order ever
+> written; 0 SideDeck positions; kill switch CLEAR; transport LOCKED. Last evidence: pilot
+> `0e1ab7c2…` passed eligibility live, aborted at rates (naive quote time). Fixes: currency
+> `c18cafe`, naive quote time `43879cb` + pilot-only scoping. **Next:** owner accepts the limited
+> `NAIVE_AS_UTC` assumption and signs pilot `55d66780-bf06-4615-8710-e96e2f0757fd`, digest
+> `4e1cea6fa043cbb13f0ef9fdd83194c6d0558b71727515a9c4a3d637a1b70599` (window 18:45–19:45 UTC);
+> then separate lock-lift approval → owner run → re-lock → reconcile. COMPLETE only on broker
+> records of open fill, close fill, flat pilot position, MATCHED reconciliation, baseline
+> unchanged and transport re-locked.
 
 - [x] **SD-055 | P0 | VERIFIED | deps: SD-053 | Pilot intent and owner-signature verification.** Owner signed 2026-10-22; SideDeck verifier `signature_valid: true` and independent `ssh-keygen -Y verify` Good (owner@sidedeck, ED25519 SHA256:7qb8dAz9…/rUI, namespace `sidedeck-etoro-pilot-release`); SHA-256(canonical) = pinned digest `71e111b3…9a62`; signer key pinned; release not consumed.
 - [x] **SD-056 | P0 | VERIFIED | deps: SD-054 | Final broker execution transport review.** Independent read-only security review of the full order path: **0 critical, 0 high**. Fixed with tests: (M1) any interruption after the open write trips the kill-switch and writes an UNRESOLVED 'position may be OPEN' report; (M2) the production factory validates lock + credentials before the single-use release is consumed; (M3) open refused with < 20 min of window left, close TTL clipped to window end; (M4) SD-041 guard also catches `from … import` and string references, constructor lock test is `is True`; (M5) dedicated `sidedeck-etoro-pilot-approval` namespace and a signing command that re-checks the digest file against the on-screen digest; lows: lost open acknowledgement → UNRESOLVED immediately, stray pending orders block COMPLETE, stale approval signatures removed, signer key pinned by SHA-256. Accepted lows: transport close URL bound by the desk (not the transport); derived P&L caveated; stale recorded baseline gate superseded by the live preflight reconcile.

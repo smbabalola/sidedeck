@@ -42,7 +42,7 @@ def test_offset_aware_fresh_quotes_are_accepted(date):
     (NOW - timedelta(seconds=1, microseconds=250000)).replace(tzinfo=None).isoformat(),
 ])
 def test_fresh_naive_utc_quote_is_accepted_and_marked(stamp):
-    q = parse_fresh_quote(quote(stamp), instrument_id=1004, now=NOW)
+    q = parse_fresh_quote(quote(stamp), instrument_id=1004, now=NOW, allow_naive_utc=True)
     assert q.time_basis == NAIVE_AS_UTC
     assert q.observed_at.tzinfo is timezone.utc
     assert 0 <= (NOW - q.observed_at).total_seconds() <= MAX_QUOTE_AGE_SECONDS
@@ -55,7 +55,7 @@ def test_naive_local_time_from_any_real_non_utc_zone_is_rejected(offset):
     # A genuinely fresh quote written as naive *local* wall time in a non-UTC zone.
     local_wall = (NOW - timedelta(seconds=2) + offset).replace(tzinfo=None).isoformat()
     with pytest.raises(EtoroDemoOrderError, match="stale or future-dated"):
-        parse_fresh_quote(quote(local_wall), instrument_id=1004, now=NOW)
+        parse_fresh_quote(quote(local_wall), instrument_id=1004, now=NOW, allow_naive_utc=True)
 
 
 @pytest.mark.parametrize("date", [
@@ -66,7 +66,7 @@ def test_naive_local_time_from_any_real_non_utc_zone_is_rejected(offset):
 ])
 def test_stale_and_future_quotes_still_fail_closed(date):
     with pytest.raises(EtoroDemoOrderError, match="stale or future-dated"):
-        parse_fresh_quote(quote(date), instrument_id=1004, now=NOW)
+        parse_fresh_quote(quote(date), instrument_id=1004, now=NOW, allow_naive_utc=True)
 
 
 @pytest.mark.parametrize("date", ["", "not-a-date", "2026-13-40T25:61:00", "18:01:17",
@@ -74,7 +74,7 @@ def test_stale_and_future_quotes_still_fail_closed(date):
                                   ["2026-10-23T18:01:17"]])
 def test_malformed_or_wrongly_typed_quote_time_is_rejected(date):
     with pytest.raises(EtoroDemoOrderError, match="invalid"):
-        parse_fresh_quote(quote(date), instrument_id=1004, now=NOW)
+        parse_fresh_quote(quote(date), instrument_id=1004, now=NOW, allow_naive_utc=True)
 
 
 def test_naive_local_clock_is_refused():
@@ -86,5 +86,23 @@ def test_naive_local_clock_is_refused():
 def test_dotnet_style_naive_stamps_parse(fmt):
     moment = NOW - timedelta(seconds=3)
     stamp = fmt.format(d=moment.strftime("%Y-%m-%d"), t=moment.strftime("%H:%M:%S"))
-    q = parse_fresh_quote(quote(stamp), instrument_id=1004, now=NOW)
+    q = parse_fresh_quote(quote(stamp), instrument_id=1004, now=NOW, allow_naive_utc=True)
     assert q.time_basis == NAIVE_AS_UTC and 2 < (NOW - q.observed_at).total_seconds() <= 3
+
+
+def test_naive_quote_time_is_refused_unless_the_pilot_opts_in():
+    stamp = naive(NOW - timedelta(seconds=2))
+    with pytest.raises(EtoroDemoOrderError, match="timezone-aware"):
+        parse_fresh_quote(quote(stamp), instrument_id=1004, now=NOW)            # default off
+    assert parse_fresh_quote(quote((NOW - timedelta(seconds=2)).isoformat()),
+                             instrument_id=1004, now=NOW).time_basis == EXPLICIT_OFFSET
+
+
+def test_audit_records_only_the_timestamp_shape():
+    from sidedeck.application.sd058_forensic_audit import summarize_schema
+    fields = summarize_schema({"results": [{"date": "2026-10-23T18:01:17.1234567"}]})["fields"]
+    row = [f for f in fields if f["path"] == "results[0].date"][0]
+    assert row["format_shape"] == "9999-99-99T99:99:99.9999999"
+    aware = summarize_schema({"date": "2026-10-23T18:01:17+00:00"})["fields"]
+    assert [f for f in aware if f["path"] == "date"][0]["format_shape"].endswith("+99:99")
+    assert "2026" not in str(fields)

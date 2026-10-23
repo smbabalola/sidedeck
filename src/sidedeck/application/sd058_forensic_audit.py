@@ -48,6 +48,13 @@ def _kind(value: Any) -> str:
     return "other"
 
 
+def _time_shape(value: str) -> str:
+    """Timestamp layout without its value: digits -> 9; ISO separators, T, Z and offset signs
+    kept; anything else -> ?. e.g. '9999-99-99T99:99:99.9999999' (no offset) or '...+99:99'."""
+    return "".join("9" if c.isdigit() and c.isascii() else c if c in "-:.T Z+tz" else "?"
+                   for c in value[:40])
+
+
 def summarize_schema(payload: Any) -> dict[str, Any]:
     """Return field names/types and safe currency codes, never arbitrary values."""
     fields: list[dict[str, Any]] = []
@@ -64,6 +71,8 @@ def summarize_schema(payload: Any) -> dict[str, Any]:
                 item["currency_code"] = normalized
                 # Safe boolean only: was the raw value already the exact code?
                 item["currency_exact"] = value == normalized
+        if key in ("date", "timestamp", "time") and isinstance(value, str):
+            item["format_shape"] = _time_shape(value)      # shape only, never the value
         fields.append(item)
         if depth >= _MAX_DEPTH:
             return
