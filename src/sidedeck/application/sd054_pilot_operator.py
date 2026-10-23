@@ -222,7 +222,8 @@ def recorded_baseline_status(ledger_path: str) -> str:
 
 
 # ---- production entry point (SD-053 MSFT pilot) -------------------------------------
-PINNED_INTENT_DIGEST = "71e111b3a8806dc9b8e59d96ce1ef6e6a0b64dc2b00363465244acccaad09a62"
+# Fresh, separately reviewed 2026-10-26 pilot intent. The prior 2026-10-23 digest is expired.
+PINNED_INTENT_DIGEST = "7f19fc0d7ff033d7f69088d9381d34077bc3a6b97ea882be0be979ca9d56658f"
 PRINCIPAL = "owner@sidedeck"
 # SHA-256 of the owner's ssh-ed25519 public key blob in data/approval_allowed_signers
 # (verified 2026-10-22). A different or additional signer key is refused.
