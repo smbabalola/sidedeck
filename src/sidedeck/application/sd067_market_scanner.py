@@ -18,11 +18,8 @@ from decimal import Decimal
 from typing import Callable, Iterable, Mapping, Sequence
 
 from sidedeck.application.sd014_strategy_engine import StrategyBar
-from sidedeck.application.us_equity_calendar import (
-    COMPLETE_CALENDAR_YEARS,
-    expected_regular_sessions,
-    is_regular_session,
-)
+from sidedeck.application.sd089_exchange_calendar import XNYS, ExchangeCalendar
+from sidedeck.application.us_equity_calendar import COMPLETE_CALENDAR_YEARS
 
 FEATURE_VERSION = "sd067.features.v1"
 TRACKS = ("DAY", "SWING", "POSITION")
@@ -84,12 +81,12 @@ def _validate(bars: Sequence[StrategyBar]) -> tuple[StrategyBar, ...]:
     return ordered
 
 
-def _require_contiguous(window: Sequence[StrategyBar]) -> None:
-    """Every regular session between the first and last bar must be present."""
+def _require_contiguous(window: Sequence[StrategyBar], cal: ExchangeCalendar = XNYS) -> None:
+    """Every regular session of the instrument's exchange between first and last bar."""
     first, last = window[0].day, window[-1].day
-    if first.year not in _CALENDAR_YEARS or last.year not in _CALENDAR_YEARS:
+    if first.year not in cal.covered_years or last.year not in cal.covered_years:
         raise ScanError("CALENDAR_UNCOVERED")
-    if tuple(b.day for b in window) != expected_regular_sessions(first, last):
+    if tuple(b.day for b in window) != cal.sessions_between(first, last):
         raise ScanError("MISSING_OR_NON_SESSION_BARS")
 
 
@@ -124,8 +121,13 @@ def compute_features(
     benchmark: Sequence[StrategyBar] | None = None,
     spread_bps: Decimal | None = None,
     event_flags: Iterable[str] = (),
+    calendar: ExchangeCalendar = XNYS,
 ) -> ScanFeatures:
-    """Features using only bars dated on or before ``cutoff``; later bars are refused."""
+    """Features using only bars dated on or before ``cutoff``; later bars are refused.
+
+    ``calendar`` is the instrument's exchange calendar (SD-089); the benchmark must
+    trade on the same calendar or relative strength/regime become UNAVAILABLE.
+    """
     ordered = _validate(bars)
     if not ordered:
         raise ScanError("NO_BARS")
@@ -136,7 +138,7 @@ def compute_features(
     window = ordered[-253:]
     if len(window) < _MIN_SESSIONS:
         raise ScanError("INSUFFICIENT_SESSIONS")
-    _require_contiguous(window)
+    _require_contiguous(window, calendar)
     closes = [b.close for b in window]
     last = window[-1]
     prior = window[-21:-1]
@@ -162,7 +164,7 @@ def compute_features(
         bench = tuple(b for b in bench if b.day <= cutoff)[-253:]
         try:
             if bench:
-                _require_contiguous(bench)
+                _require_contiguous(bench, calendar)
             bench_ok = bool(bench) and bench[-1].day == cutoff
         except ScanError:
             bench_ok = False  # benchmark gaps make RS/regime UNAVAILABLE, not the instrument
@@ -254,13 +256,15 @@ def run_broad_scan(
     spreads: Mapping[str, Decimal] | None = None,
     events: Mapping[str, Iterable[str]] | None = None,
     clock: Callable[[], float] = time.perf_counter,
+    calendar: ExchangeCalendar = XNYS,
 ) -> ScanReport:
     """Scan ``universe`` in bounded batches. One instrument's failure never stops the scan.
 
     ``data_basis`` must say what the bars are (e.g. ``FIXTURE`` or a source id); a
-    fixture scan is never reported as market coverage.
+    fixture scan is never reported as market coverage. All instruments in one scan
+    share ``calendar``; scan each exchange separately.
     """
-    if cutoff.year not in _CALENDAR_YEARS or not is_regular_session(cutoff):
+    if cutoff.year not in calendar.covered_years or not calendar.is_session(cutoff):
         raise ScanError("cutoff must be a regular session inside the verified calendar")
     if not data_basis.strip():
         raise ScanError("data_basis is required")
@@ -297,6 +301,7 @@ def run_broad_scan(
                     continue
                 feat = compute_features(
                     cid, bars, cutoff, benchmark=benchmark, spread_bps=spread, event_flags=flags,
+                    calendar=calendar,
                 )
             except ScanError as exc:
                 excluded.append((cid, str(exc)))

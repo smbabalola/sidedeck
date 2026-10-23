@@ -1,9 +1,12 @@
 """SD-068 calendar-aware DAY / SWING / POSITION job scheduler (no daemon, no network).
 
-Sessions are computed in ``America/New_York`` and converted to UTC, so daylight
-saving transitions and UK clock differences never shift the market session.
-Holidays come from :mod:`us_equity_calendar`; dates outside its verified years
-fail closed. Early closes are listed explicitly below.
+Each job names its exchange calendar (SD-089): ``XNYS`` sessions are computed in
+``America/New_York`` and ``XLON`` sessions in ``Europe/London``, then converted to
+UTC, so daylight-saving transitions and clock differences never shift a session
+and the two markets never share hours by assumption. Dates outside a calendar's
+covered years fail closed. Jobs on non-US calendars must be namespaced by
+calendar (e.g. ``xlon.swing_review``) so US and UK slots can never collide, and
+every exchange has its own per-track controls (SD-091).
 
 The scheduler only *plans and records* runs. Persistence prevents overlapping
 runs and duplicated slots, and coalesces missed slots after a restart so an
@@ -20,21 +23,17 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from sidedeck.application.us_equity_calendar import COMPLETE_CALENDAR_YEARS, is_regular_session
+from sidedeck.application.sd089_exchange_calendar import CALENDARS, US_EARLY_CLOSES
+from sidedeck.application.sd089_exchange_calendar import calendar as exchange_calendar
+from sidedeck.application.us_equity_calendar import COMPLETE_CALENDAR_YEARS
 
 NEW_YORK = ZoneInfo("America/New_York")
 REGULAR_OPEN = time(9, 30)
 REGULAR_CLOSE = time(16, 0)
 EARLY_CLOSE = time(13, 0)
 # NYSE/Nasdaq 1:00 p.m. ET early closes (published exchange holiday schedules).
-US_EQUITY_EARLY_CLOSES: frozenset[date] = frozenset({
-    date(2021, 11, 26),
-    date(2022, 11, 25),
-    date(2023, 7, 3), date(2023, 11, 24),
-    date(2024, 7, 3), date(2024, 11, 29), date(2024, 12, 24),
-    date(2025, 7, 3), date(2025, 11, 28), date(2025, 12, 24),
-    date(2026, 11, 27), date(2026, 12, 24),
-})
+# Kept for compatibility; the XNYS calendar in SD-089 is the single source for sessions.
+US_EQUITY_EARLY_CLOSES: frozenset[date] = frozenset(US_EARLY_CLOSES) | {date(2021, 11, 26)}
 COVERED_YEARS = COMPLETE_CALENDAR_YEARS
 TRACKS = ("DAY", "SWING", "POSITION", "SYSTEM")
 MODES = ("RESEARCH_ONLY", "SIMULATION_ONLY")
@@ -53,15 +52,16 @@ class Session:
     early_close: bool
 
 
-def session_for(day: date) -> Session | None:
-    if day.year not in COVERED_YEARS:
-        raise SchedulerError(f"calendar does not cover {day.year}; refusing to guess sessions")
-    if not is_regular_session(day):
+def session_for(day: date, calendar_id: str = "XNYS") -> Session | None:
+    cal = exchange_calendar(calendar_id)
+    if day.year not in cal.covered_years:
+        raise SchedulerError(
+            f"{calendar_id} calendar does not cover {day.year}; refusing to guess sessions"
+        )
+    session = cal.session(day)
+    if session is None:
         return None
-    early = day in US_EQUITY_EARLY_CLOSES
-    open_local = datetime.combine(day, REGULAR_OPEN, NEW_YORK)
-    close_local = datetime.combine(day, EARLY_CLOSE if early else REGULAR_CLOSE, NEW_YORK)
-    return Session(day, open_local.astimezone(UTC), close_local.astimezone(UTC), early)
+    return Session(day, session.open_utc, session.close_utc, session.early_close)
 
 
 @dataclass(frozen=True)
@@ -96,10 +96,17 @@ class JobSpec:
     enabled: bool = True
     requires_authorization: bool = False  # e.g. authenticated broker reads
     max_lateness_seconds: int | None = None  # default: one interval, or 60 min for offsets
+    calendar_id: str = "XNYS"
 
     def __post_init__(self) -> None:
         if self.track not in TRACKS:
             raise SchedulerError(f"unknown track {self.track}")
+        if self.calendar_id not in CALENDARS:
+            raise SchedulerError(f"unknown exchange calendar {self.calendar_id}")
+        if self.calendar_id != "XNYS" and not self.job_id.startswith(
+            f"{self.calendar_id.lower()}."
+        ):
+            raise SchedulerError("non-US jobs must be namespaced by calendar, e.g. 'xlon.'")
         if not self.job_id.strip() or self.lease_seconds <= 0:
             raise SchedulerError("invalid job spec")
         if self.max_lateness_seconds is not None and self.max_lateness_seconds <= 0:
@@ -137,24 +144,49 @@ DEFAULT_JOBS: tuple[JobSpec, ...] = (
             Cadence(offsets=(("CLOSE", 90),))),
 )
 
+# London Stock Exchange jobs (SD-091). Research/simulation planning only. DAY is
+# disabled: no approved UK intraday or spread data exists (SD-094).
+UK_DEFAULT_JOBS: tuple[JobSpec, ...] = (
+    JobSpec("xlon.universe_refresh", "SYSTEM", "UK point-in-time universe refresh",
+            Cadence(offsets=(("OPEN", -150),)), calendar_id="XLON"),
+    JobSpec("xlon.broad_scan", "SYSTEM", "Daily broad UK scan on the prior LSE close",
+            Cadence(offsets=(("OPEN", -120),)), lease_seconds=3600, calendar_id="XLON"),
+    JobSpec("xlon.day_candidate_scan", "DAY", "UK DAY scan (blocked: no approved intraday data)",
+            Cadence(every_minutes=5, interval_start_offset=5, interval_end_offset=-15),
+            lease_seconds=240, enabled=False, calendar_id="XLON"),
+    JobSpec("xlon.swing_review", "SWING", "UK SWING review: pre-open, mid-session, near close",
+            Cadence(offsets=(("OPEN", -30), ("OPEN", 240), ("CLOSE", -30))),
+            calendar_id="XLON"),
+    JobSpec("xlon.position_daily", "POSITION", "UK POSITION daily update after the LSE close",
+            Cadence(offsets=(("CLOSE", 60),)), calendar_id="XLON"),
+    JobSpec("xlon.position_weekly", "POSITION", "UK POSITION weekly reassessment",
+            Cadence(offsets=(("CLOSE", 120),), weekly_last_session=True), lease_seconds=7200,
+            calendar_id="XLON"),
+    JobSpec("xlon.broker_reconcile", "SYSTEM", "UK broker reconciliation (not authorized)",
+            Cadence(offsets=(("OPEN", -20), ("CLOSE", 20))), enabled=False,
+            requires_authorization=True, calendar_id="XLON"),
+)
+MULTI_EXCHANGE_JOBS: tuple[JobSpec, ...] = DEFAULT_JOBS + UK_DEFAULT_JOBS
 
-def _is_last_session_of_week(day: date) -> bool:
+
+def _is_last_session_of_week(day: date, calendar_id: str = "XNYS") -> bool:
+    cal = exchange_calendar(calendar_id)
     nxt = day + timedelta(days=1)
     while nxt.isocalendar()[1] == day.isocalendar()[1]:
-        if nxt.year not in COVERED_YEARS:
+        if nxt.year not in cal.covered_years:
             return True
-        if is_regular_session(nxt):
+        if cal.is_session(nxt):
             return False
         nxt += timedelta(days=1)
     return True
 
 
 def slots_for(job: JobSpec, day: date) -> tuple[datetime, ...]:
-    session = session_for(day)
+    session = session_for(day, job.calendar_id)
     if session is None:
         return ()
     cad = job.cadence
-    if cad.weekly_last_session and not _is_last_session_of_week(day):
+    if cad.weekly_last_session and not _is_last_session_of_week(day, job.calendar_id):
         return ()
     slots: set[datetime] = set()
     for anchor, minutes in cad.offsets:
@@ -204,6 +236,16 @@ class SchedulerStore:
                 conn.execute(
                     "INSERT OR IGNORE INTO tracks VALUES (?, 1, 'RESEARCH_ONLY')", (track,)
                 )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS exchange_tracks (calendar_id TEXT, track TEXT,"
+                " enabled INTEGER, mode TEXT, PRIMARY KEY (calendar_id, track))"
+            )
+            for cal_id in sorted({j.calendar_id for j in jobs}):
+                for track in TRACKS:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO exchange_tracks VALUES (?, ?, 1, 'RESEARCH_ONLY')",
+                        (cal_id, track),
+                    )
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self._path, isolation_level=None)
@@ -230,6 +272,33 @@ class SchedulerStore:
             for t, e, m in rows
         }
 
+    def set_exchange_track(
+        self, calendar_id: str, track: str, *, enabled: bool, mode: str = "RESEARCH_ONLY",
+    ) -> None:
+        """Per-exchange track control; disabling UK SWING never touches US SWING."""
+        if calendar_id not in CALENDARS or track not in TRACKS:
+            raise SchedulerError("unknown calendar or track")
+        if mode not in MODES:
+            raise SchedulerError("only RESEARCH_ONLY or SIMULATION_ONLY can be set here")
+        with closing(self._conn()) as conn:
+            conn.execute(
+                "INSERT INTO exchange_tracks VALUES (?, ?, ?, ?) ON CONFLICT(calendar_id, track)"
+                " DO UPDATE SET enabled=excluded.enabled, mode=excluded.mode",
+                (calendar_id, track, int(enabled), mode),
+            )
+
+    def exchange_track_controls(self) -> dict[tuple[str, str], tuple[bool, str]]:
+        """Stored per-exchange controls; an unknown mode disables that exchange track."""
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                "SELECT calendar_id, track, enabled, mode FROM exchange_tracks"
+            ).fetchall()
+        return {
+            (str(c), str(t)): (bool(e) and m in MODES,
+                               str(m) if m in MODES else "INVALID_MODE_DISABLED")
+            for c, t, e, m in rows
+        }
+
     def _runnable(self, job: JobSpec) -> str | None:
         if not job.enabled:
             return "JOB_DISABLED"
@@ -237,6 +306,8 @@ class SchedulerStore:
             return "REQUIRES_AUTHORIZATION"
         if not self.track_controls().get(job.track, (False, ""))[0]:
             return "TRACK_DISABLED"
+        if not self.exchange_track_controls().get((job.calendar_id, job.track), (False, ""))[0]:
+            return "EXCHANGE_TRACK_DISABLED"
         return None
 
     # --- planning -------------------------------------------------------------
@@ -245,15 +316,16 @@ class SchedulerStore:
         if now.tzinfo is None:
             raise SchedulerError("timezone-aware time required")
         now = now.astimezone(UTC)
-        local_day = now.astimezone(NEW_YORK).date()
-        previous = local_day - timedelta(days=1)
-        days = ([previous] if previous.year in COVERED_YEARS else []) + [local_day]
         due: list[DueRun] = []
         with closing(self._conn()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             for job in self.jobs.values():
                 if self._runnable(job) is not None:
                     continue
+                cal = exchange_calendar(job.calendar_id)
+                local_day = cal.local_date(now)
+                previous = local_day - timedelta(days=1)
+                days = ([previous] if previous.year in cal.covered_years else []) + [local_day]
                 slots = [s for d in days for s in slots_for(job, d) if s <= now]
                 recorded = {
                     row[0] for row in conn.execute(
@@ -288,7 +360,7 @@ class SchedulerStore:
         blocked = self._runnable(job)
         if blocked is not None:
             return ClaimResult(False, blocked)
-        if slot not in slots_for(job, slot.astimezone(NEW_YORK).date()):
+        if slot not in slots_for(job, exchange_calendar(job.calendar_id).local_date(slot)):
             return ClaimResult(False, "NOT_A_SCHEDULED_SLOT")
         if slot > now:
             return ClaimResult(False, "NOT_YET_DUE")
