@@ -564,3 +564,46 @@ def test_console_approval_gives_up_after_bounded_empty_presses(signed_data, monk
     monkeypatch.setattr("builtins.input", lambda prompt: calls.append(prompt) or "")
     assert operator.console_approval("open", "ef" * 32, "scope") == ""
     assert len(calls) == operator.MAX_EMPTY_APPROVAL_PROMPTS
+
+
+# ---- Monday readiness: full offline rehearsal through the production approval prompts -------
+def test_rehearsal_production_console_approvals_buy_fill_close_reconcile(keys, signed_data,
+                                                                         tmp_path, monkeypatch,
+                                                                         capsys):
+    """run_pilot + the real console_approval (files, prompts, ssh-keygen file signatures),
+    offline simulator broker: open approval -> fill -> separate close approval -> full close
+    -> MATCHED final snapshot. The owner presses Enter once too early at each prompt."""
+    data, _ = signed_data
+    pressed = []
+
+    def owner_at_keyboard(prompt):
+        label = "open" if "[open]" in prompt else "close"
+        pressed.append(label)
+        digest_file = data / "sd054" / f"{label}-approval.digest"
+        if pressed.count(label) == 1:
+            return ""                                   # early Enter: must re-prompt
+        # the owner runs the displayed command in a SECOND window (file signature)
+        subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(keys / "owner"), "-n",
+                        operator.APPROVAL_NAMESPACE, str(digest_file)],
+                       check=True, capture_output=True)
+        return ""
+
+    monkeypatch.setattr("builtins.input", owner_at_keyboard)
+    rig = Rig(keys, tmp_path)
+    report = operator.run_pilot(
+        intent=rig.intent, release_signature=sign(keys, rig.intent.digest(), PILOT_NAMESPACE),
+        principal=PRINCIPAL, signers_path=str(keys / "allowed_signers"), env=ENV,
+        baseline=BASELINE, baseline_status="MATCHED", transport_factory=rig.factory,
+        await_approval=operator.console_approval, paths=operator.OperatorPaths(tmp_path / "op"))
+
+    assert report["result"] == "COMPLETE"                       # close FILLED, flat, MATCHED
+    assert pressed == ["open", "open", "close", "close"]
+    phases = [s["phase"] for s in report["steps"]]
+    assert phases == ["preflight", "open", "close"]
+    assert report["steps"][1]["result"] == "OPEN_FILLED_AWAITING_CLOSE_APPROVAL"
+    assert report["steps"][1]["entry"]["units"] == "0.4"
+    assert report["steps"][2]["sidedeck_open_positions"] == 0
+    assert report["steps"][2]["writes"] == 2 and len(rig.posts()) == 2
+    assert report["steps"][2]["kill_switch"] == "CLEAR"
+    err = capsys.readouterr().err
+    assert err.count("SECOND PowerShell window") >= 2 and "STOP: no signature file yet" in err

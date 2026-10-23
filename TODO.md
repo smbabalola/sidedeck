@@ -19,7 +19,10 @@
 > widen it for the pilot (the IOC limit ≤ ask × 1.005 and ≤ 552.56 still caps price).
 > **Next pilot:** Monday 2026-10-26 14:00–16:00 UTC (= UK), `af2213c5-95c4-4207-a119-44df0ad0f78b`,
 > digest `1ab4d2c8f85c94ef6fca78164b3e1e593929cc6e3cf7c52c82eae135c3d7fd4a`; needs owner
-> signature, per-pilot `NAIVE_AS_UTC` acceptance and separate lock-lift approval. COMPLETE only
+> signature, per-pilot `NAIVE_AS_UTC` acceptance and separate lock-lift approval. Offline rehearsal
+> through the production prompts (early Enter, open/close file signatures, simulated fill,
+> full close, MATCHED) passes. Runbook: `docs/SD058_MONDAY_OWNER_RUNBOOK.md` (incl. clock resync:
+> local clock within ~1–3 s of HTTP time, Windows dispersion ~7.8 s vs the 5 s future limit). COMPLETE only
 > on broker records of open fill, close fill, flat pilot position, MATCHED reconciliation,
 > baseline unchanged and transport re-locked.
 
