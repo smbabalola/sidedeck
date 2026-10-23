@@ -140,6 +140,14 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 ## Session control and next autonomous batch
 
+**Pilot status check (2026-10-23 13:41 UTC / 14:41 London):** local `data/sd054/` is absent and
+there is no local broker order, fill, close, halt, or reconciliation report. The signed MSFT
+window (14:00–15:30 UTC) had not opened at the time of the check, so the pilot is **not evidenced
+as completed or halted and is not yet expired**. No broker request was made by this check. Do not
+start SD-074F or alter the MSFT release while this window remains active; after 15:30 UTC, if no
+owner-run evidence appears, classify this authorization as expired and require a new separately
+approved window rather than rolling it forward.
+
 **Batch AC3 (2026-10-23; Codex recovery and independent UK verification):**
 
 - Recovered Claude's uncommitted P5 work without resetting or overwriting the nested checkout: SD-094 authorization package, SD-094A offline runner, SD-097 UK read-only workstation/API, and SD-098 licensed-file importer, plus the associated SD-096 follow-ups and UI contract/E2E coverage.
