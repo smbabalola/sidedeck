@@ -169,6 +169,8 @@ approved window rather than rolling it forward.
   proposal that requests only the missing eligibility evidence; do not execute it automatically.
   Keep the USD gate and `UNLOCKED_PILOT_DIGEST = None` unchanged until authenticated evidence is
   reviewed.
+- Proposal prepared: `docs/SD058_ELIGIBILITY_DIAGNOSTIC_AUTHORIZATION.md`. It is not signed or
+  executed; owner authorization is required for the single bounded eligibility request.
 
 **Batch AC3 (2026-10-23; Codex recovery and independent UK verification):**
 
