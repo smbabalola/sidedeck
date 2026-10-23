@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,8 @@ OPEN_APPROVAL_TTL = timedelta(minutes=5)      # the fresh quote must still be <=
 CLOSE_APPROVAL_TTL = timedelta(minutes=30)
 # Enough signed window left after the open for the close prompt and 3 close-side requests.
 MIN_WINDOW_REMAINING_AT_OPEN = timedelta(minutes=20)
+# Enter presses without a signature file before the prompt gives up (owner can always type NO).
+MAX_EMPTY_APPROVAL_PROMPTS = 20
 # Dedicated namespace: a pilot approval signature is unusable for any other SideDeck approval.
 APPROVAL_NAMESPACE = "sidedeck-etoro-pilot-approval"
 READY = "READY_FOR_OPEN_APPROVAL"
@@ -222,9 +225,9 @@ def recorded_baseline_status(ledger_path: str) -> str:
 
 
 # ---- production entry point (SD-053 MSFT pilot) -------------------------------------
-# Fresh 2026-10-23 second retry intent (after the currency and naive-quote-time fixes).
-# Older digests, including the consumed b0be3fe2 and 0e1ab7c2 pilots, are not reusable.
-PINNED_INTENT_DIGEST = "4e1cea6fa043cbb13f0ef9fdd83194c6d0558b71727515a9c4a3d637a1b70599"
+# Fresh 2026-10-23 third attempt (55d66780 reached open approval but was not signed).
+# Older digests, including the consumed b0be3fe2, 0e1ab7c2 and 4e1cea6f pilots, are not reusable.
+PINNED_INTENT_DIGEST = "bff0fef68ddd80b234915810c565572150e30fc917a38b414e113521f0214fbf"
 PRINCIPAL = "owner@sidedeck"
 # SHA-256 of the owner's ssh-ed25519 public key blob in data/approval_allowed_signers
 # (verified 2026-10-22). A different or additional signer key is refused.
@@ -296,10 +299,22 @@ def console_approval(label: str, digest: str, scope: str) -> str:
                "else { 'DIGEST MISMATCH - do not sign' }")
     print(json.dumps({"approval": label, "scope": scope, "digest": digest,
                       "sign_in_powershell": command}, indent=2))
-    answer = input(f"Sign the {label} digest, then press Enter (type NO to decline): ")
-    if answer.strip().upper() == "NO" or not signature.is_file():
-        return ""
-    return signature.read_text(encoding="utf-8")
+    steps = (f"\n=== OWNER {label.upper()} APPROVAL - DO NOT press Enter yet ===\n"
+             "1. Leave THIS window running.\n"
+             "2. Open a SECOND PowerShell window and cd to the SideDeck folder.\n"
+             "3. Paste the 'sign_in_powershell' command above there, enter your passphrase,\n"
+             f"   and wait for: Write signature to ...{path.name}.sig\n"
+             "4. Come back to THIS window and press Enter (type NO to decline).\n")
+    print(steps, file=sys.stderr, flush=True)
+    for _ in range(MAX_EMPTY_APPROVAL_PROMPTS):
+        answer = input(f"[{label}] Signed in the second window? Press Enter (or NO): ")
+        if answer.strip().upper() == "NO":
+            return ""
+        if signature.is_file():
+            return signature.read_text(encoding="utf-8")
+        print(f"STOP: no signature file yet at {signature}. Sign it in the SECOND PowerShell "
+              "window first, then press Enter here.", file=sys.stderr, flush=True)
+    return ""
 
 
 def main(argv: list[str] | None = None) -> int:

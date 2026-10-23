@@ -531,3 +531,36 @@ def test_real_routes_stay_excluded_for_scoped_pilots(keys, tmp_path):
                          ("GET", "/api/v1/trading/info/pnl")):
         with pytest.raises(RealExecutionExcluded):
             require_demo_route(method, path)
+
+
+# ---- owner signing UX: an early Enter must not silently abort the pilot ------------------
+def test_console_approval_reprompts_until_the_signature_exists(signed_data, monkeypatch,
+                                                               capsys):
+    data, _ = signed_data
+    sig = data / "sd054" / "open-approval.digest.sig"
+    answers = iter(["", "", "go"])
+
+    def fake_input(prompt):
+        answer = next(answers)
+        if answer == "go":                      # owner signs in the SECOND window, then Enter
+            sig.write_text("SSHSIG-synthetic", encoding="utf-8")
+        return answer
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    assert operator.console_approval("open", "ab" * 32, "scope") == "SSHSIG-synthetic"
+    guidance = capsys.readouterr().err
+    assert "SECOND PowerShell window" in guidance and "no signature file yet" in guidance
+
+
+def test_console_approval_no_declines_immediately(signed_data, monkeypatch):
+    calls = []
+    monkeypatch.setattr("builtins.input", lambda prompt: calls.append(prompt) or "no")
+    assert operator.console_approval("close", "cd" * 32, "scope") == ""
+    assert len(calls) == 1
+
+
+def test_console_approval_gives_up_after_bounded_empty_presses(signed_data, monkeypatch):
+    calls = []
+    monkeypatch.setattr("builtins.input", lambda prompt: calls.append(prompt) or "")
+    assert operator.console_approval("open", "ef" * 32, "scope") == ""
+    assert len(calls) == operator.MAX_EMPTY_APPROVAL_PROMPTS
