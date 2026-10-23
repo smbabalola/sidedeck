@@ -132,6 +132,11 @@ Each item has **ID | priority | status | dependencies | acceptance | evidence / 
 
 ## Session control and next autonomous batch
 
+**Batch AC1 (2026-10-23; Alpaca PAPER slot-B secret alias, ported from P2 `e11e90e`; secondary broker):**
+
+- Defect: `AlpacaPaperBinding` pins the slot-B secret name `ALPACA_API_SECRET_KEY2`, but SD-035 and the owner's local `.env` use `ALPACA_API_SECRET2`, so `paper_preflight` could never load its secret (fail-closed, not unsafe). `make_paper_get` now accepts either name; conflicting values fail closed before any request; slot A's `ALPACA_API_SECRET` is never used. P2's `paper.py`/`paper_pair.py` do not exist on P5, so this is a targeted patch, not a cherry-pick. P2 test counts are not P5 evidence.
+- Evidence: `src/sidedeck/infrastructure/alpaca_transport.py`, `tests/test_alpaca_transport.py` (3 new tests, mocked opener). Local: 1241 passed / 1 skipped, Ruff passed, mypy 164 files; no schema change. **No Alpaca request, credential use or order**; Alpaca authorizations remain exhausted, SD-035 stays `UNVERIFIED` (Pair B HTTP 401).
+
 **Batch AC (2026-10-22/23; workstation UI review remediation):**
 
 - CI on `b3151b7` failed before any frontend step: `npm install --no-package-lock` hit npm's null `edgesOut` bug. Fixed by committing `web/package-lock.json` (public registry only) and using `npm ci`; exact-head CI `39855633236` passed on `ae2f7e5` with the new unit and browser tests running in CI. Added SD-086 read-only summaries (`/api/portfolio/ledgers`, `/api/ops/authorizations`, opened `mode=ro`, never created).

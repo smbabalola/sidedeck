@@ -10,6 +10,17 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from sidedeck.infrastructure.alpaca_paper import AlpacaPaperBinding
 
 _ALLOWED = frozenset(("/v2/account", "/v2/positions", "/v2/orders?status=open&limit=500"))
+# Slot-B secret may also be stored as ALPACA_API_SECRET2 (the name SD-035 and the
+# owner's local .env use). Slot A's ALPACA_API_SECRET is never an alias here.
+_SECRET_ALIASES = {"ALPACA_API_SECRET_KEY2": ("ALPACA_API_SECRET_KEY2", "ALPACA_API_SECRET2")}
+
+
+def _paper_secret(binding_secret_env: str) -> str | None:
+    names = _SECRET_ALIASES.get(binding_secret_env, (binding_secret_env,))
+    values = [os.environ[name] for name in names if os.environ.get(name)]
+    if any(value != values[0] for value in values):
+        raise PaperReadError("conflicting SideDeck paper secret variables")
+    return values[0] if values else None
 
 
 class PaperReadError(RuntimeError):
@@ -35,7 +46,7 @@ def make_paper_get(binding: AlpacaPaperBinding, *, timeout_seconds: float = 5.0)
         if path not in _ALLOWED:
             raise PermissionError("endpoint not permitted for paper read-only transport")
         key = os.environ.get(binding.api_key_env)
-        secret = os.environ.get(binding.api_secret_env)
+        secret = _paper_secret(binding.api_secret_env)
         if not key or not secret:
             raise PaperReadError("SideDeck paper credentials unavailable")
         request = Request(
