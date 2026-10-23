@@ -61,6 +61,10 @@ MIN_KEY_BYTES = 32
 _SELF_CLAIMS = ("authenticated", "verified", "trusted", "signature", "mac", "source_id",
                 "source_role")
 _NONCE = re.compile(r"[0-9a-f]{32}")
+_MAC = re.compile(r"[0-9a-f]{64}")
+MAX_PAYLOAD_CHARS = 64_000
+MAX_RESEARCH_AGE = timedelta(hours=24)
+ATR_BAND = (Decimal("0.001"), Decimal("0.5"))    # ATR as a fraction of the sealed ask
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -213,6 +217,9 @@ class InputVerifier:
                  clock: Callable[[], datetime] = _utc_now) -> None:
         self._registry, self._nonces, self._clock = registry, nonces, clock
 
+    def now(self) -> datetime:
+        return self._clock().astimezone(timezone.utc)
+
     def verify(self, envelope: Envelope, kind: str) -> tuple[TrustedSource, dict[str, Any]]:
         if type(envelope) is not Envelope or envelope.kind != kind:
             raise InputRefused(f"expected a {kind} envelope")
@@ -221,9 +228,14 @@ class InputVerifier:
             raise InputRefused("envelope header fields must be strings")
         if type(envelope.payload) is not dict:
             raise InputRefused("envelope payload must be a plain JSON object")
+        if not _MAC.fullmatch(envelope.mac):
+            raise InputRefused("envelope MAC does not verify")
         try:                                  # one snapshot: MAC and use see the same bytes
-            body = json.loads(json.dumps(envelope.payload, sort_keys=True, allow_nan=False))
-        except (TypeError, ValueError):
+            text = json.dumps(envelope.payload, sort_keys=True, allow_nan=False)
+            if len(text) > MAX_PAYLOAD_CHARS:
+                raise InputRefused("envelope payload is too large")
+            body = json.loads(text)
+        except (TypeError, ValueError, RecursionError):
             raise InputRefused("envelope payload is not plain JSON") from None
         source = self._registry.get(envelope.source_id)
         if source is None or source.kind != kind:
@@ -365,6 +377,11 @@ class AuthenticatedRuntime:
             return Refusal((f"INPUT_REFUSED:{exc}",))
         if q.canonical_id != context.canonical_id:
             return Refusal(("QUOTE_INSTRUMENT_MISMATCH",))
+        now = self._verifier.now()
+        if context.as_of > now or now - context.as_of > MAX_RESEARCH_AGE:
+            return Refusal(("RESEARCH_CONTEXT_STALE",))
+        if not ATR_BAND[0] <= context.atr / q.ask <= ATR_BAND[1]:
+            return Refusal(("RESEARCH_ATR_OUT_OF_BAND",))
         # session_open is re-derived by the runtime from the exchange calendar.
         market = MarketContext(context.canonical_id, q.ask, q.quote_time, context.atr,
                                context.sector, True, context.execution_eligible,

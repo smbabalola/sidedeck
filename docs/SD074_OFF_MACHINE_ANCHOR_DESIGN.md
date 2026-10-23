@@ -1,6 +1,6 @@
-# SD-074 off-machine ledger and revocation anchoring — design (not implemented)
+# SD-074 off-machine ledger and revocation anchoring — design (verification block implemented offline)
 
-**Status:** design only. **Autonomous execution stays blocked** until this is implemented and
+**Status:** verification building block implemented offline (`src/sidedeck/application/sd074_external_anchor.py`, `tests/test_sd074_external_anchor.py`: rollback, deletion, replacement, tampered checkpoint and unavailable store all fail closed against a write-once stand-in). No real off-machine store exists and nothing is wired into the runtime. **Autonomous execution stays blocked** until this is implemented and
 independently verified (release blocker recorded under SD-064 and SD-063 residual R3).
 
 ## Problem

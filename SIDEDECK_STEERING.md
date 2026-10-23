@@ -302,7 +302,7 @@ pilot or change its reviewed execution behaviour. eToro Real is excluded permane
 | Unknown outcomes settled only by sealed broker reconciliation evidence | IMPLEMENTED offline |
 | Protective-exit authority after expiry/revocation (reduce-only) | IMPLEMENTED offline |
 | Incident report and runbook | IMPLEMENTED (`docs/SD074_OPERATOR_INCIDENT_RUNBOOK.md`) |
-| Off-machine ledger/revocation anchoring | BLOCKED — design only (`docs/SD074_OFF_MACHINE_ANCHOR_DESIGN.md`) |
+| Off-machine ledger/revocation anchoring | Verification building block IMPLEMENTED offline (`sd074_external_anchor`); real write-once remote store and wiring BLOCKED (owner provisioning) |
 | SD-064 grants wired into the Demo order transport; send-time caps | BLOCKED until the SD-058 pilot completes and the transport is re-locked |
 | Independent review of the full policy-to-transport lifecycle | BLOCKED on the wiring above |
 | Owner release of a bounded autonomous Demo operating period | BLOCKED_OWNER |

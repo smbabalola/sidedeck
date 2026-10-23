@@ -246,6 +246,23 @@ def test_mapping_payload_tricks_cannot_swap_verified_content(kit):
         kit.verifier.quote(replace(real, payload={**real.payload, 1: "x"}))
 
 
+def test_malformed_mac_deep_payload_and_bad_research_are_refusals_not_crashes(kit):
+    real = kit.quote()
+    with pytest.raises(InputRefused, match="MAC"):
+        kit.verifier.quote(replace(real, mac="é" * 64))
+    deep: dict = {}
+    node = deep
+    for _ in range(5000):
+        node["x"] = {}
+        node = node["x"]
+    with pytest.raises(InputRefused):
+        kit.verifier.quote(replace(real, payload={**real.payload, "deep": deep}))
+    old = kit.research(as_of=(kit.env.clock.now - timedelta(days=10)).isoformat())
+    assert kit.entry(research=old) == Refusal(("RESEARCH_CONTEXT_STALE",))
+    assert kit.entry(research=kit.research(atr="0.0001")) == \
+        Refusal(("RESEARCH_ATR_OUT_OF_BAND",))
+
+
 def test_raw_runtime_refuses_unverified_inputs_in_production(tmp_path):
     env = _Env(tmp_path)
     try:
