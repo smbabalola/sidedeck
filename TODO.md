@@ -148,6 +148,27 @@ start SD-074F or alter the MSFT release while this window remains active; after 
 owner-run evidence appears, classify this authorization as expired and require a new separately
 approved window rather than rolling it forward.
 
+**Batch AC4 (2026-10-23; SD-058 forensic evidence hardening):**
+
+- Added `sd058_forensic_audit.PreflightAudit`, an absolute-path, append-only SQLite ledger with
+  synchronous commits and update/delete refusal triggers. It records UTC time, signed pilot
+  digest, route, durable budget counters, outcome, sanitized error class/detail, and a schema
+  summary. Values are not stored; only field paths/types and non-sensitive three-letter currency
+  codes are retained. Sensitive authorization, token, account, balance and personal fields are
+  redacted.
+- Wired audit events into the Demo pilot transport and preflight parser boundary. Every received
+  response, transport failure, schema rejection and `ABORTED_PREFLIGHT` is recorded before the
+  result is returned. Reports now use fsynced temporary files followed by atomic replacement.
+  The operator path is resolved absolutely, so changing working directory does not redirect the
+  evidence store.
+- Verification: focused SD-054/audit tests `34 passed`; full suite `1439 passed, 1 skipped, 3
+  warnings`; Ruff passed; mypy passed; SQLite Alembic upgrade passed. PostgreSQL remains CI-only.
+  No broker request, transport unlock, credential read, or new pilot authorization occurred.
+- **Next READY:** after exact-HEAD CI, prepare a bounded, read-only diagnostic authorization
+  proposal that requests only the missing eligibility evidence; do not execute it automatically.
+  Keep the USD gate and `UNLOCKED_PILOT_DIGEST = None` unchanged until authenticated evidence is
+  reviewed.
+
 **Batch AC3 (2026-10-23; Codex recovery and independent UK verification):**
 
 - Recovered Claude's uncommitted P5 work without resetting or overwriting the nested checkout: SD-094 authorization package, SD-094A offline runner, SD-097 UK read-only workstation/API, and SD-098 licensed-file importer, plus the associated SD-096 follow-ups and UI contract/E2E coverage.

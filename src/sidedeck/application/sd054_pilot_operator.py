@@ -42,6 +42,7 @@ from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifie
 from sidedeck.application.sd046_etoro_demo_pilot import (
     PILOT_OPERATOR, UNRESOLVED, EtoroDemoPilot, PilotBudget, PilotTransport,
 )
+from sidedeck.application.sd058_forensic_audit import PreflightAudit
 from sidedeck.application.sd048_pilot_release import (
     PILOT_NAMESPACE, PilotIntent, PilotRelease, PilotReleaseStore, ReleaseGates, authorize_pilot,
 )
@@ -70,8 +71,12 @@ class OperatorRefused(RuntimeError):
 class OperatorPaths:
     root: Path
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "root", self.root.expanduser().resolve())
+
     def __getattr__(self, name: str) -> str:
-        if name in ("controls", "lineage", "outbox", "rate", "budget", "releases", "ledger"):
+        if name in ("controls", "lineage", "outbox", "rate", "budget", "releases", "ledger",
+                    "audit"):
             return str(self.root / f"{name}.sqlite3")
         raise AttributeError(name)
 
@@ -125,14 +130,16 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
                                   baseline=baseline, store=store)
         http = transport_factory(release, paths.ledger)
         stores.append(http)
-        transport = PilotTransport(http, budget)
+        audit = PreflightAudit(paths.audit, release.digest)
+        stores.append(audit)
+        transport = PilotTransport(http, budget, audit)
         desk = EtoroDemoDesk(
             outbox=outbox, controls=controls, lineage=lineage, transport=transport,
             policy=DemoDeskPolicy(intent.max_notional_usd, frozenset({intent.instrument_id}), 1),
             baseline=baseline, budget=rate, pilot_release=release)
         pilot = EtoroDemoPilot(desk=desk, transport=transport, budget=budget, controls=controls,
                                lineage=lineage, baseline=baseline, scope=intent.scope(),
-                               release=release)
+                               release=release, audit=audit)
 
         step = pilot.preflight()
         report["steps"].append(step)
@@ -189,7 +196,14 @@ def _finish(report: dict[str, Any], result: str, paths: OperatorPaths,
             **extra: Any) -> dict[str, Any]:
     report.update({"result": result, "finished_at": datetime.now(timezone.utc).isoformat(),
                    **extra})
-    paths.report.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    encoded = json.dumps(report, indent=2, default=str)
+    temporary = paths.report.with_name(paths.report.name + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(encoded)
+        handle.flush()
+        import os
+        os.fsync(handle.fileno())
+    temporary.replace(paths.report)
     return report
 
 

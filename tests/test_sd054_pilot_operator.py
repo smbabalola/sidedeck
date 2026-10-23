@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from sidedeck.application import sd054_pilot_operator as operator
+from sidedeck.application.sd058_forensic_audit import PreflightAudit
 from sidedeck.application.sd036_etoro_demo_desk import (
     SYNTHETIC_BASELINE_ROWS, OfflineEtoroDemoSimulator, TransportNotFound,
 )
@@ -350,6 +351,18 @@ def test_m5_generic_paper_approval_signature_is_not_accepted(keys, tmp_path):
     rig = Rig(keys, tmp_path)
     rig.approve = lambda label, digest, scope: sign(keys, digest, "sidedeck-paper-approval")
     assert rig.run()["result"] == "ABORTED_OPEN_NOT_APPROVED" and rig.posts() == []
+
+
+def test_operator_persists_preflight_audit_next_to_atomic_report(keys, tmp_path):
+    report = Rig(keys, tmp_path).run()
+    assert report["result"] == "COMPLETE"
+    audit_path = tmp_path / "op" / "audit.sqlite3"
+    assert audit_path.is_file() and (tmp_path / "op" / "report.json").is_file()
+    audit = PreflightAudit(audit_path, "unused")
+    rows = audit.rows()
+    audit.close()
+    assert [row["request_type"] for row in rows[:3]] == ["pnl", "eligibility", "rates"]
+    assert all(row["pilot_digest"] != "unused" for row in rows)
 
 
 def test_pinned_signer_refuses_other_or_extra_keys(keys, signed_data):

@@ -32,6 +32,7 @@ from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch
 from sidedeck.application.sd036_etoro_demo_desk import (
     EtoroDemoDesk, EtoroDemoLineage, EtoroDemoTransport, close_scope, open_scope,
 )
+from sidedeck.application.sd058_forensic_audit import PreflightAudit
 from sidedeck.domain.etoro_demo import DemoPortfolioSnapshot, field_type_issues, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import STRATEGY_BOOKS, BaselinePosition, reconcile_demo
 from sidedeck.domain.etoro_demo_orders import (
@@ -119,19 +120,34 @@ class PilotBudget:
 class PilotTransport:
     """Budget + shape-check wrapper. Inherits (never upgrades) the inner simulation flag."""
 
-    def __init__(self, inner: EtoroDemoTransport, budget: PilotBudget) -> None:
+    def __init__(self, inner: EtoroDemoTransport, budget: PilotBudget,
+                 audit: PreflightAudit | None = None) -> None:
         self.offline_simulation = getattr(inner, "offline_simulation", False) is True
-        self._inner, self._budget = inner, budget
+        self._inner, self._budget, self._audit = inner, budget, audit
 
     def send(self, method: str, path: str, *, reference_id: str,
              body: dict[str, Any] | None = None, query: dict[str, str] | None = None) -> Any:
         require_demo_route(method, path)
         route, shape = route_for(method, path)
         self._budget.reserve(route)
-        result = self._inner.send(method, path, reference_id=reference_id, body=body, query=query)
+        try:
+            result = self._inner.send(method, path, reference_id=reference_id, body=body,
+                                      query=query)
+        except Exception as exc:
+            if self._audit is not None:
+                self._audit.record(request_type=route, budget=self._budget.usage(),
+                                   outcome="REQUEST_FAILED", error=exc)
+            raise
+        if self._audit is not None:
+            self._audit.record(request_type=route, budget=self._budget.usage(),
+                               outcome="RESPONSE_RECEIVED", payload=result)
         issues = field_type_issues(result) if shape is None else response_shape_issues(shape, result)
         if issues:
-            raise PilotShapeError(f"{route} response shape check failed ({len(issues)} issue(s))")
+            error = PilotShapeError(f"{route} response shape check failed ({len(issues)} issue(s))")
+            if self._audit is not None:
+                self._audit.record(request_type=route, budget=self._budget.usage(),
+                                   outcome="RESPONSE_SCHEMA_REJECTED", payload=result, error=error)
+            raise error
         return result
 
 
@@ -161,12 +177,13 @@ class EtoroDemoPilot:
     def __init__(self, *, desk: EtoroDemoDesk, transport: PilotTransport, budget: PilotBudget,
                  controls: ApprovalKillSwitch, lineage: EtoroDemoLineage,
                  baseline: tuple[BaselinePosition, ...], scope: PilotScope,
-                 release: Any = None) -> None:
+                 release: Any = None, audit: PreflightAudit | None = None) -> None:
         scope.validate(baseline)
         if release is not None and release.intent.scope() != scope:
             raise PilotError("pilot scope differs from the signed pilot release")
         self._desk, self._transport, self._budget = desk, transport, budget
         self._controls, self._lineage = controls, lineage
+        self._audit = audit
         self._baseline, self._scope = baseline, scope
         self._quote: FreshQuote | None = None
         self._eligibility: Eligibility | None = None
@@ -207,6 +224,8 @@ class EtoroDemoPilot:
     def preflight(self) -> dict[str, Any]:
         """Read-only gates. On success, the exact open request awaits the owner's approval."""
         s = self._scope
+        last_route = "preflight"
+        last_payload: Any = None
         try:
             snapshot = self._snapshot()
             self._credit_start = snapshot.credit
@@ -214,18 +233,27 @@ class EtoroDemoPilot:
                     or self._sidedeck_open()):
                 return self._result("ABORTED_PREFLIGHT", "preflight",
                                     reason="baseline not MATCHED or positions/orders pending")
+            last_route = "eligibility"
+            last_payload = self._transport.send(
+                "POST", DEMO_ELIGIBILITY_PATH, reference_id=str(uuid.uuid4()),
+                body={"instrumentIds": [s.instrument_id], "currency": "USD"})
             eligibility = parse_eligibility(
-                self._transport.send("POST", DEMO_ELIGIBILITY_PATH, reference_id=str(uuid.uuid4()),
-                                     body={"instrumentIds": [s.instrument_id], "currency": "USD"}),
+                last_payload,
                 instrument_id=s.instrument_id, units=s.units,
                 notional_usd=s.units * s.max_limit_rate)
             now = datetime.now(timezone.utc)
+            last_route = "rates"
+            last_payload = self._transport.send(
+                "GET", MARKET_DATA_RATES_PATH, reference_id=str(uuid.uuid4()),
+                query={"instrumentIds": str(s.instrument_id)})
             quote = parse_fresh_quote(
-                self._transport.send("GET", MARKET_DATA_RATES_PATH, reference_id=str(uuid.uuid4()),
-                                     query={"instrumentIds": str(s.instrument_id)}),
+                last_payload,
                 instrument_id=s.instrument_id, now=now)
             limit = derive_limit(quote.ask, s.max_limit_rate, MAX_LIMIT_PREMIUM)
         except Exception as exc:  # no write has happened; abort cleanly
+            if self._audit is not None:
+                self._audit.record(request_type=last_route, budget=self._budget.usage(),
+                                   outcome="ABORTED_PREFLIGHT", payload=last_payload, error=exc)
             return self._result("ABORTED_PREFLIGHT", "preflight",
                                 reason=f"{type(exc).__name__}: {exc}")
         if s.units * limit < eligibility.min_position_usd:
