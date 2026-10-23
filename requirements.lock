@@ -1,0 +1,8 @@
+alembic==1.17.1
+pydantic==2.11.7
+SQLAlchemy==2.0.44
+pytest==8.4.1
+hypothesis==6.140.3
+ruff==0.13.1
+mypy==1.18.2
+psycopg[binary]==3.2.10
