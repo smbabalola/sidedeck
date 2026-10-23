@@ -44,3 +44,19 @@ The eToro Demo order desk is offline only. It accepts only a deterministic simul
 See [docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md](docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md).
 
 The live execution board and current blockers are maintained in [TODO.md](TODO.md), governed by [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md).
+
+## UK equities (research and simulation only)
+
+SideDeck supports London Stock Exchange instruments for discovery, research and local simulation
+([docs/SD088_UK_EQUITY_INTEGRATION.md](docs/SD088_UK_EQUITY_INTEGRATION.md), steering §13):
+an XLON calendar (Europe/London, 08:00–16:30, half days, bank holidays, DST), LSE TIDM/ISIN
+identity, strict pence (GBX/`GBp`) vs pounds (GBP) normalisation, per-exchange scheduling, a UK
+scan on the native scanner/decision engine and a SIMULATION order desk.
+
+```powershell
+.venv\Scripts\python.exe -m sidedeck.application.sd096_uk_acceptance
+```
+
+No genuine UK market data is held locally, so real-data UK scans abstain; the runner's scan and
+trade use a labelled synthetic fixture. UK broker execution is not enabled, and the MSFT eToro
+Demo pilot authorization does not extend to UK instruments.

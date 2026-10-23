@@ -243,3 +243,42 @@ Markets, Trading tracks, Agents, Strategies, Portfolio, Operations. Tracked as S
 - Verification per batch: TypeScript, production build, Vitest unit tests, Playwright E2E on three
   viewports with a mocked API, Python tests, Ruff, mypy, independent review, exact-HEAD CI.
 
+
+## 13. UK Equity Integration and Multi-Exchange Operations (owner directive 2026-10-23)
+
+SideDeck must support multiple exchange calendars, currencies, instrument identifiers and trading
+tracks. The UK market must have independently validated research, portfolio and broker mappings
+rather than inheriting US assumptions. Design and evidence:
+[docs/SD088_UK_EQUITY_INTEGRATION.md](docs/SD088_UK_EQUITY_INTEGRATION.md); work packages
+SD-088…SD-096 in `TODO.md` (Milestone 4). This section supersedes the "UK (phase 2) design-only"
+wording in §11 for **discovery, research and simulation only**.
+
+**Priority:** the SD-058 MSFT Demo pilot keeps precedence. UK work never edits the SD-053 signed
+intent, SD-057 scope, the digest-specific unlock, the US pilot request budget or the original
+protected eToro Demo baseline, and never uses the MSFT authorization for a UK instrument.
+
+**Rules (additive to §2 and §11):**
+- Calendars: every exchange has its own calendar, time zone, hours, holidays, half days and DST
+  (XNYS America/New_York 09:30–16:00; XLON Europe/London continuous 08:00–16:30, half days 12:30).
+  Never assume US and UK share hours or holidays. Uncovered years fail closed. Calendar tables
+  need authoritative corroboration before G1.
+- Identity: LSE TIDM + exchange + ISIN (check digit) where available; ticker changes as dated
+  intervals; vendor symbols (e.g. `.L`) are not identity. Unsupported security types (investment
+  trusts, preference shares, ETCs/ETNs, depositary receipts, …) are rejected, never guessed.
+- Units: every UK listing declares its quote unit. GBX/`GBp` (pence) and GBP (pounds) are never
+  confused; ambiguous labels are refused; research and accounting prices are normalised to GBP
+  with exact Decimal arithmetic; suspected unit flips fail closed.
+- Universe history: current FTSE constituent lists are snapshots and are never backdated; index
+  membership for history needs dated review evidence.
+- Scheduling: DAY/SWING/POSITION jobs are per exchange (`xlon.*` namespace), with per-exchange
+  track controls; no overlapping or duplicate runs; execution modes cannot be configured.
+- Data: only owner-supplied licensed files or a bounded owner-authorized request (SD-094). No
+  assumption that Yahoo, Stooq, LSE or FTSE Russell pages grant reuse rights. UK DAY stays
+  `BLOCKED_EXTERNAL` without approved intraday quotes/spreads.
+- Execution: UK broker execution is **NOT** enabled. An eToro Demo UK order needs its own verified
+  instrument ID, identity/currency, fractional/minimum rules, fresh price, endpoint allowlist,
+  separate signed owner intent, separate authentication/execution authorization and independent
+  security review and release (SD-095). Simulation results are labelled `SIMULATION`.
+- Acceptance is two separate milestones: *UK research acceptance* (sourced instruments, LSE hours,
+  units, horizon signals, auditable simulated trade) and *UK Demo execution acceptance* (approved
+  broker buy-and-close with genuine broker evidence and reconciliation). Never conflate them.
