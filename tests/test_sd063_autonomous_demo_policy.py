@@ -198,7 +198,9 @@ def env(tmp_path: Path):
 def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | None = None,
                      malformed_lookup: bool = False,
                      bid: str = "499.9", ask: str = "500",
-                     protective_grant: tuple[dict[str, object], str] | None = None):
+                     protective_grant: tuple[dict[str, object], str] | None = None,
+                     storage_path: Path | None = None, crash_after_open: bool = False,
+                     crash_after_close: bool = False):
     quote_source = TrustedSource("gateway-quotes", "broker_quotes", b"q" * 40)
     recon_source = TrustedSource("gateway-recon", "broker_reconciliation", b"r" * 40)
     verifier = InputVerifier(SourceRegistry([quote_source, recon_source]),
@@ -210,15 +212,19 @@ def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | N
                                    protective_grant=protective_grant)
         env.rt = runtime_impl
     runtime = AuthenticatedRuntime(runtime_impl, verifier)
-    anchor = AnchorKeeper(WriteOnceDirectoryAnchor(env.tmp / "gateway-anchor"), b"a" * 40)
-    anchor.initialize(env.ledger, env.clock.now)
+    anchor_dir = env.tmp / "gateway-anchor"
+    anchor = AnchorKeeper(WriteOnceDirectoryAnchor(anchor_dir), b"a" * 40)
+    if not list(anchor_dir.glob("*.json")):
+        anchor.initialize(env.ledger, env.clock.now)
     quote_signer = SourceSigner(quote_source, env.clock)
     gateway = OfflineDemoGateway(
         policy=env.policy, runtime=runtime, authority=env.authority,
         grant_document=env.grant_document, grant_signature=env.signature,
         simulator=OfflineDemoSimulator(fill_price=Decimal(fill_price),
                                        close_price=Decimal(close_price) if close_price else None,
-                                       malformed_lookup=malformed_lookup),
+                                       malformed_lookup=malformed_lookup, storage_path=storage_path,
+                                       crash_after_open=crash_after_open,
+                                       crash_after_close=crash_after_close),
         reconciliation_signer=SourceSigner(recon_source, env.clock), anchor_keeper=anchor,
         protective_grant=protective_grant, clock=env.clock,
     )
@@ -242,6 +248,13 @@ def test_sd107_offline_gateway_revalidates_grant_and_reconciles_sealed_fill(env)
     assert envelope.kind == "fill"
     assert len(env.authority._ledger.events()) >= 3  # runtime check + send + lookup
     assert BROKER_ROUTES["ETORO_DEMO"] == "NOT_RELEASED"
+    replay_quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": "499.9", "ask": "500",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    with pytest.raises(GatewayRefused, match="resolved or already submitted"):
+        gateway.submit_entry(proposal, quote=replay_quote)
+    assert gateway._simulator.submitted_orders == 1
 
     plan = env.rt.plan_exits(bids=env.bids("400"))
     assert len(plan.exits) == 1 and plan.exits[0].broker_position_id == "100001"
@@ -305,6 +318,61 @@ def test_sd107_malformed_lookup_is_unresolved_and_halts_without_retry(env):
     uses = [event for _, event, _ in env.authority._ledger.events()
             if event in ("USE_WRITE", "USE_READ")]
     assert uses.count("USE_WRITE") == 1
+
+
+def test_sd107_restart_recovers_durable_acceptance_without_replaying_open(env):
+    storage = env.tmp / "simulator.sqlite3"
+    gateway, quote, _ = _offline_gateway(env, storage_path=storage, crash_after_open=True)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+
+    with pytest.raises(GatewayRefused, match="process interruption"):
+        gateway.submit_entry(proposal, quote=quote)
+    assert env.ledger.kill_switch_engaged()
+    assert gateway._simulator.submitted_orders == 1
+    gateway._simulator.close_store()
+
+    restarted, _, _ = _offline_gateway(env, storage_path=storage)
+    recovered = restarted.recover_entry(proposal)
+
+    assert recovered.payload["outcome"] == "FILLED"
+    assert env.ledger.state().entries[proposal.reference_id].outcome == "FILLED"
+    assert env.ledger.kill_switch_engaged()  # recovery never resets the halt
+    assert restarted._simulator.submitted_orders == 1
+
+
+def test_sd107_restart_recovers_durable_close_without_replaying_close(env):
+    storage = env.tmp / "simulator.sqlite3"
+    gateway, entry_quote, quote_signer = _offline_gateway(
+        env, close_price="400", storage_path=storage)
+    entry = env.entry()
+    assert isinstance(entry, EntryProposal)
+    gateway.submit_entry(entry, quote=entry_quote)
+    plan = env.rt.plan_exits(bids=env.bids("400"))
+    assert len(plan.exits) == 1
+    proposal = plan.exits[0]
+    close_quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": "400", "ask": "401",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    # Use a gateway backed by the same durable store with a one-shot crash after close commit.
+    gateway._simulator.close_store()
+    gateway, _, _ = _offline_gateway(env, close_price="400", storage_path=storage,
+                                    crash_after_close=True)
+
+    with pytest.raises(GatewayRefused, match="process interruption"):
+        gateway.submit_exit(proposal, quote=close_quote)
+    assert env.ledger.kill_switch_engaged()
+    assert len(env.ledger.open_positions()) == 1
+    gateway._simulator.close_store()
+
+    restarted, _, _ = _offline_gateway(env, close_price="400", storage_path=storage)
+    recovered = restarted.recover_exit(proposal)
+
+    assert recovered.payload["outcome"] == "FILLED"
+    assert not env.ledger.open_positions()
+    assert env.ledger.kill_switch_engaged()
+    assert entry.reference_id in env.ledger.state().entries
 
 
 def test_close_reconciliation_cannot_change_broker_position_lineage(env):

@@ -389,7 +389,7 @@ def protective_subject(policy: AutonomousDemoPolicy) -> str:
     """SD-064 subject digest of a separate owner-signed protective-exit grant for a policy.
 
     Such a grant authorizes only reduce-only exits of positions recorded under this policy
-    (e.g. after expiry or revocation of the policy grant); it never authorizes entries."""
+    after policy expiry; revocation alone does not force a close, and entries are never allowed."""
     return hashlib.sha256(f"{policy.digest()}|protective-exit".encode("utf-8")).hexdigest()
 
 
@@ -1248,10 +1248,9 @@ class AutonomousDemoRuntime:
             return self._finish(now, (), alerts)
         authority = "policy"
         if not (policy.active(now) and self._grant_valid(now)):
-            # Protective authority only after expiry: a revocation (anyone may revoke) or a
-            # transient grant failure must not force a liquidation.
+            # Revocation alone must not trigger an automatic liquidation. A separately signed
+            # protective grant authorizes reduce-only exits after the policy window expires.
             if not policy.active(now) and self._protective_valid(now):
-                # Separate owner-signed protective-exit authority: reduce-only, no entries.
                 authority = "protective"
                 alerts.append("PROTECTIVE_EXIT_AUTHORITY_IN_USE")
             elif not policy.active(now):
