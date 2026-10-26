@@ -15,7 +15,7 @@ from typing import Callable, Protocol
 
 from sidedeck.application.sd063_autonomous_demo_policy import (
     AutonomousDemoPolicy, EntryProposal, ExitProposal, MAX_EXIT_FILL_DEVIATION,
-    PolicyRefused, _UNKNOWN_OUTCOMES,
+    PolicyRefused, _UNKNOWN_OUTCOMES, OWNER_PRINCIPAL, protective_subject,
     check_grant_binding,
 )
 from sidedeck.application.sd068_track_scheduler import NEW_YORK
@@ -25,6 +25,7 @@ from sidedeck.application.sd064_unlock_grant import (
 from sidedeck.application.sd074_trusted_inputs import (
     AuthenticatedRuntime, BrokerQuote, Envelope, SourceSigner,
 )
+from sidedeck.application.sd074_external_anchor import AnchorKeeper
 from sidedeck.application.sd108_broker_adapters import (
     EtoroDemoReconciliationAdapter,
 )
@@ -146,6 +147,8 @@ class OfflineDemoGateway:
                  runtime: AuthenticatedRuntime, authority: UnlockAuthority,
                  grant_document: dict[str, object], grant_signature: str,
                  simulator: OfflineDemoSimulator, reconciliation_signer: SourceSigner,
+                 anchor_keeper: AnchorKeeper,
+                 protective_grant: tuple[dict[str, object], str] | None = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
         if type(simulator) is not OfflineDemoSimulator:
             raise GatewayRefused("only the offline simulator is accepted by this gateway")
@@ -153,20 +156,44 @@ class OfflineDemoGateway:
             raise GatewayRefused("runtime ledger is bound to a different policy")
         self._policy, self._runtime, self._authority = policy, runtime, authority
         self._document, self._signature = grant_document, grant_signature
+        self._protective_grant = protective_grant
+        self._anchor_keeper = anchor_keeper
         self._simulator, self._clock = simulator, clock
         self._adapter = EtoroDemoReconciliationAdapter(reconciliation_signer)
 
-    def _authorize(self, *, write: bool, reference_id: str) -> None:
+    def _publish_before_send(self, now: datetime) -> None:
+        """Publish every policy-ledger tail before a simulated broker request."""
+        try:
+            self._anchor_keeper.publish(self._runtime.ledger, now)
+            self._anchor_keeper.require_published(self._runtime.ledger)
+        except PolicyRefused as exc:
+            raise GatewayRefused("policy ledger is not externally anchored") from exc
+
+    def _authorize(self, *, write: bool, reference_id: str,
+                   protective: bool = False) -> None:
         now = self._clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise GatewayRefused("gateway clock must be timezone-aware")
+        document, signature, subject = self._document, self._signature, self._policy.digest()
+        if protective:
+            if self._protective_grant is None:
+                raise GatewayRefused("protective-exit grant is not configured")
+            document, signature = self._protective_grant
+            subject = protective_subject(self._policy)
+        self._publish_before_send(now)
         try:
             grant = self._authority.authorize_request(
-                document=self._document, signature=self._signature,
-                subject_digest=self._policy.digest(), write=write,
+                document=document, signature=signature,
+                subject_digest=subject, write=write,
                 reference_id=reference_id, now=now,
             )
-            check_grant_binding(self._policy, grant, now.astimezone(timezone.utc))
+            if protective:
+                if (grant.kind != "autonomous_policy" or grant.issued_by != OWNER_PRINCIPAL
+                        or grant.broker != "etoro-demo"
+                        or grant.not_before < self._policy.not_before):
+                    raise PolicyRefused("protective grant is outside its reduce-only scope")
+            else:
+                check_grant_binding(self._policy, grant, now.astimezone(timezone.utc))
         except (GrantRefused, PolicyRefused) as exc:
             raise GatewayRefused("signed grant refused") from exc
 
@@ -257,11 +284,13 @@ class OfflineDemoGateway:
                 raw, request=request, observed_at=self._clock(),
                 accepted_order_id=acceptance.order_id)
             self._runtime.resolve(envelope)
+            self._publish_before_send(self._clock())
             return envelope
         except Exception:
             # No replay/retry: any uncertain post-send result halts this policy.
             if not self._runtime.ledger.kill_switch_engaged():
                 self._runtime.ledger.trip_kill_switch("SIMULATED_OUTCOME_UNRESOLVED", now)
+            self._publish_before_send(self._clock())
             raise
 
     def submit_exit(self, proposal: ExitProposal, *, quote: Envelope) -> Envelope:
@@ -271,11 +300,13 @@ class OfflineDemoGateway:
             fresh = self._runtime.verified_quote(quote)
         except Exception as exc:
             raise GatewayRefused("exit quote verification failed") from exc
-        if proposal.authority != "policy":
-            raise GatewayRefused("separate protective-exit grant is required")
-        if proposal.submission != "OFFLINE_PROPOSAL_NOT_SUBMITTED" \
-                or proposal.policy_digest != self._policy.digest() \
-                or not self._policy.active(now):
+        protective = proposal.authority == "protective"
+        if proposal.authority not in ("policy", "protective"):
+            raise GatewayRefused("exit authority is unsupported")
+        if (proposal.submission != "OFFLINE_PROPOSAL_NOT_SUBMITTED"
+                or proposal.policy_digest != self._policy.digest()
+                or (protective and self._policy.active(now))
+                or (not protective and not self._policy.active(now))):
             raise GatewayRefused("exit proposal is outside its policy scope")
         if fresh.canonical_id != proposal.canonical_id or fresh.bid <= 0:
             raise GatewayRefused("fresh sealed bid does not match the exit instrument")
@@ -319,7 +350,7 @@ class OfflineDemoGateway:
         request = DemoCloseRequest(str(uuid.UUID(hex=proposal.reference_id)),
                                     int(position.broker_position_id),
                                     proposal.etoro_instrument_id, proposal.units)
-        self._authorize(write=True, reference_id=proposal.reference_id)
+        self._authorize(write=True, reference_id=proposal.reference_id, protective=protective)
         try:
             accepted_payload, close_payload, fill_price = self._simulator.close(request)
             try:
@@ -328,14 +359,17 @@ class OfflineDemoGateway:
             except Exception as exc:
                 self._runtime.ledger.trip_kill_switch("SIMULATED_CLOSE_AMBIGUOUS", now)
                 raise GatewayRefused("simulated close acceptance is malformed") from exc
-            self._authorize(write=False, reference_id=f"close-lookup:{proposal.reference_id}")
+            self._authorize(write=False, reference_id=f"close-lookup:{proposal.reference_id}",
+                             protective=protective)
             envelope = self._adapter.seal_simulated_close(
                 close_payload, request=request, acceptance=acceptance,
                 observed_at=self._clock(), fill_price=fill_price)
             self._runtime.resolve(envelope)
+            self._publish_before_send(self._clock())
             return envelope
         except Exception:
             if not self._runtime.ledger.kill_switch_engaged():
                 self._runtime.ledger.trip_kill_switch("SIMULATED_CLOSE_UNRESOLVED", now)
+            self._publish_before_send(self._clock())
             raise
 
