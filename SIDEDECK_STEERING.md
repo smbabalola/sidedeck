@@ -384,3 +384,10 @@ strategy recommendation. The UK BP pilot draft is parked (`parked-uk-bp/`, untra
   permanently excluded. Per-order signatures are replaced only by that released policy.
 - Report the gates ENGINEERING, REAL_DATA, STRATEGY_ADMISSION, AI_RESEARCH, BROKER,
   PAPER_EXECUTION and FORWARD_TESTING separately as VERIFIED / BLOCKED / FAILED / NOT_ASSESSED.
+- **Pooled admission (owner direction 2026-10-26):** SD-112 is a *proposal-only* method
+  ([docs/SD106_SD112_EVIDENCE_AND_POOLED_METHOD.md](docs/SD106_SD112_EVIDENCE_AND_POOLED_METHOD.md)):
+  same fixed strategy version, shared chronological splits, sealed final holdout (one-time
+  owner unseal), effective sample size for overlapping/correlated trades, multiple-testing
+  adjustment, concentration, regimes, cost stress and benchmark; per-instrument failures stay
+  visible. It never changes the production gate or admits a strategy; adopting it requires
+  owner review of the method and results and a separate reviewed gate change.
