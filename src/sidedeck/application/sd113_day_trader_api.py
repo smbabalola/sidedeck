@@ -8,9 +8,10 @@ from __future__ import annotations
 from typing import Any
 
 from sidedeck.modules.day_trader.manifest import MODULE_BOOK, SKILLS, SOURCE_VERSION, UPSTREAM, resolve
+from sidedeck.application.sd114_day_trader_runs import day_trader_run_summary
 
 
-def day_trader_summary() -> dict[str, Any]:
+def day_trader_summary(runs_path: str = "data/day-trader-runs.sqlite3") -> dict[str, Any]:
     """Return a sanitized, fail-closed module status document."""
     verification = resolve()
     return {
@@ -27,7 +28,7 @@ def day_trader_summary() -> dict[str, Any]:
              "claude_only_not_used": spec.claude_only}
             for spec in SKILLS.values()
         ],
-        "opportunities": [], "plans": [], "simulations": [],
+        **day_trader_run_summary(runs_path),
         "owner_actions": [
             "Provide approved, provenance-tagged intraday data before research acceptance.",
             "Review strategy-admission evidence before any allocation decision.",

@@ -13,9 +13,21 @@
 > Module mode is `RESEARCH_ONLY`; broker execution is `DISABLED`; no authenticated request,
 > paid provider call, credential read or order is authorized by this milestone.
 
-- [ ] **SD-113 | P0 | IMPLEMENTED_PENDING_VERIFICATION | deps: SD-069, SD-070 | Independent Day Trader module.** Pinned installed/vendored source, eleven-skill capability manifest, credential-free network-blocked sandbox, strict untrusted-output adapters, SideDeck ResearchSignal/proposal boundary, dedicated `DAY_TRADER_SKILL` attribution and offline simulation hooks. **Evidence:** `src/sidedeck/modules/day_trader/`, `third_party/day-trader-skill/`, `tests/test_day_trader_module.py`, `docs/ADR-004-day-trader-module.md`.
-- [ ] **SD-114 | P1 | IMPLEMENTED_PENDING_VERIFICATION | deps: SD-113 | Read-only Day Trader workspace.** `/api/day-trader/summary` reports pinned provenance, 11 capabilities, unavailable-data state, limitations and owner actions; React `Day Trader` workspace has no order, capital, permission or schedule controls. **Evidence:** `sd113_day_trader_api.py`, `tests/test_sd113_day_trader_api.py`, `web/src/workspaces/DayTrader.tsx`.
+- [x] **SD-113 | P0 | VERIFIED_OFFLINE | deps: SD-069, SD-070 | Independent Day Trader module.** Pinned installed/vendored source, eleven-skill capability manifest, credential-free network-blocked sandbox, strict untrusted-output adapters, SideDeck ResearchSignal/proposal boundary, dedicated `DAY_TRADER_SKILL` attribution and offline simulation hooks. Exact-head CI run `708` passed on `099111ced8aaed39b6608534fe2dada3a4a9853e`. **Evidence:** `src/sidedeck/modules/day_trader/`, `third_party/day-trader-skill/`, `tests/test_day_trader_module.py`, `docs/ADR-004-day-trader-module.md`.
+- [x] **SD-114 | P1 | VERIFIED_OFFLINE | deps: SD-113 | Read-only Day Trader workspace.** `/api/day-trader/summary` reports pinned provenance, 11 capabilities, unavailable-data state, limitations and owner actions; React `Day Trader` workspace has no order, capital, permission or schedule controls. Exact-head CI run `708` passed on `099111ced8aaed39b6608534fe2dada3a4a9853e`. **Evidence:** `sd113_day_trader_api.py`, `tests/test_sd113_day_trader_api.py`, `web/src/workspaces/DayTrader.tsx`.
+- [x] **SD-116 | P0 | IMPLEMENTED_PENDING_VERIFICATION | deps: SD-113, SD-114 | Operational offline research runs.** `python -m sidedeck.application.sd114_day_trader run --fixture --db data/day-trader-runs.sqlite3` invokes the pinned orchestrator and persists bounded reports, opportunities, plans, simulations, rejections, errors, provenance and hashes; `/api/day-trader/summary` exposes saved results read-only. **Evidence:** `sd114_day_trader.py`, `sd114_day_trader_runs.py`, `tests/test_sd114_day_trader_runs.py`.
+- [ ] **SD-117 | P0 | BLOCKED_EXTERNAL | deps: SD-116 | Genuine five-minute data acceptance.** Owner-reviewable package prepared in `docs/SD115_INTRADAY_DATA_AUTHORIZATION_PROPOSAL.md`; no provider, license, authenticated request or paid call is approved. Strategy admission and DAY execution remain blocked.
+- [x] **SD-118 | P0 | VERIFIED_REVIEW | deps: SD-113, SD-116 | Sandbox security review.** Python-level socket/DNS/subprocess blocks, credential filtering, workspace/path boundaries and output limits are tested; OS-enforced isolation is unavailable, so arbitrary untrusted skill execution remains explicit `NO-GO`. **Evidence:** `docs/SD114_DAY_TRADER_SECURITY_REVIEW.md`.
 - [ ] **SD-115 | P0 | BLOCKED_EXTERNAL | deps: SD-113 | Genuine intraday acceptance.** Requires an owner-approved, provenance-tagged intraday source and locked-OOS evaluation with realistic spreads, fees, slippage, latency and gaps. No live feed or paid provider call is authorized; no Day Trader execution release is implied.
+
+**Batch Day Trader-2 (2026-10-26; local verification complete):** The runnable fixture command
+completed all 11 pinned skill stages (`OK=11`), persisted scanner opportunities, one TSLA plan,
+SideDeck `WATCHLIST` decision, risk, Time Machine scenario output, simulation, hashes and errors
+to a local SQLite ledger. Full verification: **1,624 passed, 1 skipped, 3 existing warnings**;
+Ruff, mypy across 188 source files, Alembic and frontend build passed. No network, credentials,
+provider spend, authenticated request or broker action occurred. Exact-head CI for the follow-up
+commit is pending; SD-117 remains blocked on owner data/licensing evidence and SD-118 retains
+`NO-GO` for arbitrary untrusted execution.
 
 ### Milestone 5 — integrated trading pipeline (steering §16; owner directive 2026-10-26; controlling engineering priority)
 

@@ -284,7 +284,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                  ledger_dir: str | None = None, uk_data_dir: str | None = None,
                  uk_report: str | None = None, *,
                  pipeline_report: str | None = "data/sd103/latest-run.json",
-                 pipeline_history: str | None = "data/sd109/run-history.sqlite3"
+                 pipeline_history: str | None = "data/sd109/run-history.sqlite3",
+                 day_trader_runs: str = "data/day-trader-runs.sqlite3"
                  ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -318,7 +319,7 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                 elif route == "/api/pipeline/history":
                     data = history_summary(pipeline_history)
                 elif route == "/api/day-trader/summary":
-                    data = day_trader_summary()
+                    data = day_trader_summary(day_trader_runs)
                 else:
                     self.send_error(404)
                     return
@@ -362,6 +363,7 @@ def main() -> int:
     p.add_argument("--uk-report", default="data/uk-acceptance.json")
     p.add_argument("--pipeline-report", default="data/sd103/latest-run.json")
     p.add_argument("--pipeline-history", default="data/sd109/run-history.sqlite3")
+    p.add_argument("--day-trader-runs", default="data/day-trader-runs.sqlite3")
     a = p.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research,
                                                                      tuple(a.strategy_research), tuple(a.strategy_audit), a.release_gate,
@@ -370,7 +372,8 @@ def main() -> int:
                                                                      a.simulation_ledgers, a.uk_data_dir,
                                                                      a.uk_report,
                                                                      pipeline_report=a.pipeline_report,
-                                                                     pipeline_history=a.pipeline_history))
+                                                                     pipeline_history=a.pipeline_history,
+                                                                     day_trader_runs=a.day_trader_runs))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()

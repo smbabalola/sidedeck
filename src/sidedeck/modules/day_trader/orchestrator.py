@@ -190,7 +190,7 @@ def run_module(inputs: Inputs, config: DayTraderConfig = DayTraderConfig(), *,
             out["plans"].append(_plan_chain(sym, inputs, config, ws, call, stages, now_utc))
         # 9. alerts: market clock (no data needed)
         st, parsed = _safe("alerts_clock", "trader-alerts", lambda: call(
-            "trader-alerts", "clock", ["--offline", ".", "--now", inputs.now_ny], _clock))
+            "trader-alerts", "clock", ["--now", inputs.now_ny], _clock))
         out["clock"] = parsed
         stages.append(st)
         # 10. analyst

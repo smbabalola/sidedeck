@@ -408,3 +408,22 @@ strategy recommendation. The UK BP pilot draft is parked (`parked-uk-bp/`, untra
   adjustment, concentration, regimes, cost stress and benchmark; per-instrument failures stay
   visible. It never changes the production gate or admits a strategy; adopting it requires
   owner review of the method and results and a separate reviewed gate change.
+
+## 18. Day Trader operational research boundary (owner directive 2026-10-26)
+
+The Day Trader module has one runnable offline entry point:
+`python -m sidedeck.application.sd114_day_trader run --fixture --db data/day-trader-runs.sqlite3`.
+It invokes the pinned upstream scripts, persists a bounded sanitized report and remains
+`RESEARCH_ONLY`. The read-only API may expose saved opportunities, plans, rejected candidates,
+stage errors, scenario simulations and provenance, but it cannot create orders or alter portfolio
+state. `SIMULATION_ONLY` and fixture evidence are never strategy admission or performance proof.
+
+The current Python sandbox is acceptable only for the pinned, reviewed source. It is **NO-GO for
+untrusted skill execution** because Python-level socket/subprocess patches and workspace copying
+are not OS-enforced isolation. Any future untrusted execution needs a separately provisioned
+low-privilege Windows sandbox/AppContainer or isolated VM with no network, inherited handles or
+credential environment. The security review is `docs/SD114_DAY_TRADER_SECURITY_REVIEW.md`.
+
+Genuine five-minute data remains an external owner/licensing gate. No provider, endpoint, paid feed,
+credential or authenticated request is implied by the module; the exact review package is
+`docs/SD115_INTRADAY_DATA_AUTHORIZATION_PROPOSAL.md`.

@@ -128,7 +128,8 @@ def _check_args(spec_name: str, command: str | None, args: Sequence[str],
             raise SandboxRefused(f"{spec_name} takes no subcommand")
     elif command not in spec.allowed:
         raise SandboxRefused(f"{spec_name} {command!r} is not allowed in SideDeck")
-    if spec.needs_offline and "--offline" not in args:
+    # The clock subcommand is purely local and has no offline flag in the pinned upstream CLI.
+    if spec.needs_offline and not (spec_name == "trader-alerts" and command == "clock") and "--offline" not in args:
         raise SandboxRefused(f"{spec_name} must run with --offline (no network data source "
                              "is authorized for this module)")
     for arg in args:

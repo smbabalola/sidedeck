@@ -35,6 +35,16 @@ def test_sandbox_probe_is_blocked_and_env_is_minimal() -> None:
         ws.close()
 
 
+def test_sandbox_probe_cannot_spawn_a_child_process() -> None:
+    ws = Workspace()
+    try:
+        result = run_raw("import subprocess; subprocess.run(['cmd', '/c', 'echo escaped'])", ws)
+        assert result.returncode != 0
+        assert b"SIDEDECK_SANDBOX_BLOCKED" in result.stderr
+    finally:
+        ws.close()
+
+
 def test_sandbox_refuses_network_skill_without_offline_and_absolute_paths() -> None:
     ws = Workspace()
     try:

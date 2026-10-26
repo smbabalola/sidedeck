@@ -98,7 +98,9 @@ export type DayTraderSummary = {
   data_status: string; performance_status: string;
   source: { name: string; version: string; commit: string; license: "MIT"; module_version: string; verification: string; origin: string };
   capabilities: { id: string; role: string; network_hosts_blocked: string[]; claude_only_not_used: string }[];
-  opportunities: unknown[]; plans: unknown[]; simulations: unknown[];
+  opportunities: unknown[]; plans: unknown[]; simulations: unknown; rejected: unknown[]; errors: unknown[];
+  runs: { run_id: string; created_at: string; basis: string; mode: string; status: string; module_version: string; source_commit: string; report_sha256: string }[];
+  latest: unknown | null;
   owner_actions: string[]; limitations: string[];
 };
 export function isDayTraderSummary(d: unknown): d is DayTraderSummary {
@@ -110,7 +112,11 @@ export function isDayTraderSummary(d: unknown): d is DayTraderSummary {
     && isStr(d.source.origin) && isArr(d.capabilities) && d.capabilities.every(c => isObj(c)
       && isStr(c.id) && isStr(c.role) && isArr(c.network_hosts_blocked) && c.network_hosts_blocked.every(isStr)
       && isStr(c.claude_only_not_used)) && isArr(d.opportunities) && isArr(d.plans) && isArr(d.simulations)
-    && isArr(d.owner_actions) && d.owner_actions.every(isStr) && isArr(d.limitations) && d.limitations.every(isStr);
+    && isArr(d.owner_actions) && d.owner_actions.every(isStr) && isArr(d.limitations) && d.limitations.every(isStr)
+    && isArr(d.opportunities) && isArr(d.plans) && (isObj(d.simulations) || isArr(d.simulations)) && isArr(d.rejected) && isArr(d.errors)
+    && (d.latest === null || isObj(d.latest)) && isArr(d.runs) && d.runs.every(r => isObj(r) && isStr(r.run_id)
+      && isStr(r.created_at) && isStr(r.basis) && isStr(r.mode) && isStr(r.status) && isStr(r.module_version)
+      && isStr(r.source_commit) && isStr(r.report_sha256));
 }
 export type RiskBudget = { risk_per_trade_pct: string; max_positions: number; max_drawdown_pct: string; max_daily_loss_pct: string; max_orders_per_day: number; exit_policy: string; virtual_capital: string; basis: string };
 export type MarketTrack = {

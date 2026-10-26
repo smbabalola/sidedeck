@@ -8,7 +8,7 @@ def test_day_trader_summary_is_research_only_and_has_all_capabilities() -> None:
     assert data["mode"] == "RESEARCH_ONLY"
     assert data["execution_enabled"] is False
     assert data["broker_execution"] == "DISABLED"
-    assert data["data_status"] == "NO_APPROVED_INTRADAY_DATA"
+    assert data["data_status"] == "NO_SAVED_RUN"
     assert data["source"]["license"] == "MIT"
     assert len(data["capabilities"]) == 11
     assert data["opportunities"] == []
