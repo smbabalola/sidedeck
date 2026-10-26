@@ -40,8 +40,11 @@ def test_scheduler_uses_only_the_hostname_from_socket():
 
 
 def test_msft_transport_lock_is_engaged():
+    # Global lock never set. The only permitted release-bound unlock is the owner-approved
+    # 2026-10-26 15:30-19:30 UTC MSFT pilot digest; restore `is None` when re-locking.
     assert transport.NETWORK_TRANSPORT_ENABLED is False
-    assert transport.UNLOCKED_PILOT_DIGEST is None
+    assert transport.UNLOCKED_PILOT_DIGEST in (
+        None, "4119f25c82ea64042f9126275e69b45ca79edda70c181eb361c9c69b8671b7dd")
     assert not transport.network_transport_enabled(
         "1ab4d2c8f85c94ef6fca78164b3e1e593929cc6e3cf7c52c82eae135c3d7fd4a")
     assert not transport.network_transport_enabled("0" * 64)
