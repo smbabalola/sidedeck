@@ -6,6 +6,27 @@
 
 ## Current execution board — ordered by priority and dependencies
 
+### Milestone 5 — integrated trading pipeline (steering §16; owner directive 2026-10-26; controlling engineering priority)
+
+> **Gates (2026-10-26):** ENGINEERING VERIFIED locally (1,564 passed / 1 skipped; Ruff, mypy,
+> tsc, build, Vitest 15, Playwright 36 passed) — exact-HEAD CI pending · REAL_DATA VERIFIED
+> (SD-021 daily bundles, research-only limits) · STRATEGY_ADMISSION **BLOCKED** (no strategy
+> ≥ 30 locked-OOS trades; SPY/QQQ channel mean reversion 12 each) · AI_RESEARCH BLOCKED (no
+> authorized run) · BROKER BLOCKED (no Demo round trip yet) · PAPER_EXECUTION BLOCKED (SD-074F,
+> owner policy) · FORWARD_TESTING NOT_ASSESSED. Genuine `run` today = **NO TRADE**.
+> Plan and evidence: [docs/SD103_INTEGRATED_PIPELINE.md](docs/SD103_INTEGRATED_PIPELINE.md).
+
+- [ ] **SD-103 | P0 | IMPLEMENTED (VERIFIED_OFFLINE) | deps: SD-014, SD-021, SD-022, SD-067, SD-069…SD-072, SD-079 | Integrated pipeline.** `python -m sidedeck.application.sd103_trading_pipeline run|replay|acceptance`: data admission (basis-segregated, session coverage) → scan → SD-021 research + SD-022 audit + SD-071 floor per instrument → native signals → agent outcomes → `decide` → risk gate → order intent (`PROPOSED_NOT_SUBMITTED`) → SIMULATED_LOCAL ledger with next-open fills, stop/target/time/strategy exits → performance by strategy/version, benchmark, cash reconciliation → `data/sd103/latest-run.json`. Only route `SIMULATED_LOCAL`; eToro Demo/Alpaca `NOT_RELEASED`, Real excluded. Genuine run: NO TRADE; genuine replay (admission ≤ 2026-04-30, 2026-05-01..2026-10-20): 0 trades, cash MATCHED, benchmark +13.8 % price-only. Fixture acceptance (labelled override): 33 simulated round trips, MATCHED. **Evidence:** `sd103_trading_pipeline.py`, `tests/test_sd103_trading_pipeline.py` (26 incl. negatives); refactors `p5_sd021_research.research_payload`, `sd022_robustness_audit.audit_report` (existing tests unchanged).
+- [ ] **SD-104 | P1 | IMPLEMENTED | deps: SD-103 | Dashboard "Trading engine".** `/api/pipeline/latest` (`sd104_pipeline_api.py`, allowlisted/bounded, provenance never upgraded, replay always SIMULATION) + `web/src/workspaces/Engine.tsx`: gates, opportunities, AI research, decision/NO TRADE, strategy admission table, decisions with reasons, risk, simulated performance and positions, broker routes. No controls. **Evidence:** `tests/test_sd104_pipeline_api.py`, `isPipeline` guard, fixture `web/tests/fixtures/pipeline-latest.json` (synthetic), Playwright workspace list updated.
+- [ ] **SD-105 | P0 | BLOCKED_OWNER | deps: SD-058 runbook | Stage 1 broker acceptance (connectivity test).** The prepared MSFT Demo round trip today 14:00–16:00 UTC (`docs/SD058_MONDAY_OWNER_RUNBOOK.md`); labelled connectivity test, not a strategy trade. Owner: sign intent, send `NAIVE_AS_UTC` acceptance + lock-lift approval, run, sign open/close.
+- [ ] **SD-106 | P0 | BLOCKED_OWNER | deps: SD-075B | Admission evidence.** Genuine 20-instrument SIP history (SD-075B signed authorization) → re-run SD-103; owner G3 decision on pooled cross-sectional OOS admission (per-instrument 30-OOS floor is structurally unreachable on ~1,250 sessions).
+- [ ] **SD-107 | P1 | READY after SD-105 re-lock | deps: SD-063, SD-064, SD-074 | SD-074F wiring as an SD-103 broker route** (grant re-verification, send-time caps, sealed quotes/fills, fill-to-order binding) + independent review of the grant-to-order path.
+- [ ] **SD-108 | P1 | READY after SD-107 | Broker quote/fill adapters** sealing eToro rates/lookups as SD-074 envelopes; replace simulated next-open fills with fresh executable quotes.
+- [ ] **SD-109 | P1 | READY | deps: SD-068, SD-103 | Scheduled research runs** after each XNYS close (research-only), run history for the dashboard.
+- [ ] **SD-110 | P1 | BLOCKED (deps) | Owner autonomous Demo policy package** (≤ 7 days, ≤ USD 1,000, ≤ USD 50/position, admitted strategies only) after SD-105/106/107 and review.
+- [ ] **SD-111 | P2 | BLOCKED (deps) | Forward testing** ≥ 1 month observed Demo trading with suspension criteria (drawdown, lineage, reconciliation, envelope degradation).
+- [ ] **SD-095 | P2 | PARKED | UK BP pilot draft** (`parked-uk-bp/`, untracked, untested): UK unit/FX/eligibility domain, Stage A discovery, Stage B intent. Resume only as a labelled connectivity test after SD-105.
+
 ### Milestone 0 — first eToro Demo MSFT trade (steering §10, §14.1; highest priority)
 
 > **CONTROLLER (steering §14.1) — status: NOT COMPLETE.** Broker state: no order ever written;

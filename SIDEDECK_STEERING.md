@@ -356,3 +356,31 @@ pilot or change its reviewed execution behaviour. eToro Real is excluded permane
 | SD-064 grants wired into the Demo order transport; send-time caps | BLOCKED until the SD-058 pilot completes and the transport is re-locked |
 | Independent review of the full policy-to-transport lifecycle | BLOCKED on the wiring above |
 | Owner release of a bounded autonomous Demo operating period | BLOCKED_OWNER |
+
+## 16. Integration-first: one operational trading pipeline (owner directive 2026-10-26)
+
+**Controlling engineering priority:** integrate the existing components into one pipeline —
+MARKET DATA → SCANNER → STRATEGIES → AI AGENTS → DECISION ENGINE → RISK ENGINE → PORTFOLIO
+ALLOCATION → PAPER BROKER → FILLS → POSITION MANAGEMENT → EXIT → PERFORMANCE — rather than
+adding isolated pilots or demonstrations. Entry point and evidence:
+[docs/SD103_INTEGRATED_PIPELINE.md](docs/SD103_INTEGRATED_PIPELINE.md); work packages SD-103…SD-111
+(Milestone 5 in `TODO.md`). The §14 Demo round trip remains the **broker-acceptance** milestone
+(Stage 1); a manually chosen instrument (MSFT, BP) is a labelled connectivity test, never a
+strategy recommendation. The UK BP pilot draft is parked (`parked-uk-bp/`, untracked).
+
+**Rules (additive to §2, §10, §11, §15; nothing here relaxes them):**
+- A trade starts from an **admitted** strategy. Admission = SD-022 robustness VERIFIED plus the
+  SD-071 floor (≥ 30 locked-OOS trades) on genuine data. Admission is never relaxed to create a
+  trade; changing the method (e.g. pooled cross-sectional OOS evidence) is an owner G3 decision.
+- No qualifying trade → `NO TRADE` with the reason. Never manufacture an opportunity.
+- Fixture admission overrides exist only for the acceptance harness, are refused for REAL_DATA
+  and are labelled `FIXTURE_ONLY_OVERRIDE_NOT_EVIDENCE` everywhere they appear.
+- Replays lock admission on data before the replay window; decisions at a close use bars up to
+  that close; simulated fills happen at the next open and are `SIMULATED_LOCAL`.
+- Agents may support but never qualify or authorize a trade; the engine works without them.
+- Only the `SIMULATED_LOCAL` route runs. eToro Demo becomes an SD-103 route only through SD-074F
+  (SD-064 grant + SD-063 runtime + SD-074 sealed inputs + send-time caps), an independent
+  review of the grant-to-order path and a separate owner-signed policy release. eToro Real is
+  permanently excluded. Per-order signatures are replaced only by that released policy.
+- Report the gates ENGINEERING, REAL_DATA, STRATEGY_ADMISSION, AI_RESEARCH, BROKER,
+  PAPER_EXECUTION and FORWARD_TESTING separately as VERIFIED / BLOCKED / FAILED / NOT_ASSESSED.
