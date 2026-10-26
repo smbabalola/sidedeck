@@ -271,3 +271,14 @@ export function isPipeline(d: unknown): d is Pipeline {
     && isArr(r.by_strategy) && r.by_strategy.every(b => isObj(b) && isStr(b.strategy) && isCount(b.closed_trades) && isNumStr(b.profit_factor) && isStr(b.verdict))
     && isArr(r.positions) && r.positions.every(p => isObj(p) && isStr(p.ref) && isStr(p.canonical_id) && isStr(p.strategy) && isNumStr(p.realized_pnl));
 }
+
+// --- /api/pipeline/history (SD-109 scheduled research runs) -------------------------------
+export type PipelineRun = {
+  slot: string; session: string; status: string; latest_bar_session: string | null; freshness: string; orders: number;
+  no_trade: string | null; report_sha256: string | null; reason: string | null; finished_at: string; decisions: Record<string, number>;
+};
+export type PipelineHistory = { schema_version: 1; execution_enabled: false; job: string; cadence: string; status: string; next_slot?: string | null; runs: PipelineRun[] };
+export function isPipelineHistory(d: unknown): d is PipelineHistory {
+  return isObj(d) && d.schema_version === 1 && d.execution_enabled === false && isStr(d.job) && isStr(d.status) && isArr(d.runs)
+    && d.runs.every(r => isObj(r) && isStr(r.slot) && isStr(r.session) && isStr(r.status) && isStr(r.freshness) && isCount(r.orders) && isCounts(r.decisions));
+}

@@ -1,0 +1,25 @@
+{
+ "schema_version": 1,
+ "execution_enabled": false,
+ "job": "pipeline_research_run",
+ "cadence": "45 minutes after each XNYS close; research only",
+ "status": "ACTIVE",
+ "next_slot": "2026-10-26T20:45:00+00:00",
+ "runs": [
+  {
+   "slot": "2026-10-23T20:45:00+00:00",
+   "session": "2026-10-23",
+   "status": "STALE_DATA",
+   "latest_bar_session": "2026-10-20",
+   "freshness": "STALE_3_SESSIONS",
+   "orders": 0,
+   "no_trade": "NO TRADE: synthetic fixture row for UI tests",
+   "report_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+   "reason": null,
+   "finished_at": "2026-10-23T20:46:10+00:00",
+   "decisions": {
+    "ABSTAIN": 3
+   }
+  }
+ ]
+}

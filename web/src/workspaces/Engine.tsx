@@ -1,5 +1,5 @@
 import { useResource } from "../lib/api";
-import { type PipelineDecision, type PipelinePosition, type PipelineStrategy, isPipeline } from "../lib/contracts";
+import { type PipelineDecision, type PipelinePosition, type PipelineStrategy, isPipeline, isPipelineHistory } from "../lib/contracts";
 import { num, plainPct, price, when, words } from "../lib/format";
 import { Badge, type Column, DataTable, KeyValues, Metric, Panel, StateBlock } from "../components/ui";
 
@@ -40,9 +40,24 @@ const positionColumns: Column<PipelinePosition>[] = [
   { key: "pnl", header: "Realised P&L (sim.)", align: "right", render: p => price(p.realized_pnl), sortValue: p => (p.realized_pnl === null ? null : Number(p.realized_pnl)) },
 ];
 
+function RunHistory() {
+  const history = useResource("/api/pipeline/history", isPipelineHistory);
+  return <Panel title="Scheduled research runs" provenance={null} subtitle="SD-109: 45 minutes after each US close; research only, no orders.">
+    <StateBlock resource={history}>{h => <>
+      <p className="text-xs text-muted">{words(h.status)}{h.next_slot ? ` · next ${when(h.next_slot)}` : ""}</p>
+      {h.runs.length ? <ul className="mt-2 space-y-1 text-xs">{h.runs.slice(0, 20).map(r => <li key={r.slot} className="flex flex-wrap items-center gap-2">
+        <span className="font-medium tabular-nums">{r.session}</span>
+        <Badge tone={r.status === "COMPLETED" ? "accent" : r.status === "FAILED" ? "blocked" : "attention"}>{words(r.status)}</Badge>
+        <span className="text-muted">{words(r.freshness)} · orders {r.orders} · {Object.entries(r.decisions).map(([k, v]) => `${words(k)} ${v}`).join(", ") || "no decisions"}</span>
+        {r.reason && <span className="text-attention">{r.reason}</span>}
+      </li>)}</ul> : <p className="mt-2 text-sm text-muted">No scheduled run has completed yet.</p>}
+    </>}</StateBlock>
+  </Panel>;
+}
+
 export default function Engine() {
   const pipeline = useResource("/api/pipeline/latest", isPipeline);
-  return <StateBlock resource={pipeline}>{d => {
+  return <div className="space-y-4"><StateBlock resource={pipeline}>{d => {
     if (d.status === "UNAVAILABLE") return <Panel title="Trading engine" provenance="UNAVAILABLE"><p className="text-sm text-muted">{d.reason}</p></Panel>;
     const basis = d.provenance;
     const r = d.replay;
@@ -108,5 +123,5 @@ export default function Engine() {
         <KeyValues rows={Object.entries(d.broker_routes).map(([k, v]): [string, string] => [words(k), v ?? "—"])}/>
       </Panel>
     </div>;
-  }}</StateBlock>;
+  }}</StateBlock><RunHistory/></div>;
 }

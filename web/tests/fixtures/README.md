@@ -12,3 +12,5 @@ whose scan is `SYNTHETIC_FIXTURE` (ZZ ISINs) and whose trade is `SIMULATION`.
 `pipeline-latest.json` comes from `sd104_pipeline_api.pipeline_summary` over an SD-103
 `acceptance` report: three `SYNTHETIC_FIXTURE` instruments, a labelled fixture-only admission
 override and a `SIMULATION` replay (SIMULATED_LOCAL fills). It is plumbing evidence only.
+
+`pipeline-history.json` is a hand-written SD-109 run-history row (stale-data example) for UI tests; it is not a real run.

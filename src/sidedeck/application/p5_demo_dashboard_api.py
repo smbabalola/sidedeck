@@ -21,6 +21,7 @@ from sidedeck.application.sd082_scan_snapshot import scan_snapshot_summary
 from sidedeck.application.sd086_ops_api import authorization_ledger_summary, track_ledgers_summary
 from sidedeck.application.sd097_uk_markets_api import uk_markets_summary
 from sidedeck.application.sd104_pipeline_api import pipeline_summary
+from sidedeck.application.sd109_research_schedule import history_summary
 
 
 def baseline_summary(db_path: str) -> dict[str, Any]:
@@ -281,7 +282,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                  scan_path: str | None = None, authorization_ledger: str | None = None,
                  ledger_dir: str | None = None, uk_data_dir: str | None = None,
                  uk_report: str | None = None, *,
-                 pipeline_report: str | None = "data/sd103/latest-run.json"
+                 pipeline_report: str | None = "data/sd103/latest-run.json",
+                 pipeline_history: str | None = "data/sd109/run-history.sqlite3"
                  ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -312,6 +314,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = uk_markets_summary(uk_data_dir, uk_report)
                 elif route == "/api/pipeline/latest":
                     data = pipeline_summary(pipeline_report)
+                elif route == "/api/pipeline/history":
+                    data = history_summary(pipeline_history)
                 else:
                     self.send_error(404)
                     return
@@ -354,6 +358,7 @@ def main() -> int:
     p.add_argument("--uk-data-dir", default="data/uk")
     p.add_argument("--uk-report", default="data/uk-acceptance.json")
     p.add_argument("--pipeline-report", default="data/sd103/latest-run.json")
+    p.add_argument("--pipeline-history", default="data/sd109/run-history.sqlite3")
     a = p.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research,
                                                                      tuple(a.strategy_research), tuple(a.strategy_audit), a.release_gate,
@@ -361,7 +366,8 @@ def main() -> int:
                                                                      a.scan_snapshot, a.authorization_ledger,
                                                                      a.simulation_ledgers, a.uk_data_dir,
                                                                      a.uk_report,
-                                                                     pipeline_report=a.pipeline_report))
+                                                                     pipeline_report=a.pipeline_report,
+                                                                     pipeline_history=a.pipeline_history))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()
