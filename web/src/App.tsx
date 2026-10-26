@@ -4,6 +4,7 @@ import { useRoute } from "./lib/router";
 import { useTheme } from "./lib/theme";
 import Markets from "./workspaces/Markets";
 import { Operations, Portfolio } from "./workspaces/Operations";
+import Engine from "./workspaces/Engine";
 import Overview from "./workspaces/Overview";
 import { Agents, Strategies } from "./workspaces/Research";
 import Tracks from "./workspaces/Tracks";
@@ -14,6 +15,7 @@ export default function App() {
   const [theme, toggleTheme] = useTheme();
   const views = {
     overview: <Overview/>,
+    engine: <Engine/>,
     markets: <Markets detail={route.detail}/>,
     tracks: <Tracks detail={route.detail}/>,
     agents: <Agents/>,

@@ -1,7 +1,7 @@
 import { expect, test as base } from "@playwright/test";
 import { fixture, mockApi } from "./mock";
 
-const WORKSPACES = ["Overview", "Markets", "Trading tracks", "Agents", "Strategies", "Portfolio", "Operations"];
+const WORKSPACES = ["Overview", "Trading engine", "Markets", "Trading tracks", "Agents", "Strategies", "Portfolio", "Operations"];
 
 // Every test mocks the API and fails on any uncaught page error.
 const test = base.extend<{ pageErrors: string[] }>({
@@ -40,7 +40,7 @@ test("execution lock and synthetic provenance are always visible", async ({ page
 });
 
 test("no order, close or capital controls exist anywhere", async ({ page, pageErrors }) => {
-  for (const ws of ["overview", "markets", "tracks", "agents", "strategies", "portfolio", "operations"]) {
+  for (const ws of ["overview", "engine", "markets", "tracks", "agents", "strategies", "portfolio", "operations"]) {
     await page.goto(`/#/${ws}`);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(page.getByRole("button", { name: /buy|sell|order|close position|submit|execute|allocate/i })).toHaveCount(0);

@@ -209,3 +209,65 @@ export function isUkMarkets(d: unknown): d is UkMarkets {
   if (!isObj(e) || e.provenance !== "NO_DATA" || !isCount(e.admitted_uk_strategies) || !isStr(e.agents)) return false;
   return isObj(d.authorizations) && isOptStr(d.report_reason);
 }
+
+// --- /api/pipeline/latest (SD-103/SD-104 integrated pipeline) ---------------------------
+export type PipelineStrategy = {
+  instrument: string; strategy_id: string; version: string; admission: string; admission_without_override: string | null; override: string | null;
+  reasons: string[]; entry: string; exit: string; stop_loss: string; target: string; holding_period_sessions: number[];
+  completed_trades: number; profit_factor: string | null; max_drawdown: string | null; oos_trades: number; oos_profit_factor: string | null; oos_ending_equity: string | null;
+};
+export type PipelineDecision = {
+  symbol: string; direction: string; decision: string; strategy: string[]; reference_close: string | null; stop_loss: string | null; target: string | null;
+  quantity: string | null; capital_required_usd: string | null; risk_reward: string | null; holding_period: string | null; reasons: string[];
+};
+export type PipelinePosition = {
+  ref: string; canonical_id: string; strategy: string; opened: string; closed: string | null; fill_status: string; units: string | null;
+  entry_price: string | null; exit_price: string | null; exit_reason: string | null; realized_pnl: string | null;
+};
+export type PipelineReplay = {
+  provenance: "SIMULATION"; fill_basis: "SIMULATED_LOCAL"; basis: string; window: string[]; closed_trades: number; open_positions: number;
+  total_return: string | null; max_drawdown: string | null; realized_pnl_usd: string | null; fees_usd: string | null; benchmark: string | null;
+  cash_reconciliation: string; kill_switch: string; halt_reason: string | null;
+  by_strategy: { strategy: string; closed_trades: number; win_rate: string | null; profit_factor: string | null; net_pnl_usd: string | null; verdict: string }[];
+  positions: PipelinePosition[];
+};
+export type Pipeline =
+  | { schema_version: 1; status: "UNAVAILABLE"; reason: string; execution_enabled: false; provenance: "UNAVAILABLE" }
+  | {
+    schema_version: 1; status: "AVAILABLE"; execution_enabled: false; provenance: "REAL_DATA" | "SYNTHETIC_FIXTURE"; mode: string; generated_at: string;
+    cutoff_session: string | null; admission_through: string | null; data_freshness: Record<string, string | null>;
+    market_data: { canonical_id: string; first: string; last: string; sessions: number; limitations: string[] }[];
+    excluded_instruments: Record<string, string | null>;
+    scanner: { status: string; scanned: number; shortlist: { canonical_id: string; rank: number; score: string | null }[]; filtered: [string, string][]; note: string | null };
+    strategies: PipelineStrategy[];
+    agents: { portfolio: string; instrument: string | null; status: string; reason: string; direction: string | null; model: string | null }[];
+    decisions: PipelineDecision[];
+    risk: { canonical_id: string; decision: string; reasons: string[]; capital_required_usd: string | null }[];
+    orders: { intent_id: string; canonical_id: string; units: string | null; limit_price: string | null; stop_price: string | null; strategy: string; broker_route: string; status: string }[];
+    no_trade: string | null; admitted_strategies: string[]; broker_routes: Record<string, string | null>; gates: Record<string, string | null>;
+    replay: PipelineReplay | null;
+  };
+const isStrs = (v: unknown) => isArr(v) && v.every(isStr);
+const isOptS = (v: unknown) => v === null || isStr(v);
+export function isPipeline(d: unknown): d is Pipeline {
+  if (!isObj(d) || d.schema_version !== 1 || d.execution_enabled !== false) return false;
+  if (d.status === "UNAVAILABLE") return d.provenance === "UNAVAILABLE" && isStr(d.reason);
+  if (d.status !== "AVAILABLE" || (d.provenance !== "REAL_DATA" && d.provenance !== "SYNTHETIC_FIXTURE")) return false;
+  const sc = d.scanner;
+  if (!isObj(sc) || !isStr(sc.status) || !isCount(sc.scanned) || !isArr(sc.shortlist)
+    || !sc.shortlist.every(c => isObj(c) && isStr(c.canonical_id) && isCount(c.rank) && isNumStr(c.score))) return false;
+  if (!isArr(d.strategies) || !d.strategies.every(s => isObj(s) && isStr(s.instrument) && isStr(s.strategy_id) && isStr(s.admission)
+    && isStrs(s.reasons) && isCount(s.completed_trades) && isCount(s.oos_trades) && isNumStr(s.profit_factor) && isNumStr(s.oos_profit_factor)
+    && isOptS(s.override))) return false;
+  if (!isArr(d.agents) || !d.agents.every(a => isObj(a) && isStr(a.portfolio) && isStr(a.status) && isStr(a.reason))) return false;
+  if (!isArr(d.decisions) || !d.decisions.every(x => isObj(x) && isStr(x.symbol) && isStr(x.decision) && isStr(x.direction) && isStrs(x.strategy)
+    && isStrs(x.reasons) && ["reference_close", "stop_loss", "target", "quantity", "capital_required_usd", "risk_reward"].every(k => isNumStr(x[k])))) return false;
+  if (!isArr(d.risk) || !isArr(d.orders) || !d.orders.every(o => isObj(o) && isStr(o.intent_id) && isStr(o.status) && o.status === "PROPOSED_NOT_SUBMITTED")) return false;
+  if (!isOptS(d.no_trade) || !isStrs(d.admitted_strategies) || !isObj(d.gates) || !isObj(d.broker_routes) || !isArr(d.market_data)) return false;
+  const r = d.replay;
+  if (r === null) return true;
+  return isObj(r) && r.provenance === "SIMULATION" && r.fill_basis === "SIMULATED_LOCAL" && isCount(r.closed_trades) && isCount(r.open_positions)
+    && isNumStr(r.total_return) && isNumStr(r.max_drawdown) && isStr(r.cash_reconciliation) && isStr(r.kill_switch)
+    && isArr(r.by_strategy) && r.by_strategy.every(b => isObj(b) && isStr(b.strategy) && isCount(b.closed_trades) && isNumStr(b.profit_factor) && isStr(b.verdict))
+    && isArr(r.positions) && r.positions.every(p => isObj(p) && isStr(p.ref) && isStr(p.canonical_id) && isStr(p.strategy) && isNumStr(p.realized_pnl));
+}

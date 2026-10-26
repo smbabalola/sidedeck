@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 export const WORKSPACES = [
   { id: "overview", label: "Overview" },
+  { id: "engine", label: "Trading engine" },
   { id: "markets", label: "Markets" },
   { id: "tracks", label: "Trading tracks" },
   { id: "agents", label: "Agents" },

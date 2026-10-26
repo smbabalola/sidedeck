@@ -1,0 +1,934 @@
+{
+ "schema_version": 1,
+ "status": "AVAILABLE",
+ "execution_enabled": false,
+ "provenance": "SYNTHETIC_FIXTURE",
+ "mode": "acceptance",
+ "generated_at": "2026-10-23T20:05:00+00:00",
+ "cutoff_session": "2026-10-23",
+ "admission_through": "2026-04-30",
+ "data_freshness": {
+  "age_days_at_run": "0",
+  "latest_session": "2026-10-23",
+  "status": "CURRENT"
+ },
+ "market_data": [
+  {
+   "canonical_id": "US:SPY",
+   "first": "2022-01-03",
+   "last": "2026-10-23",
+   "sessions": 1207,
+   "limitations": [
+    "DAILY_BARS_ONLY",
+    "HISTORICAL_CLOSE_IS_NOT_AN_EXECUTABLE_QUOTE",
+    "CORPORATE_ACTIONS_NOT_INDEPENDENTLY_VERIFIED",
+    "SPLIT_ADJUSTED_PRICE_ONLY_NO_DIVIDENDS",
+    "SYNTHETIC_FIXTURE_NOT_MARKET_EVIDENCE"
+   ]
+  },
+  {
+   "canonical_id": "US:QQQ",
+   "first": "2022-01-03",
+   "last": "2026-10-23",
+   "sessions": 1207,
+   "limitations": [
+    "DAILY_BARS_ONLY",
+    "HISTORICAL_CLOSE_IS_NOT_AN_EXECUTABLE_QUOTE",
+    "CORPORATE_ACTIONS_NOT_INDEPENDENTLY_VERIFIED",
+    "SPLIT_ADJUSTED_PRICE_ONLY_NO_DIVIDENDS",
+    "SYNTHETIC_FIXTURE_NOT_MARKET_EVIDENCE"
+   ]
+  },
+  {
+   "canonical_id": "US:MSFT",
+   "first": "2022-01-03",
+   "last": "2026-10-23",
+   "sessions": 1207,
+   "limitations": [
+    "DAILY_BARS_ONLY",
+    "HISTORICAL_CLOSE_IS_NOT_AN_EXECUTABLE_QUOTE",
+    "CORPORATE_ACTIONS_NOT_INDEPENDENTLY_VERIFIED",
+    "SPLIT_ADJUSTED_PRICE_ONLY_NO_DIVIDENDS",
+    "SYNTHETIC_FIXTURE_NOT_MARKET_EVIDENCE"
+   ]
+  }
+ ],
+ "excluded_instruments": {},
+ "scanner": {
+  "status": "COMPLETED",
+  "scanned": 3,
+  "shortlist": [
+   {
+    "canonical_id": "US:SPY",
+    "rank": 1,
+    "score": "0.650"
+   },
+   {
+    "canonical_id": "US:MSFT",
+    "rank": 2,
+    "score": "0.475"
+   },
+   {
+    "canonical_id": "US:QQQ",
+    "rank": 3,
+    "score": "0.375"
+   }
+  ],
+  "filtered": [],
+  "note": "Ranking heuristic only; not an expected return or an order authorization."
+ },
+ "strategies": [
+  {
+   "instrument": "US:SPY",
+   "strategy_id": "channel_mean_reversion",
+   "version": "1.0.0",
+   "admission": "ADMITTED",
+   "admission_without_override": "REJECTED",
+   "override": "FIXTURE_ONLY_OVERRIDE_NOT_EVIDENCE",
+   "reasons": [
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_16_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "close <= lowest close + (highest - lowest) x entry_bps / 10000 over the prior lookback closes",
+   "exit": "close >= channel midpoint, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "CHANNEL_MIDPOINT",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 88,
+   "profit_factor": "0.2008819978813245305880297207",
+   "max_drawdown": "0.8916121554970506557599016826",
+   "oos_trades": 16,
+   "oos_profit_factor": "0.3277801503992272521181876229",
+   "oos_ending_equity": "0.7611429180120069888848068500"
+  },
+  {
+   "instrument": "US:SPY",
+   "strategy_id": "liquidity_sweep_reversal",
+   "version": "1.0.0",
+   "admission": "RESEARCH_ONLY",
+   "admission_without_override": null,
+   "override": null,
+   "reasons": [
+    "INSUFFICIENT_COMPLETED_TRADES",
+    "INSUFFICIENT_OOS_COMPLETED_TRADES",
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_0_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "low breaks the prior lookback low, close recovers above it, volume >= volume_multiple x lookback average",
+   "exit": "next session without the setup, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "RULE_BASED_EXIT_NO_PRICE_TARGET",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 0,
+   "profit_factor": null,
+   "max_drawdown": "0",
+   "oos_trades": 0,
+   "oos_profit_factor": null,
+   "oos_ending_equity": "1.000000000000000000000000000"
+  },
+  {
+   "instrument": "US:SPY",
+   "strategy_id": "moving_average_trend",
+   "version": "1.0.0",
+   "admission": "RESEARCH_ONLY",
+   "admission_without_override": null,
+   "override": null,
+   "reasons": [
+    "INSUFFICIENT_COMPLETED_TRADES",
+    "INSUFFICIENT_OOS_COMPLETED_TRADES",
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_2_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "fast SMA of prior closes above slow SMA",
+   "exit": "fast SMA at or below slow SMA, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "RULE_BASED_EXIT_NO_PRICE_TARGET",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 11,
+   "profit_factor": null,
+   "max_drawdown": "0.1297575199508901166359729901",
+   "oos_trades": 2,
+   "oos_profit_factor": null,
+   "oos_ending_equity": "2.005431261194731795741824999"
+  },
+  {
+   "instrument": "US:QQQ",
+   "strategy_id": "channel_mean_reversion",
+   "version": "1.0.0",
+   "admission": "ADMITTED",
+   "admission_without_override": "REJECTED",
+   "override": "FIXTURE_ONLY_OVERRIDE_NOT_EVIDENCE",
+   "reasons": [
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_17_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "close <= lowest close + (highest - lowest) x entry_bps / 10000 over the prior lookback closes",
+   "exit": "close >= channel midpoint, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "CHANNEL_MIDPOINT",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 98,
+   "profit_factor": "0.3959541758520461776334117930",
+   "max_drawdown": "0.8362089242150725919292398058",
+   "oos_trades": 17,
+   "oos_profit_factor": "0.3804516580559477531979006451",
+   "oos_ending_equity": "0.7468303372575493882610523607"
+  },
+  {
+   "instrument": "US:QQQ",
+   "strategy_id": "liquidity_sweep_reversal",
+   "version": "1.0.0",
+   "admission": "RESEARCH_ONLY",
+   "admission_without_override": null,
+   "override": null,
+   "reasons": [
+    "INSUFFICIENT_COMPLETED_TRADES",
+    "INSUFFICIENT_OOS_COMPLETED_TRADES",
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_0_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "low breaks the prior lookback low, close recovers above it, volume >= volume_multiple x lookback average",
+   "exit": "next session without the setup, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "RULE_BASED_EXIT_NO_PRICE_TARGET",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 0,
+   "profit_factor": null,
+   "max_drawdown": "0",
+   "oos_trades": 0,
+   "oos_profit_factor": null,
+   "oos_ending_equity": "1.000000000000000000000000000"
+  },
+  {
+   "instrument": "US:QQQ",
+   "strategy_id": "moving_average_trend",
+   "version": "1.0.0",
+   "admission": "RESEARCH_ONLY",
+   "admission_without_override": null,
+   "override": null,
+   "reasons": [
+    "INSUFFICIENT_COMPLETED_TRADES",
+    "INSUFFICIENT_OOS_COMPLETED_TRADES",
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_2_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "fast SMA of prior closes above slow SMA",
+   "exit": "fast SMA at or below slow SMA, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "RULE_BASED_EXIT_NO_PRICE_TARGET",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 11,
+   "profit_factor": null,
+   "max_drawdown": "0.1509670570681856190020374669",
+   "oos_trades": 2,
+   "oos_profit_factor": null,
+   "oos_ending_equity": "2.039245985332862999483072248"
+  },
+  {
+   "instrument": "US:MSFT",
+   "strategy_id": "channel_mean_reversion",
+   "version": "1.0.0",
+   "admission": "ADMITTED",
+   "admission_without_override": "REJECTED",
+   "override": "FIXTURE_ONLY_OVERRIDE_NOT_EVIDENCE",
+   "reasons": [
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_17_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "close <= lowest close + (highest - lowest) x entry_bps / 10000 over the prior lookback closes",
+   "exit": "close >= channel midpoint, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "CHANNEL_MIDPOINT",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 85,
+   "profit_factor": "0.2296006464780430304099359603",
+   "max_drawdown": "0.8682064485587409737843448868",
+   "oos_trades": 17,
+   "oos_profit_factor": "0.3058923865484739583720655955",
+   "oos_ending_equity": "0.7556141518013754755735305563"
+  },
+  {
+   "instrument": "US:MSFT",
+   "strategy_id": "liquidity_sweep_reversal",
+   "version": "1.0.0",
+   "admission": "RESEARCH_ONLY",
+   "admission_without_override": null,
+   "override": null,
+   "reasons": [
+    "INSUFFICIENT_COMPLETED_TRADES",
+    "INSUFFICIENT_OOS_COMPLETED_TRADES",
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_0_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "low breaks the prior lookback low, close recovers above it, volume >= volume_multiple x lookback average",
+   "exit": "next session without the setup, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "RULE_BASED_EXIT_NO_PRICE_TARGET",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 0,
+   "profit_factor": null,
+   "max_drawdown": "0",
+   "oos_trades": 0,
+   "oos_profit_factor": null,
+   "oos_ending_equity": "1.000000000000000000000000000"
+  },
+  {
+   "instrument": "US:MSFT",
+   "strategy_id": "moving_average_trend",
+   "version": "1.0.0",
+   "admission": "RESEARCH_ONLY",
+   "admission_without_override": null,
+   "override": null,
+   "reasons": [
+    "INSUFFICIENT_COMPLETED_TRADES",
+    "INSUFFICIENT_OOS_COMPLETED_TRADES",
+    "PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_PROFIT_FACTOR_BELOW_SCREEN",
+    "OOS_TRADES_2_BELOW_SD071_FLOOR_30"
+   ],
+   "entry": "fast SMA of prior closes above slow SMA",
+   "exit": "fast SMA at or below slow SMA, or the ATR stop, or the time exit",
+   "stop_loss": "entry - 2 x ATR14 (SD-071 sizing)",
+   "target": "RULE_BASED_EXIT_NO_PRICE_TARGET",
+   "holding_period_sessions": [
+    5,
+    15
+   ],
+   "completed_trades": 11,
+   "profit_factor": null,
+   "max_drawdown": "0.1297414670557101173915993763",
+   "oos_trades": 2,
+   "oos_profit_factor": null,
+   "oos_ending_equity": "1.730874229695864113896265553"
+  }
+ ],
+ "agents": [
+  {
+   "portfolio": "ai-trading",
+   "instrument": null,
+   "status": "UNAVAILABLE",
+   "reason": "NO_AUTHORIZED_AGENT_RUN: provider spend and scope approval required",
+   "direction": null,
+   "model": null
+  },
+  {
+   "portfolio": "tradingagents",
+   "instrument": null,
+   "status": "UNAVAILABLE",
+   "reason": "NO_AUTHORIZED_AGENT_RUN: provider spend and scope approval required",
+   "direction": null,
+   "model": null
+  }
+ ],
+ "decisions": [
+  {
+   "symbol": "US:MSFT",
+   "direction": "ABSTAIN",
+   "decision": "ABSTAIN",
+   "strategy": [],
+   "reference_close": "94.63",
+   "stop_loss": "90.01",
+   "target": null,
+   "quantity": null,
+   "capital_required_usd": null,
+   "risk_reward": null,
+   "holding_period": null,
+   "reasons": [
+    "NO_CURRENT_SIGNAL"
+   ]
+  },
+  {
+   "symbol": "US:QQQ",
+   "direction": "ABSTAIN",
+   "decision": "ABSTAIN",
+   "strategy": [],
+   "reference_close": "94.69",
+   "stop_loss": "89.92",
+   "target": null,
+   "quantity": null,
+   "capital_required_usd": null,
+   "risk_reward": null,
+   "holding_period": null,
+   "reasons": [
+    "NO_CURRENT_SIGNAL"
+   ]
+  },
+  {
+   "symbol": "US:SPY",
+   "direction": "BUY",
+   "decision": "ELIGIBLE",
+   "strategy": [
+    "channel_mean_reversion@1.0.0"
+   ],
+   "reference_close": "105.28",
+   "stop_loss": "100.8571428571428571428571429",
+   "target": "117.54",
+   "quantity": "0.4749",
+   "capital_required_usd": "50.04",
+   "risk_reward": "2.77",
+   "holding_period": "<= 15 sessions",
+   "reasons": [
+    "BINDING_LIMIT:INSTRUMENT_TOTAL"
+   ]
+  }
+ ],
+ "risk": [
+  {
+   "canonical_id": "US:SPY",
+   "decision": "APPROVED",
+   "reasons": [],
+   "capital_required_usd": "50.04"
+  }
+ ],
+ "orders": [
+  {
+   "intent_id": "fdec2ed6-4719-5d56-a796-b5c181067922",
+   "canonical_id": "US:SPY",
+   "units": "0.4749",
+   "limit_price": "105.80",
+   "stop_price": "100.8571428571428571428571429",
+   "strategy": "channel_mean_reversion@1.0.0",
+   "broker_route": "SIMULATED_LOCAL",
+   "status": "PROPOSED_NOT_SUBMITTED"
+  }
+ ],
+ "no_trade": null,
+ "admitted_strategies": [
+  "US:SPY:channel_mean_reversion@1.0.0",
+  "US:QQQ:channel_mean_reversion@1.0.0",
+  "US:MSFT:channel_mean_reversion@1.0.0"
+ ],
+ "broker_routes": {
+  "ALPACA_PAPER": "NOT_RELEASED: account separation UNVERIFIED and authorization exhausted",
+  "ETORO_DEMO": "NOT_RELEASED: needs SD-074F policy-to-transport wiring, independent review and an owner-signed SD-063/SD-064 policy release",
+  "ETORO_REAL": "PERMANENTLY_EXCLUDED",
+  "SIMULATED_LOCAL": "AVAILABLE_LABELLED_SIMULATION"
+ },
+ "gates": {
+  "AI_RESEARCH": "BLOCKED (no authorized agent run; provider approval required)",
+  "BROKER": "BLOCKED (no broker-confirmed Demo round trip yet)",
+  "ENGINEERING": "NOT_ASSESSED_HERE (see exact-HEAD CI)",
+  "FORWARD_TESTING": "NOT_ASSESSED (simulated replay only; no observed Demo trading)",
+  "PAPER_EXECUTION": "BLOCKED (no owner-released Demo policy; SD-074F not wired)",
+  "REAL_DATA": "NOT_ASSESSED (fixture run)",
+  "STRATEGY_ADMISSION": "NOT_ASSESSED (fixture admission is not evidence)"
+ },
+ "replay": {
+  "provenance": "SIMULATION",
+  "fill_basis": "SIMULATED_LOCAL",
+  "basis": "SIMULATION_ON_SYNTHETIC_FIXTURE_NOT_PERFORMANCE_EVIDENCE",
+  "window": [
+   "2026-05-01",
+   "2026-10-23"
+  ],
+  "closed_trades": 33,
+  "open_positions": 2,
+  "total_return": "0.0011",
+  "max_drawdown": "0.0081",
+  "realized_pnl_usd": "1.199667",
+  "fees_usd": "1.43",
+  "benchmark": "-0.2552",
+  "cash_reconciliation": "MATCHED",
+  "kill_switch": "CLEAR",
+  "halt_reason": null,
+  "by_strategy": [
+   {
+    "strategy": "channel_mean_reversion@1.0.0",
+    "closed_trades": 33,
+    "win_rate": "0.485",
+    "profit_factor": "1.062",
+    "net_pnl_usd": "1.199667",
+    "verdict": "CONTINUE_TESTING"
+   }
+  ],
+  "positions": [
+   {
+    "ref": "1895d9cd-3396-501f-b01b-f7d44e204fe6",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-08",
+    "closed": "2026-10-09",
+    "fill_status": "FILLED",
+    "units": "0.4787",
+    "entry_price": "100.56",
+    "exit_price": "98.59",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-0.983039"
+   },
+   {
+    "ref": "1b3d2e55-9117-5385-a1f3-fe7355900e71",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-09",
+    "closed": "2026-06-10",
+    "fill_status": "FILLED",
+    "units": "0.4778",
+    "entry_price": "100.63",
+    "exit_price": "98.36",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-1.124606"
+   },
+   {
+    "ref": "1dbbb9b3-1155-5699-b428-85529389e5a8",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-09-28",
+    "closed": "2026-09-30",
+    "fill_status": "FILLED",
+    "units": "0.4053",
+    "entry_price": "121.17",
+    "exit_price": "122.39",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.454466"
+   },
+   {
+    "ref": "201fde8a-4a5f-5c2c-ac9d-cacb3867db83",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-23",
+    "closed": null,
+    "fill_status": "FILLED",
+    "units": "0.5241",
+    "entry_price": "94.68",
+    "exit_price": null,
+    "exit_reason": null,
+    "realized_pnl": null
+   },
+   {
+    "ref": "208ad5f2-2f3c-5faa-abeb-c4176291a6b6",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-07-02",
+    "closed": "2026-07-06",
+    "fill_status": "FILLED",
+    "units": "0.5414",
+    "entry_price": "88.92",
+    "exit_price": "87.18",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-0.982036"
+   },
+   {
+    "ref": "20be8f63-e21b-55ab-8323-ad6cca94bfe2",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-05-22",
+    "closed": "2026-05-26",
+    "fill_status": "FILLED",
+    "units": "0.4502",
+    "entry_price": "106.80",
+    "exit_price": "94.24",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-5.694512"
+   },
+   {
+    "ref": "28b22808-b4ee-54a0-a021-a2598d5b3fdb",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-09-24",
+    "closed": "2026-09-25",
+    "fill_status": "FILLED",
+    "units": "0.4199",
+    "entry_price": "114.61",
+    "exit_price": "111.97",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-1.148536"
+   },
+   {
+    "ref": "2cd44872-7bcf-58e7-908a-5dcb773e7097",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-23",
+    "closed": null,
+    "fill_status": "FILLED",
+    "units": "0.5081",
+    "entry_price": "94.74",
+    "exit_price": null,
+    "exit_reason": null,
+    "realized_pnl": null
+   },
+   {
+    "ref": "3b2318d0-a941-58d0-8e17-02a80aa01ace",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-02",
+    "closed": "2026-10-05",
+    "fill_status": "FILLED",
+    "units": "0.4163",
+    "entry_price": "115.89",
+    "exit_price": "113.25",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-1.139032"
+   },
+   {
+    "ref": "43d17878-9fdd-5b03-94a4-b168a3045b8c",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-03",
+    "closed": "2026-06-03",
+    "fill_status": "FILLED",
+    "units": "0.4180",
+    "entry_price": "106.14",
+    "exit_price": "106.04",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-0.081800"
+   },
+   {
+    "ref": "46616f90-546b-52be-8ae6-0ef79f36573a",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-01",
+    "closed": "2026-10-02",
+    "fill_status": "FILLED",
+    "units": "0.4502",
+    "entry_price": "106.80",
+    "exit_price": "104.42",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-1.111476"
+   },
+   {
+    "ref": "48091222-ba15-5d0a-8719-10c477579ac1",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-12",
+    "closed": "2026-10-13",
+    "fill_status": "FILLED",
+    "units": "0.4180",
+    "entry_price": "115.85",
+    "exit_price": "113.61",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-0.976320"
+   },
+   {
+    "ref": "63d9f7f0-a179-56d6-bc62-42a6a7ec08fa",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-07-02",
+    "closed": "2026-07-07",
+    "fill_status": "FILLED",
+    "units": "0.5563",
+    "entry_price": "89.20",
+    "exit_price": "94.00",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "2.620240"
+   },
+   {
+    "ref": "6bf4d2f1-0b59-5d33-9b7a-010d5b17f5ef",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-05-12",
+    "closed": "2026-05-14",
+    "fill_status": "FILLED",
+    "units": "0.3858",
+    "entry_price": "127.73",
+    "exit_price": "129.51",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.646724"
+   },
+   {
+    "ref": "6e17d4bf-a60e-5c20-ae91-3c509fe8eb94",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-05-26",
+    "closed": "2026-05-26",
+    "fill_status": "FILLED",
+    "units": "0.4163",
+    "entry_price": "115.89",
+    "exit_price": "115.33",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-0.273128"
+   },
+   {
+    "ref": "6fa4093e-f86d-5d8e-b74a-a21d58c09dfe",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-06",
+    "closed": "2026-10-08",
+    "fill_status": "FILLED",
+    "units": "0.4110",
+    "entry_price": "119.89",
+    "exit_price": "121.55",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.642260"
+   },
+   {
+    "ref": "7617d419-0568-54bd-9aff-d4fa4c871e0c",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-16",
+    "closed": "2026-06-22",
+    "fill_status": "FILLED",
+    "units": "0.5081",
+    "entry_price": "94.74",
+    "exit_price": "95.63",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.412209"
+   },
+   {
+    "ref": "80e36fd2-779a-56ff-81ac-5a6a4661850c",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-09",
+    "closed": "2026-06-11",
+    "fill_status": "FILLED",
+    "units": "0.5178",
+    "entry_price": "95.27",
+    "exit_price": "99.18",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "1.974598"
+   },
+   {
+    "ref": "826d0674-e6f9-5ed7-85c6-28bd7d603b22",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-09-03",
+    "closed": "2026-09-08",
+    "fill_status": "FILLED",
+    "units": "0.3634",
+    "entry_price": "135.58",
+    "exit_price": "137.46",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.643192"
+   },
+   {
+    "ref": "856785bc-30f5-53d1-a23b-c40e02863f19",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-05-28",
+    "closed": "2026-06-01",
+    "fill_status": "FILLED",
+    "units": "0.4110",
+    "entry_price": "119.89",
+    "exit_price": "121.55",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.642260"
+   },
+   {
+    "ref": "8cb5828c-d1a9-5803-ae14-5cafc862739a",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-09-18",
+    "closed": "2026-09-22",
+    "fill_status": "FILLED",
+    "units": "0.4066",
+    "entry_price": "120.45",
+    "exit_price": "121.55",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.407260"
+   },
+   {
+    "ref": "a0b8f4ce-9a96-5a8a-8f62-9b0f29fb48a8",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-16",
+    "closed": "2026-10-19",
+    "fill_status": "FILLED",
+    "units": "0.4778",
+    "entry_price": "100.63",
+    "exit_price": "98.38",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-1.115050"
+   },
+   {
+    "ref": "a6f7141f-dca0-5f4b-896e-f90c9ae9876a",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-16",
+    "closed": "2026-06-18",
+    "fill_status": "FILLED",
+    "units": "0.5241",
+    "entry_price": "94.68",
+    "exit_price": "99.77",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "2.617669"
+   },
+   {
+    "ref": "ad59c00c-3071-5bc9-8a13-9f067c381bb0",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-05-08",
+    "closed": "2026-05-08",
+    "fill_status": "FILLED",
+    "units": "0.3923",
+    "entry_price": "123.01",
+    "exit_price": "122.41",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-0.275380"
+   },
+   {
+    "ref": "aea8c1b0-8c4e-5639-8f8c-ec5cb93a9b49",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-05-15",
+    "closed": "2026-05-18",
+    "fill_status": "FILLED",
+    "units": "0.4199",
+    "entry_price": "114.61",
+    "exit_price": "111.97",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-1.148536"
+   },
+   {
+    "ref": "d17f1b32-fc3e-51df-9bf8-37e35cca9983",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-09-10",
+    "closed": "2026-09-10",
+    "fill_status": "FILLED",
+    "units": "0.3696",
+    "entry_price": "120.03",
+    "exit_price": "119.91",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-0.084352"
+   },
+   {
+    "ref": "d451538b-a9ea-5016-8eb0-b1cdfb64c164",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-07-20",
+    "closed": "2026-07-22",
+    "fill_status": "FILLED",
+    "units": "0.5926",
+    "entry_price": "83.72",
+    "exit_price": "88.23",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "2.622626"
+   },
+   {
+    "ref": "dafd5a92-31ed-5d33-844a-ac10d0702189",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-05-18",
+    "closed": "2026-05-19",
+    "fill_status": "FILLED",
+    "units": "0.3924",
+    "entry_price": "123.42",
+    "exit_price": "121.05",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-0.969988"
+   },
+   {
+    "ref": "df3d3ab6-3791-5a51-b0a5-42cb73fe02c7",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-03",
+    "closed": "2026-06-05",
+    "fill_status": "FILLED",
+    "units": "0.4633",
+    "entry_price": "105.60",
+    "exit_price": "106.84",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.534492"
+   },
+   {
+    "ref": "e3389ac2-e0a5-5083-9c24-bb3a3d6ed6de",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-11",
+    "closed": "2026-06-15",
+    "fill_status": "FILLED",
+    "units": "0.4598",
+    "entry_price": "106.51",
+    "exit_price": "107.49",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "0.410604"
+   },
+   {
+    "ref": "edcbd082-bd39-501d-b2a0-cda3b8376ac7",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-25",
+    "closed": "2026-06-26",
+    "fill_status": "FILLED",
+    "units": "0.5091",
+    "entry_price": "94.45",
+    "exit_price": "92.34",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-1.114201"
+   },
+   {
+    "ref": "eea2eb48-bda3-5294-a562-d8edfc002a59",
+    "canonical_id": "US:SPY",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-07-13",
+    "closed": "2026-07-15",
+    "fill_status": "FILLED",
+    "units": "0.5855",
+    "entry_price": "84.24",
+    "exit_price": "87.71",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "1.981685"
+   },
+   {
+    "ref": "f744db2f-db87-52f2-848f-03dd2baaa7f8",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-06-25",
+    "closed": "2026-06-29",
+    "fill_status": "FILLED",
+    "units": "0.5495",
+    "entry_price": "89.75",
+    "exit_price": "93.44",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "1.977655"
+   },
+   {
+    "ref": "f90f6010-f029-5647-9eb9-1e3a788474fa",
+    "canonical_id": "US:MSFT",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-16",
+    "closed": "2026-10-20",
+    "fill_status": "FILLED",
+    "units": "0.5178",
+    "entry_price": "95.27",
+    "exit_price": "99.18",
+    "exit_reason": "STRATEGY_EXIT",
+    "realized_pnl": "1.974598"
+   },
+   {
+    "ref": "fa56f7dc-7da5-523d-82cc-44c8596f183e",
+    "canonical_id": "US:QQQ",
+    "strategy": "channel_mean_reversion@1.0.0",
+    "opened": "2026-10-09",
+    "closed": "2026-10-12",
+    "fill_status": "FILLED",
+    "units": "0.4457",
+    "entry_price": "107.97",
+    "exit_price": "105.50",
+    "exit_reason": "STOP_LOSS",
+    "realized_pnl": "-1.140879"
+   }
+  ]
+ }
+}
