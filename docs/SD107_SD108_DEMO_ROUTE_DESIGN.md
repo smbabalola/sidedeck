@@ -94,10 +94,19 @@ SD-064 cap ceilings are the reviewed values; SD-063 proposals are
   publishes policy-ledger outcomes after resolution. Tests use `WriteOnceDirectoryAnchor` only.
   The SD-064 grant-use ledger is a separate local ledger and is not yet covered by an off-machine
   store; no real off-machine service is provisioned. Store failure refuses before simulator I/O.
+- The deterministic simulator can persist orders and positions in SQLite. A repeated open/close
+  reference returns its existing simulated order, and `recover_entry` / `recover_exit` perform
+  read-only lookup and reconciliation after a simulated process interruption. Recovery preserves
+  the kill switch; it never retries the write. This verifies local crash behavior only, not the
+  durability or idempotency contract of any production broker transport.
 - SD-074E's separate protective grant is wired to reduce-only closes after policy expiry. A
   policy or protective grant is re-verified against its own subject and request/write budget.
   Missing/expired protective authority or an unavailable anchor refuses the close; the operator
   must use the Demo UI under the current manual recovery runbook.
+- A separately signed protective grant authorizes reduce-only exits after the policy window
+  expires. Ordinary grant revocation while the policy window remains active does not trigger an
+  automatic liquidation; the existing security regression keeps that behavior. It does not
+  restore entry rights.
 - The DAY policy is still intentionally absent: SD-063 refuses DAY until approved five-minute
   data and independent native-strategy admission exist. The Day Trader skill remains
   `RESEARCH_ONLY` / `SIMULATION_ONLY`; its advisory output cannot enter this route.
@@ -105,8 +114,10 @@ SD-064 cap ceilings are the reviewed values; SD-063 proposals are
 **Not verified / release blockers:** no real Demo transport is implemented or enabled; no
 authenticated GET or order occurred; there is no owner-signed autonomous policy/release, no
 provisioned off-machine write-once store for both policy and grant-use ledgers, and no independent
-full-lifecycle review. Close-info without price remains unresolved. Multi-position fills remain
-unresolved.
+full-lifecycle review of the latest follow-up. Close-info without price remains unresolved.
+Multi-position fills remain unresolved. DAY remains refused by SD-063 until approved intraday
+data and independent native strategy admission are available; the Day Trader research module
+cannot create an execution-qualified signal.
 These are explicit blockers, not implied completion. The route may be integrated with SD-103
 only after those items, the DAY data/admission gates where relevant, review, and separate owner
 release are satisfied.
