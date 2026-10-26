@@ -44,3 +44,18 @@ establish whether the cause was authentication, entitlement, endpoint routing or
 The collector now records the numeric HTTP status and a bounded classification, and stops after
 the first HTTP failure. The next authenticated action, if still needed, is a separately signed
 single-GET diagnostic for the same v1 search endpoint; it is not authorized by this change.
+
+## Fresh diagnostic package (not authorized)
+
+Prepare a new SD-077 authorization with exactly one request:
+
+- `GET https://public-api.etoro.com/api/v1/market-data/search?internalSymbolFull=AAPL`
+- host `public-api.etoro.com`; method `GET`; retries `0`
+- credentials: local `ETORO_API_KEY` and `ETORO_USER_KEY`, read only after signature verification
+- no redirects, other symbols, coverage/candle/account/order endpoints or response-body logging
+- output: numeric HTTP status, bounded classification, response SHA-256 and sanitized schema result
+
+The owner should first inspect the eToro portal for Demo environment, key pairing, market-data
+permission, expiry and IP restrictions. If that does not identify the cause, sign this one-request
+scope in the existing `sidedeck-data-authorization` namespace and run it once through SD-077.
+Do not reuse `sd120-etoro-5m-20261026123521`, its digest, signature, ledger budget or marker.
