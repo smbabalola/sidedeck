@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +14,17 @@ from sidedeck.application.sd014_strategy_engine import (
 )
 
 
+SD021_CUTOFF = datetime(2026, 10, 20, 23, 59, 59, tzinfo=timezone.utc)
+
+
 def run_bundle(path: str | Path) -> dict[str, Any]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    from datetime import datetime, timezone
-    bars, normalization = normalize_daily_bars(
-        payload, cutoff=datetime(2026, 10, 20, 23, 59, 59, tzinfo=timezone.utc),
-    )
+    return research_payload(payload, cutoff=SD021_CUTOFF)
+
+
+def research_payload(payload: dict[str, Any], *, cutoff: datetime) -> dict[str, Any]:
+    """SD-021 research on one admitted bundle, using only bars at or before ``cutoff``."""
+    bars, normalization = normalize_daily_bars(payload, cutoff=cutoff)
     strategy_bars = bars_from_normalized(bars)
     config = EvaluationConfig()
     evaluations: dict[str, dict[str, Any]] = {}

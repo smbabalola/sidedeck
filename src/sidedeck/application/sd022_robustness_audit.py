@@ -138,7 +138,11 @@ def _screen_status(metrics: dict[str, Any]) -> tuple[str, list[str]]:
 
 
 def audit_bundle(path: str | Path) -> dict[str, Any]:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return audit_report(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def audit_report(data: dict[str, Any]) -> dict[str, Any]:
+    """Independent robustness audit of one in-memory SD-021 research report."""
     audited: dict[str, Any] = {}
     for strategy_id, evaluation in data["strategies"].items():
         metrics = _independent_metrics(evaluation)
