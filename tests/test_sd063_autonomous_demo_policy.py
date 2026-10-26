@@ -10,6 +10,7 @@ import json
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -21,6 +22,7 @@ from sidedeck.application import sd063_autonomous_demo_policy as sd063
 from sidedeck.application.sd063_autonomous_demo_policy import (
     AutonomousDemoPolicy, AutonomousDemoRuntime, EntryProposal, EntryQuote, ExitQuote,
     InstrumentScope, PolicyLedger, PolicyRefused, Refusal, StrategyScope, TrackBudget,
+    protective_subject,
     check_grant_binding,
 )
 from sidedeck.application.sd064_unlock_grant import (
@@ -29,6 +31,9 @@ from sidedeck.application.sd064_unlock_grant import (
 from sidedeck.application.sd074_trusted_inputs import (
     AuthenticatedRuntime, InputVerifier, NonceStore, SourceRegistry, SourceSigner,
     TrustedSource,
+)
+from sidedeck.application.sd074_external_anchor import (
+    AnchorKeeper, WriteOnceDirectoryAnchor,
 )
 from sidedeck.application.sd107_demo_gateway import (
     BROKER_ROUTES, GatewayRefused, OfflineDemoGateway, OfflineDemoSimulator,
@@ -192,13 +197,21 @@ def env(tmp_path: Path):
 
 def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | None = None,
                      malformed_lookup: bool = False,
-                     bid: str = "499.9", ask: str = "500"):
+                     bid: str = "499.9", ask: str = "500",
+                     protective_grant: tuple[dict[str, object], str] | None = None):
     quote_source = TrustedSource("gateway-quotes", "broker_quotes", b"q" * 40)
     recon_source = TrustedSource("gateway-recon", "broker_reconciliation", b"r" * 40)
     verifier = InputVerifier(SourceRegistry([quote_source, recon_source]),
                              NonceStore(env.tmp / "gateway-nonces.sqlite3"),
                              clock=env.clock)
-    runtime = AuthenticatedRuntime(env.rt, verifier)
+    runtime_impl = env.rt
+    if protective_grant is not None:
+        runtime_impl = env.runtime(env.ledger, env.authority,
+                                   protective_grant=protective_grant)
+        env.rt = runtime_impl
+    runtime = AuthenticatedRuntime(runtime_impl, verifier)
+    anchor = AnchorKeeper(WriteOnceDirectoryAnchor(env.tmp / "gateway-anchor"), b"a" * 40)
+    anchor.initialize(env.ledger, env.clock.now)
     quote_signer = SourceSigner(quote_source, env.clock)
     gateway = OfflineDemoGateway(
         policy=env.policy, runtime=runtime, authority=env.authority,
@@ -206,7 +219,8 @@ def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | N
         simulator=OfflineDemoSimulator(fill_price=Decimal(fill_price),
                                        close_price=Decimal(close_price) if close_price else None,
                                        malformed_lookup=malformed_lookup),
-        reconciliation_signer=SourceSigner(recon_source, env.clock), clock=env.clock,
+        reconciliation_signer=SourceSigner(recon_source, env.clock), anchor_keeper=anchor,
+        protective_grant=protective_grant, clock=env.clock,
     )
     quote = quote_signer.seal({
         "canonical_id": MSFT, "bid": bid, "ask": ask,
@@ -216,9 +230,9 @@ def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | N
 
 
 def test_sd107_offline_gateway_revalidates_grant_and_reconciles_sealed_fill(env):
+    gateway, quote, quote_signer = _offline_gateway(env, close_price="400")
     proposal = env.entry()
     assert isinstance(proposal, EntryProposal)
-    gateway, quote, quote_signer = _offline_gateway(env, close_price="400")
 
     envelope = gateway.submit_entry(proposal, quote=quote)
 
@@ -242,9 +256,9 @@ def test_sd107_offline_gateway_revalidates_grant_and_reconciles_sealed_fill(env)
 
 
 def test_sd107_revoked_grant_refuses_before_simulated_write(env):
+    gateway, quote, _ = _offline_gateway(env)
     proposal = env.entry()
     assert isinstance(proposal, EntryProposal)
-    gateway, quote, _ = _offline_gateway(env)
     env.authority.revoke(env.grant_document["grant_id"], "test revocation")
 
     with pytest.raises(GatewayRefused, match="signed grant refused"):
@@ -255,19 +269,32 @@ def test_sd107_revoked_grant_refuses_before_simulated_write(env):
 
 
 def test_sd107_fresh_quote_above_limit_is_refused_before_simulated_write(env):
+    gateway, quote, _ = _offline_gateway(env, bid="510", ask="511")
     proposal = env.entry()
     assert isinstance(proposal, EntryProposal)
-    gateway, quote, _ = _offline_gateway(env, bid="510", ask="511")
 
     with pytest.raises(GatewayRefused, match="above the proposal limit"):
         gateway.submit_entry(proposal, quote=quote)
     assert env.ledger.state().entries[proposal.reference_id].outcome is None
 
 
-def test_sd107_malformed_lookup_is_unresolved_and_halts_without_retry(env):
+def test_sd107_unavailable_external_anchor_refuses_before_simulated_write(env):
+    gateway, quote, _ = _offline_gateway(env)
     proposal = env.entry()
     assert isinstance(proposal, EntryProposal)
+    checkpoint = next((env.tmp / "gateway-anchor").glob("*.json"))
+    checkpoint.unlink()
+
+    with pytest.raises(GatewayRefused, match="not externally anchored"):
+        gateway.submit_entry(proposal, quote=quote)
+
+    assert gateway._simulator.submitted_orders == 0
+
+
+def test_sd107_malformed_lookup_is_unresolved_and_halts_without_retry(env):
     gateway, quote, _ = _offline_gateway(env, malformed_lookup=True)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
 
     evidence = gateway.submit_entry(proposal, quote=quote)
 
@@ -289,6 +316,39 @@ def test_close_reconciliation_cannot_change_broker_position_lineage(env):
         env.ledger.resolve(_fill(plan.exits[0].reference_id, "FILLED", env.clock.now,
                                  filled_units=proposal.units, avg_price=Decimal("400"),
                                  broker_position_id="another-position"))
+
+
+def test_protective_grant_allows_reduce_only_close_after_policy_expiry(env):
+    grant = replace(
+        _grant(env.policy), grant_id=str(uuid.uuid4()),
+        subject_digest=protective_subject(env.policy),
+        not_before=datetime(2026, 11, 3, 14, 0, tzinfo=UTC),
+        expires_at=datetime(2026, 11, 10, 14, 0, tzinfo=UTC),
+        purpose="SD-074E protective exit test",
+    )
+    document = json.loads(grant.canonical())
+    protective = (document, f"sig:{grant.digest()}")
+    gateway, _, quote_signer = _offline_gateway(
+        env, close_price="400", protective_grant=protective)
+    entry = env.entry()
+    assert isinstance(entry, EntryProposal)
+    gateway.submit_entry(entry, quote=quote_signer.seal({
+        "canonical_id": MSFT, "bid": "499.9", "ask": "500",
+        "quote_time": env.clock.now.isoformat(),
+    }))
+
+    env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+    plan = env.rt.plan_exits(bids=env.bids("400"))
+    assert len(plan.exits) == 1 and plan.exits[0].authority == "protective"
+    close_quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": "400", "ask": "401",
+        "quote_time": env.clock.now.isoformat(),
+    })
+
+    gateway.submit_exit(plan.exits[0], quote=close_quote)
+
+    assert not env.ledger.open_positions()
+    assert env.ledger.state().exits[plan.exits[0].reference_id].outcome == "FILLED"
 
 
 # --- policy document -------------------------------------------------------------------------

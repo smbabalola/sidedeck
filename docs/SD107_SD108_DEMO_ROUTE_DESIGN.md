@@ -90,15 +90,23 @@ SD-064 cap ceilings are the reviewed values; SD-063 proposals are
   position notional, aggregate exposure, daily order count, daily/cumulative loss, policy window,
   and kill-switch before an entry. It never retries an ambiguous outcome. Full reduce-only
   closes require the stored broker position id and a fresh sealed bid.
+- The gateway calls SD-074D `publish` and `require_published` before each simulated request and
+  publishes policy-ledger outcomes after resolution. Tests use `WriteOnceDirectoryAnchor` only.
+  The SD-064 grant-use ledger is a separate local ledger and is not yet covered by an off-machine
+  store; no real off-machine service is provisioned. Store failure refuses before simulator I/O.
+- SD-074E's separate protective grant is wired to reduce-only closes after policy expiry. A
+  policy or protective grant is re-verified against its own subject and request/write budget.
+  Missing/expired protective authority or an unavailable anchor refuses the close; the operator
+  must use the Demo UI under the current manual recovery runbook.
 - The DAY policy is still intentionally absent: SD-063 refuses DAY until approved five-minute
   data and independent native-strategy admission exist. The Day Trader skill remains
   `RESEARCH_ONLY` / `SIMULATION_ONLY`; its advisory output cannot enter this route.
 
 **Not verified / release blockers:** no real Demo transport is implemented or enabled; no
 authenticated GET or order occurred; there is no owner-signed autonomous policy/release, no
-off-machine write-once ledger anchor, and no independent full-lifecycle review. The signed
-policy's protective-exit grant after expiry/revocation is not yet wired into this simulator
-gateway. Close-info without price remains unresolved. Multi-position fills remain unresolved.
+provisioned off-machine write-once store for both policy and grant-use ledgers, and no independent
+full-lifecycle review. Close-info without price remains unresolved. Multi-position fills remain
+unresolved.
 These are explicit blockers, not implied completion. The route may be integrated with SD-103
 only after those items, the DAY data/admission gates where relevant, review, and separate owner
 release are satisfied.
