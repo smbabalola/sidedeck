@@ -296,11 +296,19 @@ class InputVerifier:
 
     def fill(self, envelope: Envelope) -> FillEvidence:
         source, payload = self.verify(envelope, "fill")
-        _exact(payload, {"reference", "outcome", "units", "price", "filled_at",
-                         "broker_order_id", "lookup_sha256"})
+        required = {"reference", "outcome", "units", "price", "filled_at",
+                    "broker_order_id", "lookup_sha256"}
+        if set(payload) not in (required, required | {"broker_position_id"}):
+            raise InputRefused(f"payload must contain exactly {sorted(required)} and an optional "
+                               "broker_position_id")
         if not isinstance(payload["lookup_sha256"], str) or \
                 not _HEX64.fullmatch(payload["lookup_sha256"]):
             raise InputRefused("fill evidence needs the broker order lookup digest")
+        position_id = payload.get("broker_position_id")
+        if position_id is not None and (not isinstance(position_id, str) or not position_id.strip()):
+            raise InputRefused("broker_position_id must be a non-empty string")
+        if payload.get("outcome") in ("FILLED", "PARTIALLY_FILLED") and position_id is None:
+            raise InputRefused("filled evidence needs a broker position id")
         try:
             return _new_fill_evidence(
                 reference=payload["reference"], outcome=payload["outcome"],
@@ -308,7 +316,7 @@ class InputVerifier:
                 at=_time(payload["filled_at"], "filled_at"), source_id=source.source_id,
                 broker_order_id=str(payload["broker_order_id"]),
                 lookup_sha256=payload["lookup_sha256"], envelope_mac=envelope.mac,
-                envelope_nonce=envelope.nonce)
+                envelope_nonce=envelope.nonce, broker_position_id=position_id)
         except PermissionError as exc:
             if isinstance(exc, InputRefused):
                 raise
@@ -350,6 +358,10 @@ class AuthenticatedRuntime:
     @property
     def ledger(self) -> PolicyLedger:
         return self.runtime.ledger
+
+    def verified_quote(self, envelope: Envelope) -> BrokerQuote:
+        """Verify and consume one fresh broker quote for a send-time recheck."""
+        return self._verifier.quote(envelope)
 
     def _quotes(self, envelopes: Sequence[Envelope]) -> dict[str, BrokerQuote]:
         quotes: dict[str, BrokerQuote] = {}

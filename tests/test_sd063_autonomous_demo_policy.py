@@ -26,6 +26,13 @@ from sidedeck.application.sd063_autonomous_demo_policy import (
 from sidedeck.application.sd064_unlock_grant import (
     GRANT_NAMESPACE, GrantLedger, UnlockAuthority, UnlockGrant,
 )
+from sidedeck.application.sd074_trusted_inputs import (
+    AuthenticatedRuntime, InputVerifier, NonceStore, SourceRegistry, SourceSigner,
+    TrustedSource,
+)
+from sidedeck.application.sd107_demo_gateway import (
+    BROKER_ROUTES, GatewayRefused, OfflineDemoGateway, OfflineDemoSimulator,
+)
 from sidedeck.application.sd070_research_signal import EvidenceRef, ResearchSignal
 from sidedeck.application.sd071_decision_engine import MarketContext, StrategyAdmission
 
@@ -65,11 +72,13 @@ def _policy(**changes: object) -> AutonomousDemoPolicy:
 
 
 def _fill(reference: str, outcome: str, at: datetime, *, filled_units: Decimal = Decimal(0),
-          avg_price: Decimal = Decimal(0)) -> sd063.FillEvidence:
+          avg_price: Decimal = Decimal(0),
+          broker_position_id: str = "demo-position-1") -> sd063.FillEvidence:
     """Test stand-in for SD-074 verified reconciliation evidence."""
     return sd063._new_fill_evidence(reference=reference, outcome=outcome, units=filled_units,
                                     price=avg_price, at=at, source_id="test-reconciliation",
-                                    broker_order_id="demo-order-1", lookup_sha256="c" * 64)
+                                    broker_order_id="demo-order-1", lookup_sha256="c" * 64,
+                                    broker_position_id=broker_position_id)
 
 
 class _Clock:
@@ -179,6 +188,107 @@ def env(tmp_path: Path):
     e = _Env(tmp_path)
     yield e
     e.ledger.close()
+
+
+def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | None = None,
+                     malformed_lookup: bool = False,
+                     bid: str = "499.9", ask: str = "500"):
+    quote_source = TrustedSource("gateway-quotes", "broker_quotes", b"q" * 40)
+    recon_source = TrustedSource("gateway-recon", "broker_reconciliation", b"r" * 40)
+    verifier = InputVerifier(SourceRegistry([quote_source, recon_source]),
+                             NonceStore(env.tmp / "gateway-nonces.sqlite3"),
+                             clock=env.clock)
+    runtime = AuthenticatedRuntime(env.rt, verifier)
+    quote_signer = SourceSigner(quote_source, env.clock)
+    gateway = OfflineDemoGateway(
+        policy=env.policy, runtime=runtime, authority=env.authority,
+        grant_document=env.grant_document, grant_signature=env.signature,
+        simulator=OfflineDemoSimulator(fill_price=Decimal(fill_price),
+                                       close_price=Decimal(close_price) if close_price else None,
+                                       malformed_lookup=malformed_lookup),
+        reconciliation_signer=SourceSigner(recon_source, env.clock), clock=env.clock,
+    )
+    quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": bid, "ask": ask,
+        "quote_time": (env.clock.now - timedelta(seconds=5)).isoformat(),
+    })
+    return gateway, quote, quote_signer
+
+
+def test_sd107_offline_gateway_revalidates_grant_and_reconciles_sealed_fill(env):
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    gateway, quote, quote_signer = _offline_gateway(env, close_price="400")
+
+    envelope = gateway.submit_entry(proposal, quote=quote)
+
+    entry = env.ledger.state().entries[proposal.reference_id]
+    assert entry.outcome == "FILLED" and entry.filled == proposal.units
+    assert entry.avg_price == Decimal("500")
+    assert envelope.kind == "fill"
+    assert len(env.authority._ledger.events()) >= 3  # runtime check + send + lookup
+    assert BROKER_ROUTES["ETORO_DEMO"] == "NOT_RELEASED"
+
+    plan = env.rt.plan_exits(bids=env.bids("400"))
+    assert len(plan.exits) == 1 and plan.exits[0].broker_position_id == "100001"
+    exit_quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": "400", "ask": "401",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    exit_envelope = gateway.submit_exit(plan.exits[0], quote=exit_quote)
+    assert exit_envelope.kind == "fill"
+    assert not env.ledger.open_positions()
+    assert env.ledger.state().exits[plan.exits[0].reference_id].outcome == "FILLED"
+
+
+def test_sd107_revoked_grant_refuses_before_simulated_write(env):
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    gateway, quote, _ = _offline_gateway(env)
+    env.authority.revoke(env.grant_document["grant_id"], "test revocation")
+
+    with pytest.raises(GatewayRefused, match="signed grant refused"):
+        gateway.submit_entry(proposal, quote=quote)
+
+    assert env.ledger.state().entries[proposal.reference_id].outcome is None
+    assert env.ledger.kill_switch_engaged() is False
+
+
+def test_sd107_fresh_quote_above_limit_is_refused_before_simulated_write(env):
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    gateway, quote, _ = _offline_gateway(env, bid="510", ask="511")
+
+    with pytest.raises(GatewayRefused, match="above the proposal limit"):
+        gateway.submit_entry(proposal, quote=quote)
+    assert env.ledger.state().entries[proposal.reference_id].outcome is None
+
+
+def test_sd107_malformed_lookup_is_unresolved_and_halts_without_retry(env):
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    gateway, quote, _ = _offline_gateway(env, malformed_lookup=True)
+
+    evidence = gateway.submit_entry(proposal, quote=quote)
+
+    entry = env.ledger.state().entries[proposal.reference_id]
+    assert evidence.kind == "fill"
+    assert entry.outcome == "UNRESOLVED"
+    assert env.ledger.kill_switch_engaged()
+    uses = [event for _, event, _ in env.authority._ledger.events()
+            if event in ("USE_WRITE", "USE_READ")]
+    assert uses.count("USE_WRITE") == 1
+
+
+def test_close_reconciliation_cannot_change_broker_position_lineage(env):
+    proposal = env.open_position()
+    plan = env.rt.plan_exits(bids=env.bids("400"))
+    assert len(plan.exits) == 1
+
+    with pytest.raises(PolicyRefused, match="different broker position"):
+        env.ledger.resolve(_fill(plan.exits[0].reference_id, "FILLED", env.clock.now,
+                                 filled_units=proposal.units, avg_price=Decimal("400"),
+                                 broker_position_id="another-position"))
 
 
 # --- policy document -------------------------------------------------------------------------
