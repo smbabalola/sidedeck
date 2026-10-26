@@ -33,6 +33,42 @@ window, permission to use the returned data for internal research, and confirmat
 credential pair is entitled for these endpoints. This is separate from any Demo execution
 release and does not authorize orders.
 
+Fixed sample parameters:
+
+- `from=2026-10-23T14:00:00Z` inclusive
+- `to=2026-10-23T15:00:00Z` exclusive
+- `interval=5m`, `side=both`, `format=verbose`, `limit=2000`
+- no cursor is permitted in this nine-request package; any pagination requirement stops the run
+
+The executable is `sidedeck.application.sd120_etoro_five_minute`. It verifies the SSH signature
+before reading `ETORO_API_KEY` or `ETORO_USER_KEY`, then claims a single-use marker and reserves
+each request in the shared SD-077 ledger before transmission. It emits only sanitized records,
+coverage ranges/counts, response SHA-256 hashes and schema status.
+
+Owner commands, from the nested `sidedeck` checkout:
+
+```powershell
+.venv\Scripts\python.exe -m sidedeck.application.sd120_etoro_five_minute draft `
+  --out data\authorizations\sd120-draft.json `
+  --owner-confirms-terms-reviewed
+
+.venv\Scripts\python.exe -m sidedeck.application.sd077_data_authorization `
+  data\authorizations\sd120-draft.json --out-dir data\authorizations
+# Run the printed OWNER_SIGNING_COMMAND after reviewing the exact digest.
+
+.venv\Scripts\python.exe -m sidedeck.application.sd120_etoro_five_minute run `
+  --authorization data\authorizations\<id>.json `
+  --signature data\authorizations\<id>.digest.payload.sig `
+  --allowed-signers data\approval_allowed_signers `
+  --ledger data\data-authorization-ledger.sqlite3 `
+  --out-dir data\sd120-etoro-5m
+```
+
+The launch command is deliberately not run by Codex in this engineering batch. The owner must
+review and sign the digest, ensure the two named local environment variables are present, and
+start the final command separately. A missing identity, entitlement, five-minute coverage or
+schema result skips only dependent requests and never causes a retry or a scope expansion.
+
 ## Preferred path: owner-supplied licensed files
 
 The lowest-risk path is a local package supplied by the owner with written reuse rights. Place it

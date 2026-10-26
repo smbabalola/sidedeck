@@ -23,8 +23,8 @@ class EtoroMarketDataError(ValueError):
 
 SUPPORTED_SYMBOLS = ("SPY", "QQQ", "MSFT")
 SEARCH_PATH = "/api/v1/market-data/search"
-COVERAGE_PATH = "/api/v1/data/instruments/{instrument_id}/candles/coverage"
-CANDLES_PATH = "/api/v1/data/instruments/{instrument_id}/candles"
+COVERAGE_PATH = "/api/v1/data/instruments/{instrumentId}/candles/coverage"
+CANDLES_PATH = "/api/v1/data/instruments/{instrumentId}/candles"
 LOCAL_PAGE_LIMIT = 2_000
 _SYMBOL = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
 
@@ -108,12 +108,12 @@ def request_plan() -> tuple[RequestSpec, ...]:
     # only be materialized after a response proves an exact symbol identity.
     for symbol in SUPPORTED_SYMBOLS:
         plan.append(RequestSpec(
-            "five-minute coverage", COVERAGE_PATH.replace("{instrument_id}", "<verified-id>"),
+            "five-minute coverage", COVERAGE_PATH.replace("{instrumentId}", "<verified-id>"),
             (), symbol,
         ))
     for symbol in SUPPORTED_SYMBOLS:
         plan.append(RequestSpec(
-            "bounded five-minute sample", CANDLES_PATH.replace("{instrument_id}", "<verified-id>"),
+            "bounded five-minute sample", CANDLES_PATH.replace("{instrumentId}", "<verified-id>"),
             (("interval", "5m"), ("side", "both"), ("limit", str(LOCAL_PAGE_LIMIT))), symbol,
         ))
     return tuple(plan)
@@ -173,32 +173,65 @@ def parse_coverage(payload: Mapping[str, Any], *, instrument_id: int, symbol: st
     }
 
 
+def _display_symbol_matches(value: Any, expected: str, *, empty: bool) -> bool:
+    if value is None:
+        return empty
+    if not isinstance(value, str):
+        return False
+    # eToro's display symbol is commonly ``AAPL/USD``; identity remains the
+    # separately verified instrument ID plus the exact requested ticker.
+    return value.upper().split("/", 1)[0] == expected
+
+
+def _parse_price_row(row: Mapping[str, Any], *, expected_id: int, expected_symbol: str,
+                     side: str) -> Candle:
+    values = {name: _decimal(row.get(name), name) for name in ("open", "high", "low", "close")}
+    if values["high"] < max(values["open"], values["close"]) or values["low"] > min(values["open"], values["close"]):
+        raise EtoroMarketDataError("candle OHLC bounds are inconsistent")
+    volume = None if row.get("volume") is None else _decimal(row.get("volume"), "volume", positive=False)
+    return Candle(expected_id, expected_symbol, "5m", side, _time(row.get("time")), **values, volume=volume)
+
+
 def parse_candles(payload: Mapping[str, Any], *, instrument_id: int, symbol: str) -> tuple[Candle, ...]:
-    """Parse a bounded fixture page with strict identity, time and OHLC checks."""
+    """Parse a bounded fixture page, normalizing newest-first pages to ascending.
+
+    For ``side=both`` the documented verbose response is represented as one row
+    with ``bid`` and ``ask`` OHLC objects.  The canonical output contains one
+    ``Candle`` per side and timestamp; this prevents bid/ask values from being
+    accidentally treated as one synthetic price series.
+    """
 
     expected_id = _instrument_id(instrument_id)
     expected_symbol = _symbol(symbol)
     if _instrument_id(payload.get("instrumentId")) != expected_id:
         raise EtoroMarketDataError("candle instrument identity mismatch")
-    if str(payload.get("symbol", "")).upper() != expected_symbol:
-        raise EtoroMarketDataError("candle symbol identity mismatch")
-    if payload.get("interval") != "5m" or payload.get("side") not in {"bid", "ask", "both"}:
-        raise EtoroMarketDataError("only explicit five-minute bid/ask candle pages are accepted")
     rows = payload.get("results")
     if not isinstance(rows, list) or len(rows) > LOCAL_PAGE_LIMIT:
         raise EtoroMarketDataError("candle page exceeds the local bounded limit")
+    if not _display_symbol_matches(payload.get("symbol"), expected_symbol, empty=not rows):
+        raise EtoroMarketDataError("candle display symbol identity mismatch")
+    if payload.get("interval") != "5m" or payload.get("side") not in {"bid", "ask", "both"}:
+        raise EtoroMarketDataError("only explicit five-minute bid/ask candle pages are accepted")
     parsed: list[Candle] = []
     for row in rows:
         if not isinstance(row, Mapping):
             raise EtoroMarketDataError("candle row is malformed")
-        values = {name: _decimal(row.get(name), name) for name in ("open", "high", "low", "close")}
-        if values["high"] < max(values["open"], values["close"]) or values["low"] > min(values["open"], values["close"]):
-            raise EtoroMarketDataError("candle OHLC bounds are inconsistent")
-        volume = None if row.get("volume") is None else _decimal(row.get("volume"), "volume", positive=False)
-        parsed.append(Candle(expected_id, expected_symbol, "5m", str(payload["side"]), _time(row.get("time")), **values, volume=volume))
-    if [c.timestamp for c in parsed] != sorted({c.timestamp for c in parsed}):
-        raise EtoroMarketDataError("candle timestamps must be unique and ascending")
-    return tuple(parsed)
+        if payload["side"] == "both":
+            for side in ("bid", "ask"):
+                side_row = row.get(side)
+                if not isinstance(side_row, Mapping):
+                    raise EtoroMarketDataError("side=both requires bid and ask OHLC objects")
+                side_row = dict(side_row)
+                side_row["time"] = row.get("time")
+                parsed.append(_parse_price_row(side_row, expected_id=expected_id,
+                                               expected_symbol=expected_symbol, side=side))
+        else:
+            parsed.append(_parse_price_row(row, expected_id=expected_id,
+                                           expected_symbol=expected_symbol, side=str(payload["side"])))
+    timestamps = [(c.timestamp, c.side) for c in parsed]
+    if len(timestamps) != len(set(timestamps)):
+        raise EtoroMarketDataError("candle timestamps must be unique per side")
+    return tuple(sorted(parsed, key=lambda c: (c.timestamp, c.side)))
 
 
 def provenance(payload: Mapping[str, Any]) -> dict[str, str]:

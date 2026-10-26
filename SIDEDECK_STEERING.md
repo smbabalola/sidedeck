@@ -431,3 +431,9 @@ The offline coverage-first request plan and fail-closed fixture parsers are in
 credential or authenticated request is implied by that code. The exact nine-GET review package is
 `docs/SD115_INTRADAY_DATA_AUTHORIZATION_PROPOSAL.md`; it requires fresh owner authorization and
 does not authorize orders or a transport unlock.
+
+SD-120 is the prepared executable for that package. It is constrained to SPY/QQQ/MSFT discovery,
+coverage and fixed five-minute samples, with SD-077 signature verification and persistent request
+budgeting. It must stop on identity, entitlement, coverage or schema failure, and it must never
+retry, paginate beyond the signed scope, read credentials before signature verification, or touch
+the Demo trading transport. Review: `docs/SD120_ETORO_DISCOVERY_REVIEW.md`.

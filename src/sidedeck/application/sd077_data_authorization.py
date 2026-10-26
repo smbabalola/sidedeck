@@ -17,7 +17,7 @@ import hashlib
 import json
 import sqlite3
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -32,6 +32,7 @@ PROVIDER_HOSTS: dict[str, frozenset[str]] = {
     "ALPACA_SIP_DAILY": frozenset({"data.alpaca.markets"}),
     # SD-094A: public England & Wales bank-holiday feed (Open Government Licence v3.0).
     "GOV_UK_BANK_HOLIDAYS": frozenset({"www.gov.uk"}),
+    "ETORO_DEMO_MARKET_DATA": frozenset({"public-api.etoro.com"}),
 }
 _FORBIDDEN_PATH_PARTS = ("/orders", "/positions", "/account", "/trading", "/v2/account")
 _UNSAFE_PATH_TOKENS = ("%", "..", "//", ";", "\\")
@@ -70,11 +71,14 @@ class DataAuthorization:
     owner_terms_reviewed: bool
     notes: str = ""
     schema: str = SCHEMA
+    scope: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name in ("authorization_id", "provider", "purpose", "notes", "schema"):
             if not isinstance(getattr(self, name), str):
                 raise AuthorizationRefused(f"{name} must be a string")
+        if not isinstance(self.scope, dict):
+            raise AuthorizationRefused("scope must be an object")
         for name in ("max_requests", "max_retries"):
             if type(getattr(self, name)) is not int:
                 raise AuthorizationRefused(f"{name} must be an integer")
@@ -113,6 +117,21 @@ class DataAuthorization:
         data["issued_at"] = self.issued_at.astimezone(UTC).isoformat()
         data["expires_at"] = self.expires_at.astimezone(UTC).isoformat()
         return json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+    def allows_url(self, url: str) -> bool:
+        """Match an exact authorized path or a documented instrument-ID template."""
+        base = _check_url(url, PROVIDER_HOSTS[self.provider])
+        for authorized in self.urls:
+            if "{instrumentId}" not in authorized:
+                if base == authorized:
+                    return True
+                continue
+            prefix, suffix = authorized.split("{instrumentId}", 1)
+            if base.startswith(prefix) and base.endswith(suffix):
+                middle = base[len(prefix):len(base) - len(suffix) if suffix else None]
+                if middle.isdigit() and int(middle) > 0:
+                    return True
+        return False
 
     @property
     def digest(self) -> str:
@@ -174,7 +193,7 @@ class DataRequestLedger:
         if attempt > a.max_retries:
             raise AuthorizationRefused("retry budget exhausted")
         base = _check_url(url, PROVIDER_HOSTS[a.provider])
-        if base not in a.urls:  # exact path match only; no prefixes
+        if not a.allows_url(url):
             raise AuthorizationRefused("URL is outside the authorized scope")
         with closing(self._conn()) as conn:
             conn.execute("BEGIN IMMEDIATE")
