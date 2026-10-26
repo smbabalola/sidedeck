@@ -424,6 +424,8 @@ class OpenPosition:
     stop_price: Decimal
     horizon_max_days: int
     opened_at: datetime
+    broker_order_id: str = ""
+    broker_position_id: str = ""
 
 
 @dataclass
@@ -444,6 +446,8 @@ class _Entry:
     filled_at: datetime | None = None
     exited: Decimal = ZERO
     realized: Decimal = ZERO
+    broker_order_id: str = ""
+    broker_position_id: str = ""
 
 
 @dataclass
@@ -716,6 +720,8 @@ class PolicyLedger:
                 e.outcome, e.filled = d["outcome"], Decimal(d["units"])
                 e.avg_price = Decimal(d["price"])
                 e.filled_at = datetime.fromisoformat(at)
+                e.broker_order_id = d.get("broker_order_id", "")
+                e.broker_position_id = d.get("broker_position_id", "")
             elif event == "EXIT_PROPOSED":
                 exits[ref] = _Exit(ref, d["entry"], Decimal(d["units"]), Decimal(d["bid"]),
                                    datetime.fromisoformat(at))
@@ -765,13 +771,18 @@ class PolicyLedger:
             "outcome": evidence.outcome, "units": str(units if filled else ZERO),
             "price": str(price if filled else ZERO), "source": evidence.source_id,
             "broker_order_id": evidence.broker_order_id, "lookup_sha256": evidence.lookup_sha256,
+            "broker_position_id": evidence.broker_position_id or "",
             "envelope_mac": evidence.envelope_mac, "envelope_nonce": evidence.envelope_nonce})
 
     def resolve(self, evidence: "FillEvidence") -> None:
         """Record the reconciled broker outcome from verified evidence (SD-074). UNRESOLVED
         trips the persistent kill-switch and keeps the reservation counted."""
         with self.transaction():
-            target = self._target(self.state(), evidence)
+            state = self.state()
+            target = self._target(state, evidence)
+            if isinstance(target, _Exit) and evidence.broker_position_id != \
+                    state.entries[target.entry].broker_position_id:
+                raise PolicyRefused("close evidence names a different broker position")
             units, price = _check_resolution(target, evidence.outcome, evidence.units,
                                              evidence.price, evidence.at)
             kind = "ENTRY" if isinstance(target, _Entry) else "EXIT"
@@ -787,9 +798,13 @@ class PolicyLedger:
         broker order lookup digest) can turn it into a position or release its reservation.
         The kill-switch stays engaged."""
         with self.transaction():
-            target = self._target(self.state(), evidence)
+            state = self.state()
+            target = self._target(state, evidence)
             if target.outcome not in _UNKNOWN_OUTCOMES:
                 raise PolicyRefused("only UNRESOLVED or QUARANTINED proposals are reconciled")
+            if isinstance(target, _Exit) and evidence.broker_position_id != \
+                    state.entries[target.entry].broker_position_id:
+                raise PolicyRefused("close evidence names a different broker position")
             if evidence.outcome == "UNRESOLVED":
                 raise PolicyRefused("reconciliation needs a final broker outcome")
             units, price = _check_resolution(replace(target, outcome=None), evidence.outcome,
@@ -819,6 +834,7 @@ class FillEvidence:
     lookup_sha256: str
     envelope_mac: str = ""
     envelope_nonce: str = ""
+    broker_position_id: str | None = None
     _token: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -833,6 +849,9 @@ class FillEvidence:
         if not (isinstance(self.broker_order_id, str) and self.broker_order_id.strip()
                 and isinstance(self.source_id, str) and self.source_id.strip()):
             raise PolicyRefused("fill evidence needs a broker order id and source")
+        if self.outcome in ("FILLED", "PARTIALLY_FILLED") and not (
+                isinstance(self.broker_position_id, str) and self.broker_position_id.strip()):
+            raise PolicyRefused("filled evidence needs a broker position id")
         if not isinstance(self.at, datetime) or self.at.tzinfo is None:
             raise PolicyRefused("fill evidence time must be timezone-aware")
 
@@ -880,7 +899,7 @@ def _open_positions(st: _State) -> tuple[OpenPosition, ...]:
             assert e.filled_at is not None
             out.append(OpenPosition(e.reference, e.track, e.canonical_id, e.instrument, e.sector,
                                     e.filled - e.exited, e.avg_price, e.stop, e.horizon,
-                                    e.filled_at))
+                                    e.filled_at, e.broker_order_id, e.broker_position_id))
     return tuple(out)
 
 
@@ -937,6 +956,7 @@ class ExitProposal:
     proposed_at: datetime
     submission: str = SUBMISSION
     authority: str = "policy"              # "policy" or "protective" (SD-064 grant to use)
+    broker_position_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1246,6 +1266,9 @@ class AutonomousDemoRuntime:
         exits: list[ExitProposal] = []
         for p in positions:
             ref = p.entry_reference
+            if not p.broker_position_id:
+                alerts.append(f"BROKER_POSITION_LINEAGE_UNAVAILABLE:{ref}")
+                continue
             if any(x.entry == ref and x.outcome is None for x in st.exits.values()):
                 alerts.append(f"EXIT_PENDING:{ref}")
                 continue
@@ -1287,7 +1310,8 @@ class AutonomousDemoRuntime:
                                    "bid": str(quote.bid), "authority": authority})
             exits.append(ExitProposal(exit_ref, ref, policy.digest(), p.track, p.canonical_id,
                                       p.etoro_instrument_id, p.units, reason, now,
-                                      authority=authority))
+                                      authority=authority,
+                                      broker_position_id=p.broker_position_id or None))
         return self._finish(now, tuple(exits), alerts)
 
     def _protective_valid(self, now: datetime) -> bool:

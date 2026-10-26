@@ -43,6 +43,16 @@ The eToro Demo order desk is offline only. It accepts only a deterministic simul
 
 See [docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md](docs/SD036_ETORO_DEMO_CONTRACT_REVIEW.md).
 
+The isolated SD-107 branch adds a separate policy-bound simulator path for autonomous proposals.
+Its tests exercise signed-grant checks, fresh sealed quotes, durable order/position lineage,
+partial and unresolved outcomes, and a complete simulated close. The SD-103 `ETORO_DEMO` route
+remains `NOT_RELEASED`; this code has no production broker transport. Run the offline acceptance
+checks with:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/test_sd063_autonomous_demo_policy.py tests/test_sd074_trusted_inputs.py tests/test_sd108_broker_adapters.py
+```
+
 The live execution board and current blockers are maintained in [TODO.md](TODO.md), governed by [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md).
 
 ## UK equities (research and simulation only)

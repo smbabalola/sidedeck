@@ -48,6 +48,18 @@ def test_msft_transport_lock_is_engaged():
     assert not transport.network_transport_enabled(None)
 
 
+def test_sd107_gateway_has_no_network_transport_import():
+    path = SRC / "sd107_demo_gateway.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import)
+                for a in n.names} | {n.module.split(".")[0] for n in ast.walk(tree)
+                                     if isinstance(n, ast.ImportFrom) and n.module}
+    assert not imported & NETWORK
+    assert "EtoroDemoHttpTransport" not in source
+    assert "OfflineDemoSimulator" in source
+
+
 def test_grant_ceilings_are_the_reviewed_design_values():
     assert MAX_WINDOW["autonomous_policy"].days == 7
     assert MAX_REQUESTS == {"pilot_release": 12, "autonomous_policy": 2000}
