@@ -61,7 +61,7 @@ def _fixture_payload(symbol: str) -> bytes:
 
 
 def test_fixture_pipeline_end_to_end(tmp_path: Path) -> None:
-    auth = draft_authorization(NOW - timedelta(minutes=1))
+    auth = draft_authorization(NOW - timedelta(minutes=1), owner_terms_reviewed=True)
     ledger = DataRequestLedger(tmp_path / "req.sqlite3", auth)
 
     def opener(request: Any, timeout: float = 20) -> _Resp:

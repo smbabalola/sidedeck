@@ -46,7 +46,10 @@ PILOT_SYMBOLS: tuple[str, ...] = (
     "XOM", "CVX", "JNJ", "UNH", "PG", "KO", "HD", "WMT",
 )
 PILOT_START = date(2022, 1, 3)
-PILOT_END = date(2026, 10, 21)
+PILOT_END = date(2026, 10, 23)   # last completed XNYS session before the 2026-10-26 draft
+PRINCIPAL = "owner@sidedeck"
+# SHA-256 of the owner's ssh-ed25519 key blob (same pinned key as the SD-054/SD-064 paths).
+PINNED_SIGNER_KEY_SHA256 = "600a7f7e6597cfa2f87b1f3f9891de224c4e2a18b9d534da62888158ebbae0f3"
 MAX_REQUESTS = 24  # 20 first pages + 4 contingency pages; 0 retries
 # Daily bars are stamped at 04:00/05:00 UTC; a date-only end would drop the final session.
 END_PARAM = f"{PILOT_END.isoformat()}T23:59:59Z"
@@ -81,14 +84,17 @@ def proposal() -> dict[str, Any]:
     }
 
 
-def draft_authorization(issued_at: datetime, *, hours: int = 48) -> DataAuthorization:
+def draft_authorization(issued_at: datetime, *, hours: int = 48,
+                        owner_terms_reviewed: bool = False) -> DataAuthorization:
+    """``owner_terms_reviewed`` must be set by the owner explicitly (CLI flag); SideDeck
+    never asserts it on the owner's behalf, and an unconfirmed draft is refused."""
     return DataAuthorization(
         authorization_id=f"sd075b-alpaca-sip-pilot-{issued_at:%Y%m%d}", provider=PROVIDER,
         purpose="SD-075B first genuine daily-price pilot, 20 liquid US instruments",
         urls=tuple(ENDPOINT.format(symbol=s) for s in PILOT_SYMBOLS),
         max_requests=MAX_REQUESTS, max_retries=0, credentials_required=True,
         issued_at=issued_at, expires_at=issued_at + timedelta(hours=hours),
-        owner_terms_reviewed=True,
+        owner_terms_reviewed=owner_terms_reviewed,
         notes=f"period {PILOT_START}..{PILOT_END}; feed=sip; adjustment=split; read-only",
     )
 
@@ -96,11 +102,8 @@ def draft_authorization(issued_at: datetime, *, hours: int = 48) -> DataAuthoriz
 Opener = Callable[..., Any]
 
 
-def run_pilot(
-    auth: DataAuthorization, ledger: DataRequestLedger, out_dir: Path, *, key_id: str,
-    secret: str, now: Callable[[], datetime], opener: Opener = _safe_urlopen,
-    pause: Callable[[], None] = lambda: time.sleep(0.5),
-) -> dict[str, Any]:
+def check_scope(auth: DataAuthorization) -> None:
+    """The pilot's fixed scope. Checked before the single-use claim and again in run_pilot."""
     if auth.provider != PROVIDER:
         raise AuthorizationRefused("authorization is for a different provider")
     if set(auth.urls) != {ENDPOINT.format(symbol=s) for s in PILOT_SYMBOLS}:
@@ -109,6 +112,14 @@ def run_pilot(
         raise AuthorizationRefused("pilot runs with zero retries")
     if auth.max_requests > MAX_REQUESTS:
         raise AuthorizationRefused(f"pilot allows at most {MAX_REQUESTS} requests")
+
+
+def run_pilot(
+    auth: DataAuthorization, ledger: DataRequestLedger, out_dir: Path, *, key_id: str,
+    secret: str, now: Callable[[], datetime], opener: Opener = _safe_urlopen,
+    pause: Callable[[], None] = lambda: time.sleep(0.5),
+) -> dict[str, Any]:
+    check_scope(auth)
     raw_dir = out_dir / "raw" / auth.authorization_id
     if raw_dir.exists():
         raise AuthorizationRefused("pilot output already exists; refusing to overwrite")
@@ -176,14 +187,16 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("proposal")
     draft = sub.add_parser("draft")
     draft.add_argument("--out", required=True)
+    draft.add_argument("--owner-confirms-terms-reviewed", action="store_true",
+                       help="the owner states they reviewed Alpaca's market-data terms")
     run = sub.add_parser("run")
     run.add_argument("--authorization", required=True)
     run.add_argument("--signature", required=True)
     run.add_argument("--allowed-signers", default="data/approval_allowed_signers")
-    run.add_argument("--principal", default="owner@sidedeck")
     run.add_argument("--env-file", default=".env")
-    run.add_argument("--key-id-env", default="APCA_API_KEY_ID")
-    run.add_argument("--secret-env", default="APCA_API_SECRET_KEY")
+    # No defaults: the owner names the exact credential variables (never their values).
+    run.add_argument("--key-id-env", required=True)
+    run.add_argument("--secret-env", required=True)
     run.add_argument("--out-dir", default="data/sd075b")
     args = parser.parse_args(argv)
     if args.command == "proposal":
@@ -193,19 +206,29 @@ def main(argv: list[str] | None = None) -> int:
         target = Path(args.out)
         if target.exists():
             parser.error("refusing to overwrite draft")
-        target.write_text(draft_authorization(datetime.now(UTC)).canonical(), encoding="utf-8")
+        if not args.owner_confirms_terms_reviewed:
+            parser.error("the owner must pass --owner-confirms-terms-reviewed; nothing written")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(draft_authorization(datetime.now(UTC),
+                                              owner_terms_reviewed=True).canonical(),
+                          encoding="utf-8")
         print(f"DRAFT_WRITTEN={target}; NETWORK_REQUESTS=0")
         return 0
     from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifier
+    from sidedeck.application.sd064_unlock_grant import require_pinned_signer
     from sidedeck.application.sd077_data_authorization import NAMESPACE
 
     auth = DataAuthorization.from_json(Path(args.authorization).read_text(encoding="utf-8"))
-    verifier = SshSignatureVerifier(args.allowed_signers, args.principal, namespace=NAMESPACE)
+    require_pinned_signer(Path(args.allowed_signers), PRINCIPAL, PINNED_SIGNER_KEY_SHA256)
+    verifier = SshSignatureVerifier(args.allowed_signers, PRINCIPAL, namespace=NAMESPACE)
     verify_authorization(auth, Path(args.signature).read_text(encoding="ascii"),
-                         verifier=verifier, principal=args.principal, now=datetime.now(UTC))
-    claim_authorization(Path(args.authorization), auth)
+                         verifier=verifier, principal=PRINCIPAL, now=datetime.now(UTC))
+    # Scope and credentials are checked before the single-use claim, so a misscoped
+    # authorization or a missing/misnamed variable never burns it.
+    check_scope(auth)
     key_id = _credential(args.env_file, args.key_id_env)
     secret = _credential(args.env_file, args.secret_env)
+    claim_authorization(Path(args.authorization), auth)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     DEFAULT_LEDGER.parent.mkdir(parents=True, exist_ok=True)

@@ -50,7 +50,7 @@ def _opener(calls: list[str], fail_on: str | None = None, drop_for: str | None =
         calls.append(request.full_url)
         assert request.full_url.startswith("https://data.alpaca.markets/v2/stocks/")
         assert "feed=sip" in request.full_url and "adjustment=split" in request.full_url
-        assert "end=2026-10-21T23%3A59%3A59Z" in request.full_url   # final session included
+        assert "end=2026-10-23T23%3A59%3A59Z" in request.full_url   # final session included
         if fail_on and f"/{fail_on}/" in request.full_url:
             raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", None, None)  # type: ignore[arg-type]
         return _Resp(_payload(drop=5 if drop_for and f"/{drop_for}/" in request.full_url else 0))
@@ -58,7 +58,7 @@ def _opener(calls: list[str], fail_on: str | None = None, drop_for: str | None =
 
 
 def _run(tmp_path: Path, opener: Any) -> tuple[dict[str, Any], DataRequestLedger]:
-    auth = draft_authorization(NOW - timedelta(minutes=1))
+    auth = draft_authorization(NOW - timedelta(minutes=1), owner_terms_reviewed=True)
     ledger = DataRequestLedger(tmp_path / "l.sqlite3", auth)
     summary = run_pilot(auth, ledger, tmp_path / "out", key_id="k", secret="s",
                         now=lambda: NOW, opener=opener, pause=lambda: None)
@@ -95,7 +95,7 @@ def test_first_failure_stops_without_retry(tmp_path: Path) -> None:
 
 
 def test_scope_mismatch_and_reuse_refused(tmp_path: Path) -> None:
-    auth = draft_authorization(NOW - timedelta(minutes=1))
+    auth = draft_authorization(NOW - timedelta(minutes=1), owner_terms_reviewed=True)
     narrow = type(auth)(**{**auth.__dict__, "urls": (ENDPOINT.format(symbol="SPY"),)})
     with pytest.raises(AuthorizationRefused, match="pilot symbol set"):
         run_pilot(narrow, DataRequestLedger(tmp_path / "n.sqlite3", narrow), tmp_path / "o",
@@ -110,9 +110,83 @@ def test_scope_mismatch_and_reuse_refused(tmp_path: Path) -> None:
 
 
 def test_review_pilot_refuses_signed_budget_above_cap(tmp_path: Path) -> None:
-    auth = draft_authorization(NOW - timedelta(minutes=1))
+    auth = draft_authorization(NOW - timedelta(minutes=1), owner_terms_reviewed=True)
     big = type(auth)(**{**auth.__dict__, "max_requests": MAX_REQUESTS + 1})
     with pytest.raises(AuthorizationRefused, match="at most"):
         run_pilot(big, DataRequestLedger(tmp_path / "l.sqlite3", big), tmp_path / "o",
                   key_id="k", secret="s", now=lambda: NOW, opener=_opener([]),
                   pause=lambda: None)
+
+
+def test_draft_never_asserts_the_owner_terms_review():
+    with pytest.raises(AuthorizationRefused, match="terms"):
+        draft_authorization(NOW)
+    from sidedeck.application.sd078_alpaca_sip_pilot import main
+    with pytest.raises(SystemExit):
+        main(["draft", "--out", "unused-never-written.json"])
+    assert not Path("unused-never-written.json").exists()
+
+
+def test_run_requires_explicit_credential_variable_names():
+    from sidedeck.application.sd078_alpaca_sip_pilot import main
+    with pytest.raises(SystemExit):
+        main(["run", "--authorization", "a.json", "--signature", "a.sig"])
+
+
+def test_proposal_scope_is_exact():
+    p = proposal()
+    assert p["instrument_count"] == 20 and len(set(PILOT_SYMBOLS)) == 20
+    assert p["max_authenticated_requests"] == MAX_REQUESTS == 24 and p["retries"] == 0
+    assert p["period"].endswith("2026-10-23")
+
+
+
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import hashlib as _hashlib  # noqa: E402
+
+needs_ssh = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="ssh-keygen missing")
+
+
+def _signed_rig(tmp_path: Path, monkeypatch: Any, *, pin_test_key: bool = True):
+    from sidedeck.application import sd078_alpaca_sip_pilot as pilot
+    from sidedeck.application.sd077_data_authorization import NAMESPACE, prepare
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "t", "-f",
+                    str(tmp_path / "k")], check=True, capture_output=True)
+    blob = (tmp_path / "k.pub").read_text().split()[1]
+    signers = tmp_path / "allowed_signers"
+    signers.write_text(f"owner@sidedeck ssh-ed25519 {blob}" + chr(10))
+    if pin_test_key:
+        monkeypatch.setattr(pilot, "PINNED_SIGNER_KEY_SHA256",
+                            _hashlib.sha256(blob.encode("ascii")).hexdigest())
+    auth = draft_authorization(datetime.now(UTC) - timedelta(minutes=1),
+                               owner_terms_reviewed=True)
+    auth_path, _digest = prepare(auth, tmp_path / "auth")
+    sig = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(tmp_path / "k"), "-n", NAMESPACE],
+                         input=auth.digest.encode(), capture_output=True, check=True).stdout
+    (tmp_path / "auth.sig").write_bytes(sig)
+    monkeypatch.delenv("SD078_TEST_MISSING_KEY", raising=False)
+    (tmp_path / ".env").write_text("UNRELATED=1" + chr(10))
+    calls: list[str] = []
+    monkeypatch.setattr(pilot, "run_pilot", lambda *a, **k: calls.append("run") or {})
+    args = ["run", "--authorization", str(auth_path), "--signature", str(tmp_path / "auth.sig"),
+            "--allowed-signers", str(signers), "--env-file", str(tmp_path / ".env"),
+            "--key-id-env", "SD078_TEST_MISSING_KEY", "--secret-env", "SD078_TEST_MISSING_SECRET",
+            "--out-dir", str(tmp_path / "out")]
+    return pilot, auth_path, args, calls
+
+
+@needs_ssh
+def test_missing_credential_never_burns_the_authorization(tmp_path, monkeypatch):
+    pilot, auth_path, args, calls = _signed_rig(tmp_path, monkeypatch)
+    with pytest.raises(Exception, match="credential"):
+        pilot.main(args)
+    assert not list(auth_path.parent.glob("*.consumed")) and calls == []
+
+
+@needs_ssh
+def test_unpinned_signer_is_refused_before_verification(tmp_path, monkeypatch):
+    pilot, auth_path, args, calls = _signed_rig(tmp_path, monkeypatch, pin_test_key=False)
+    with pytest.raises(Exception, match="pinned"):
+        pilot.main(args)
+    assert not list(auth_path.parent.glob("*.consumed")) and calls == []

@@ -219,7 +219,7 @@ def test_owner_signature_required_in_data_namespace(tmp_path: Path) -> None:
 def test_review_request_urls_must_match_exactly(tmp_path: Path) -> None:
     from sidedeck.application.sd078_alpaca_sip_pilot import draft_authorization as alpaca
 
-    auth = alpaca(NOW - timedelta(minutes=1))
+    auth = alpaca(NOW - timedelta(minutes=1), owner_terms_reviewed=True)
     ledger = DataRequestLedger(tmp_path / "l.sqlite3", auth)
     base = "https://data.alpaca.markets/v2/stocks/SPY/bars"
     for bad in (base + "/../../../account", base + "/%2e%2e/orders", base + "/extra",
