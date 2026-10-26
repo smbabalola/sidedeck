@@ -424,6 +424,10 @@ are not OS-enforced isolation. Any future untrusted execution needs a separately
 low-privilege Windows sandbox/AppContainer or isolated VM with no network, inherited handles or
 credential environment. The security review is `docs/SD114_DAY_TRADER_SECURITY_REVIEW.md`.
 
-Genuine five-minute data remains an external owner/licensing gate. No provider, endpoint, paid feed,
-credential or authenticated request is implied by the module; the exact review package is
-`docs/SD115_INTRADAY_DATA_AUTHORIZATION_PROPOSAL.md`.
+Genuine five-minute data remains an external owner/licensing gate. eToro Demo is the primary
+broker and primary market-data candidate; Alpaca intraday acquisition is not the current plan.
+The offline coverage-first request plan and fail-closed fixture parsers are in
+`src/sidedeck/application/sd119_etoro_market_data.py`. No provider, endpoint, paid feed,
+credential or authenticated request is implied by that code. The exact nine-GET review package is
+`docs/SD115_INTRADAY_DATA_AUTHORIZATION_PROPOSAL.md`; it requires fresh owner authorization and
+does not authorize orders or a transport unlock.

@@ -5,6 +5,8 @@ Status: **DOCUMENTED, NOT ENTITLEMENT-VERIFIED**. No authenticated requests duri
 | Purpose | Exact documented GET route | Verified access? | M2 usage / limitation |
 | --- | --- | --- | --- |
 | Instrument search | `/api/v1/market-data/search?internalSymbolFull=AAPL` | **YES**, only the prior AAPL one-shot HTTP 200 | Exact symbol + exchange identity required; related AAPL.RTH / 24-7 / EUR instruments are distinct |
+| Coverage-first five-minute availability | `/api/v1/data/instruments/{instrumentId}/candles/coverage` | **NO** | Official docs show per-interval first/last candle, count and load time; empty `intervals` is a valid no-data result; entitlement and symbol-ID mapping remain unverified |
+| Five-minute candle page | `/api/v1/data/instruments/{instrumentId}/candles` | **NO** | Official docs show `interval`, `side`, `from`/`to`, cursor pagination and OHLCV results; adjustment, volume and exchange-session semantics remain unverified |
 | Closing prices | `/api/v1/market-data/instruments/history/closing-price` | **NO** | Response documents `officialClosingPrice` and daily/weekly/monthly closes; do not assume this is an exhaustive historical daily series, SIP consolidated, split adjusted, or entitled |
 | Candle history | `/api/v1/market-data/instruments/{instrumentId}/history/candles/{direction}/{interval}/{candlesCount}` | **NO** | Candle semantics, aggregation, gaps, trading session, corporate actions and price source still require response and documentation verification |
 | Demo portfolio | `/api/v1/trading/info/demo/pnl` | **YES**, owner-run reads | Baseline-protected read only; never use for historical price validation |
@@ -14,6 +16,8 @@ Official documentation:
 - https://api-portal.etoro.com/api-reference/market-data/get-historical-closing-prices
 - https://api-portal.etoro.com/api-reference/market-data/get-instrument-candle-history
 - https://api-portal.etoro.com/guides/get-instrument-id
+- https://api-portal.etoro.com/api-reference/data/get-where-price-candles-exist-for-an-instrument
+- https://api-portal.etoro.com/api-reference/data/get-price-candles-for-an-instrument
 - https://api-portal.etoro.com/getting-started/authentication
 
 ### Safety boundary
@@ -34,3 +38,8 @@ MSFT is the proposed first non-financial research instrument. SEC coverage, TTM 
 2. Inspect the exact source documentation for required query/path parameters, candle and close adjustment semantics, completeness and timestamps.
 3. Build MSFT SEC coverage reporting from existing SEC mapping with independent filed-quarter reconciliation; expose unavailable and non-applicable metrics.
 4. Keep first real dual-agent run NO-GO until both frameworks, evidence, bounded model cost and explicit owner authorization pass.
+
+The coverage-first request plan and fail-closed fixture parsers are implemented in
+`src/sidedeck/application/sd119_etoro_market_data.py`. The official documentation states a
+shared 120-requests/60-seconds quota and up to 10,080 periods per slice; SideDeck uses a stricter
+2,000-row local page ceiling until a real response is reviewed.
