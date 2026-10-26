@@ -65,6 +65,18 @@ class EtoroDemoOrderError(ValueError):
     """An order request, response or lineage check failed; nothing is trusted."""
 
 
+class StaleQuoteError(EtoroDemoOrderError):
+    """The quote is valid in every respect except that it is older than the age limit.
+
+    Only this error may trigger a bounded quote re-read; every other quote failure
+    (shape, identity, non-realtime, insane bid/ask, future-dated) aborts at once."""
+
+    def __init__(self, message: str, *, observed_at: datetime, age_seconds: float) -> None:
+        super().__init__(message)
+        self.observed_at = observed_at
+        self.age_seconds = age_seconds
+
+
 class RealExecutionExcluded(PermissionError):
     """eToro Real (or any non-allowlisted) endpoint; permanently refused."""
 
@@ -458,9 +470,12 @@ def parse_fresh_quote(payload: Any, *, instrument_id: int, now: datetime,
     age = (now - observed).total_seconds()
     if age > MAX_QUOTE_AGE_SECONDS or age < -MAX_QUOTE_SKEW_SECONDS:
         # The age is safe diagnostic evidence (a number, not a price or identifier).
-        raise EtoroDemoOrderError(f"reference quote is stale or future-dated (age {age:.1f} s, "
-                                  f"limits -{MAX_QUOTE_SKEW_SECONDS}..{MAX_QUOTE_AGE_SECONDS} s,"
-                                  f" basis {basis})")
+        message = (f"reference quote is stale or future-dated (age {age:.1f} s, "
+                   f"limits -{MAX_QUOTE_SKEW_SECONDS}..{MAX_QUOTE_AGE_SECONDS} s, basis {basis})")
+        if age > MAX_QUOTE_AGE_SECONDS:
+            raise StaleQuoteError(message, observed_at=observed.astimezone(timezone.utc),
+                                  age_seconds=age)
+        raise EtoroDemoOrderError(message)
     return FreshQuote(instrument_id, bid, ask, observed.astimezone(timezone.utc), basis)
 
 

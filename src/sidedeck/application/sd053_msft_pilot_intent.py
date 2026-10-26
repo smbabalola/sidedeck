@@ -11,9 +11,11 @@ Fixed parameters (owner configuration 2026-10-22):
 * the actual limit is derived at preflight: min(552.56, fresh realtime ask x 1.005);
 * ``reference_price`` 526.25 is the SD-052 search ``currentRate``: a **planning**
   reference that bounds the signed maximum (+5 %); it is never used as an executable ask;
-* window Monday 2026-10-26 10:00-12:00 America/New_York (EDT) = 14:00-16:00 UTC (= UK, GMT)
-  (after the Friday attempts; fresh id and digest; prior signed intents preserved);
-* request caps: the reviewed 12-request / 2-write plan (``ROUTE_CAPS``).
+* window Tuesday 2026-10-27 10:00-12:00 America/New_York (EDT) = 14:00-16:00 UTC (= UK, GMT)
+  (after the Monday 1ab4d2c8 stale-quote abort; fresh id and digest; prior intents preserved);
+* request caps (owner decision 2026-10-26, Option B): the SD-044 plan with up to **4** quote
+  reads (initial + 3 stale-only re-reads ~15 s apart): **15 requests / 2 writes** in total,
+  signed here and enforced at runtime.
 
 Usage::
 
@@ -28,7 +30,7 @@ from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
 from sidedeck.application import sd050_msft_instrument_lookup as lookup
-from sidedeck.application.sd046_etoro_demo_pilot import MAX_PLANNING_HEADROOM
+from sidedeck.application.sd046_etoro_demo_pilot import MAX_PLANNING_HEADROOM, SD044_CAPS
 from sidedeck.application.sd048_pilot_release import PILOT_NAMESPACE, PilotIntent, _check_intent
 
 STRATEGY = "tradingagents"
@@ -38,11 +40,12 @@ REFERENCE_PRICE = Decimal("526.25")          # planning reference only (SD-052 c
 MAX_LIMIT_RATE = (REFERENCE_PRICE * (1 + MAX_PLANNING_HEADROOM)).quantize(
     Decimal("0.01"), rounding=ROUND_DOWN)    # 552.56
 MAX_NOTIONAL_USD = Decimal("50")
-NOT_BEFORE = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)   # 10:00 EDT
-EXPIRES_AT = datetime(2026, 10, 26, 16, 0, tzinfo=timezone.utc)   # 12:00 EDT
-# Preserve all prior signed intents (incl. the consumed urgent b0be3fe2 pilot); this
-# retry has its own file and digest.
-INTENT_PATH = lookup.DATA_DIR / "sd053-msft-pilot-intent-20261026-v2.json"
+NOT_BEFORE = datetime(2026, 10, 27, 14, 0, tzinfo=timezone.utc)   # 10:00 EDT
+EXPIRES_AT = datetime(2026, 10, 27, 16, 0, tzinfo=timezone.utc)   # 12:00 EDT
+REQUEST_CAPS = {**SD044_CAPS, "rates": 4}                          # 15 requests / 2 writes
+# Preserve all prior signed intents (incl. consumed 1ab4d2c8); this attempt has its own
+# file and digest.
+INTENT_PATH = lookup.DATA_DIR / "sd053-msft-pilot-intent-20261027.json"
 
 
 class IntentRefused(RuntimeError):
@@ -53,7 +56,8 @@ def build_intent(pilot_id: str) -> PilotIntent:
     return PilotIntent(pilot_id=pilot_id, strategy=STRATEGY, instrument_id=INSTRUMENT_ID,
                        units=UNITS, max_limit_rate=MAX_LIMIT_RATE,
                        reference_price=REFERENCE_PRICE, max_notional_usd=MAX_NOTIONAL_USD,
-                       not_before=NOT_BEFORE, expires_at=EXPIRES_AT)
+                       not_before=NOT_BEFORE, expires_at=EXPIRES_AT,
+                       request_caps=tuple(sorted(REQUEST_CAPS.items())))
 
 
 def offline_checks(intent: PilotIntent, protected_ids: frozenset[int]) -> None:

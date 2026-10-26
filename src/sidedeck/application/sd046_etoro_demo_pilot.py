@@ -1,10 +1,13 @@
 """SD-046/SD-051 eToro Demo pilot runner, exercised OFFLINE against the simulator.
 
-Plan (12 requests, 2 writes, no write retries, every response shape-checked):
+Plan (the signed intent's caps: per route and in total, at most 15 requests and 2 writes,
+no write retries, every response shape-checked; enforced by the persistent ``PilotBudget``):
 
 1. ``preflight``: ``/pnl`` (baseline MATCHED, nothing pending, no SideDeck positions)
    -> Demo eligibility (open/close allowed, units-based, fractional if needed,
-   notional >= eToro minimum) -> realtime rates (fresh <= 60 s). The limit is
+   notional >= eToro minimum) -> realtime rates (fresh <= 60 s, age measured after the
+   response arrives; a quote that is *only* stale may be re-read, spaced, up to the signed
+   rates cap; the latest quote alone is used and its time may never go backwards). The limit is
    ``min(signed max, ask x 1.005)`` and is refused if the ask is above the signed
    max. Produces the exact open request for the owner's separate approval signature.
 2. ``open_phase``: refuses a quote older than 5 minutes; one open; up to 3 lookups.
@@ -21,7 +24,9 @@ accepts only the offline simulator or a matching, owner-signed SD-048 release.
 from __future__ import annotations
 
 import sqlite3
+import time
 import uuid
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -38,13 +43,21 @@ from sidedeck.domain.etoro_demo_books import STRATEGY_BOOKS, BaselinePosition, r
 from sidedeck.domain.etoro_demo_orders import (
     DEMO_ELIGIBILITY_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, DEMO_PNL_PATH,
     MARKET_DATA_RATES_PATH, NO_FILL_TERMINAL, DemoCloseRequest, DemoOpenRequest, Eligibility,
-    FreshQuote,
+    FreshQuote, StaleQuoteError,
     derive_limit, parse_eligibility, parse_fresh_quote, require_demo_route,
     response_shape_issues,
 )
 
-ROUTE_CAPS = {"pnl": 3, "eligibility": 1, "rates": 1, "open": 1, "lookup": 3, "close": 1,
-              "close_info": 2}                                           # 12 total, 2 writes
+# The original reviewed SD-044 plan (12 requests / 2 writes). Default for intents and budgets
+# that do not name caps, so earlier signed digests are unchanged.
+SD044_CAPS = {"pnl": 3, "eligibility": 1, "rates": 1, "open": 1, "lookup": 3, "close": 1,
+              "close_info": 2}
+# Per-route ceilings a signed intent may name (owner decision 2026-10-26: up to 4 quote
+# reads). The binding limits are the signed intent's caps, enforced at runtime.
+ROUTE_CAPS = {**SD044_CAPS, "rates": 4}
+MAX_TOTAL_REQUESTS = 15
+MAX_WRITES = 2
+QUOTE_RETRY_SPACING = timedelta(seconds=15)
 MAX_NOTIONAL_USD = Decimal("50")
 MAX_LIMIT_PREMIUM = Decimal("0.005")      # over the FRESH reference, enforced at preflight
 MAX_PLANNING_HEADROOM = Decimal("0.05")   # signed max limit vs the signed planning reference
@@ -85,8 +98,23 @@ def route_for(method: str, path: str) -> tuple[str, str | None]:
     raise PilotError("route is outside the pilot plan")
 
 
+def check_caps(caps: Mapping[str, int]) -> dict[str, int]:
+    """Caps within the per-route ceilings, at most 15 requests and 2 writes in total."""
+    caps = dict(caps)
+    if set(caps) != set(ROUTE_CAPS) or any(
+            type(caps[k]) is not int or not 0 <= caps[k] <= ROUTE_CAPS[k] for k in caps):
+        raise PilotError("request caps exceed the per-route ceilings")
+    if caps["open"] + caps["close"] > MAX_WRITES or sum(caps.values()) > MAX_TOTAL_REQUESTS:
+        raise PilotError(f"request caps exceed {MAX_TOTAL_REQUESTS} requests / "
+                         f"{MAX_WRITES} writes")
+    return caps
+
+
 class PilotBudget:
-    """Persistent per-route request caps, reserved before each send.
+    """Persistent per-route and total request caps, reserved before each send.
+
+    ``caps`` are the signed intent's caps (default: the original SD-044 plan). A reservation
+    is refused once the route's cap or the total (sum of the caps) is reached.
 
     With ``pilot_id`` the caps are scoped to that one signed pilot in a separate table of
     the same file: an earlier pilot's recorded usage is kept untouched (never read, reset
@@ -95,9 +123,12 @@ class PilotBudget:
     ``pilot_id`` the legacy single-budget table is used unchanged.
     """
 
-    def __init__(self, path: str, *, pilot_id: str | None = None) -> None:
+    def __init__(self, path: str, *, pilot_id: str | None = None,
+                 caps: Mapping[str, int] | None = None) -> None:
         if pilot_id is not None and str(uuid.UUID(pilot_id)) != pilot_id:
             raise PilotError("pilot budget id must be a canonical UUID")
+        self.caps = check_caps(SD044_CAPS if caps is None else caps)
+        self.total_cap = sum(self.caps.values())
         self._pilot_id = pilot_id
         self._db = sqlite3.connect(Path(path), isolation_level=None)
         if pilot_id is None:
@@ -114,9 +145,11 @@ class PilotBudget:
     def reserve(self, route: str) -> None:
         self._db.execute("BEGIN IMMEDIATE")
         try:
-            used = self._used().get(route, 0)
-            if used >= ROUTE_CAPS[route]:
-                raise PilotBudgetExhausted(f"pilot {route} budget {ROUTE_CAPS[route]} exhausted")
+            rows = self._used()
+            if rows.get(route, 0) >= self.caps[route]:
+                raise PilotBudgetExhausted(f"pilot {route} budget {self.caps[route]} exhausted")
+            if sum(rows.values()) >= self.total_cap:
+                raise PilotBudgetExhausted(f"pilot total budget {self.total_cap} exhausted")
             if self._pilot_id is None:
                 self._db.execute("INSERT INTO sd046_pilot_budget VALUES (?, 1) "
                                  "ON CONFLICT(route) DO UPDATE SET used = used + 1", (route,))
@@ -203,10 +236,18 @@ class EtoroDemoPilot:
     def __init__(self, *, desk: EtoroDemoDesk, transport: PilotTransport, budget: PilotBudget,
                  controls: ApprovalKillSwitch, lineage: EtoroDemoLineage,
                  baseline: tuple[BaselinePosition, ...], scope: PilotScope,
-                 release: Any = None, audit: PreflightAudit | None = None) -> None:
+                 release: Any = None, audit: PreflightAudit | None = None,
+                 sleep: Callable[[float], None] = time.sleep,
+                 quote_retry_spacing: timedelta = QUOTE_RETRY_SPACING) -> None:
         scope.validate(baseline)
         if release is not None and release.intent.scope() != scope:
             raise PilotError("pilot scope differs from the signed pilot release")
+        if release is not None and dict(release.intent.request_caps) != budget.caps:
+            raise PilotError("pilot budget caps differ from the signed pilot release")
+        if quote_retry_spacing < timedelta(0):
+            raise PilotError("quote retry spacing must be non-negative")
+        self._sleep, self._spacing = sleep, quote_retry_spacing
+        self._last_rates_payload: Any = None
         self._desk, self._transport, self._budget = desk, transport, budget
         self._controls, self._lineage = controls, lineage
         self._audit = audit
@@ -267,16 +308,13 @@ class EtoroDemoPilot:
                 last_payload,
                 instrument_id=s.instrument_id, units=s.units,
                 notional_usd=s.units * s.max_limit_rate)
-            now = datetime.now(timezone.utc)
-            last_route = "rates"
-            last_payload = self._transport.send(
-                "GET", MARKET_DATA_RATES_PATH, reference_id=str(uuid.uuid4()),
-                query={"instrumentIds": str(s.instrument_id)})
-            quote = parse_fresh_quote(          # supervised pilot only (owner-accepted)
-                last_payload,
-                instrument_id=s.instrument_id, now=now, allow_naive_utc=True)
+            last_route, last_payload = "rates", None
+            self._last_rates_payload = None
+            quote, last_payload = self._fresh_quote()
             limit = derive_limit(quote.ask, s.max_limit_rate, MAX_LIMIT_PREMIUM)
         except Exception as exc:  # no write has happened; abort cleanly
+            if last_route == "rates":           # audit the rates read that failed, not eligibility
+                last_payload = self._last_rates_payload
             if self._audit is not None:
                 self._audit.record(request_type=last_route, budget=self._budget.usage(),
                                    outcome="ABORTED_PREFLIGHT", payload=last_payload, error=exc)
@@ -293,6 +331,38 @@ class EtoroDemoPilot:
                             currency_evidence=eligibility.currency_evidence,
                             quote_time_basis=quote.time_basis,
                             quote_observed_at=quote.observed_at.isoformat())
+
+    def _fresh_quote(self) -> tuple[FreshQuote, Any]:
+        """Up to the signed rates cap: re-read only while the quote is merely stale."""
+        attempts = self._budget.caps["rates"]
+        previous: datetime | None = None
+        for attempt in range(1, attempts + 1):
+            if attempt > 1 and self._controls.is_halted():
+                raise PilotError("kill switch engaged during quote re-reads")
+            payload = self._transport.send(
+                "GET", MARKET_DATA_RATES_PATH, reference_id=str(uuid.uuid4()),
+                query={"instrumentIds": str(self._scope.instrument_id)})
+            self._last_rates_payload = payload
+            now = datetime.now(timezone.utc)          # after the response: no free round trip
+            try:
+                quote = parse_fresh_quote(              # supervised pilot only (owner-accepted)
+                    payload, instrument_id=self._scope.instrument_id, now=now,
+                    allow_naive_utc=True)
+            except StaleQuoteError as stale:
+                if previous is not None and stale.observed_at < previous:
+                    raise PilotError("quote time moved backwards between reads") from None
+                if attempt == attempts:
+                    raise
+                previous = stale.observed_at
+                if self._audit is not None:
+                    self._audit.record(request_type="rates", budget=self._budget.usage(),
+                                       outcome="QUOTE_STALE_REREAD", error=stale)
+                self._sleep(self._spacing.total_seconds())
+                continue
+            if previous is not None and quote.observed_at < previous:
+                raise PilotError("quote time moved backwards between reads")
+            return quote, payload
+        raise PilotError("no quote read is permitted by the signed caps")
 
     def open_approval_scope(self) -> tuple[DemoOpenRequest, str]:
         """The exact open request and the SD-033 scope the owner must sign."""
@@ -313,7 +383,7 @@ class EtoroDemoPilot:
                                            request=request, quote=quote,
                                            eligibility=self._eligibility)
             outcome = None
-            for _ in range(ROUTE_CAPS["lookup"]):
+            for _ in range(self._budget.caps["lookup"]):
                 outcome = self._desk.refresh_open(request.reference_id)
                 if outcome is None or outcome.terminal:
                     break
@@ -374,7 +444,7 @@ class EtoroDemoPilot:
             return self._unresolved("close", "close response lost")
         try:
             status = ""
-            for _ in range(ROUTE_CAPS["close_info"]):
+            for _ in range(self._budget.caps["close_info"]):
                 status = self._desk.refresh_close(request.reference_id)
                 if status in _CLOSE_TERMINAL:
                     break

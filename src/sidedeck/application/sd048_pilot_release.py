@@ -4,8 +4,9 @@ The owner signs the SHA-256 digest of a canonical ``PilotIntent`` with their own
 key (SD-045, namespace ``sidedeck-paper-approval``). A ``PilotRelease`` is issued only
 when **all** of the following hold; a valid signature alone is never enough:
 
-* intent bounds: eToro Demo only; caps within SD-044 (11 requests / 2 writes,
-  per-route caps); notional <= USD 50; limit <= +0.5 % over reference; window <= 8 h;
+* intent bounds: eToro Demo only; caps within the per-route ceilings and at most
+  15 requests / 2 writes in total (enforced again at runtime by ``PilotBudget``);
+  notional <= USD 50; limit <= +0.5 % over reference; window <= 8 h;
 * scope rules: strategy book, instrument not in the protected baseline;
 * independent gates: single-pair credential policy accepted, baseline MATCHED,
   kill-switch clear, pilot budget unused, signers file configured;
@@ -33,7 +34,7 @@ from sidedeck.application.sd042_etoro_credential_roles import POLICY as CREDENTI
 from sidedeck.application.sd042_etoro_credential_roles import assess_roles
 from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifier
 from sidedeck.application.sd046_etoro_demo_pilot import (
-    MAX_NOTIONAL_USD, MAX_PLANNING_HEADROOM, ROUTE_CAPS, PilotError, PilotScope,
+    MAX_NOTIONAL_USD, MAX_PLANNING_HEADROOM, SD044_CAPS, PilotError, PilotScope, check_caps,
 )
 from sidedeck.domain.etoro_demo_books import BaselinePosition
 
@@ -65,7 +66,7 @@ class PilotIntent:
     not_before: datetime
     expires_at: datetime
     request_caps: tuple[tuple[str, int], ...] = field(
-        default_factory=lambda: tuple(sorted(ROUTE_CAPS.items())))
+        default_factory=lambda: tuple(sorted(SD044_CAPS.items())))
     broker: str = "etoro-demo"
 
     def canonical(self) -> bytes:
@@ -184,11 +185,10 @@ def _check_intent(intent: PilotIntent, now: datetime) -> None:
         raise PilotReleaseRefused("strategy and instrument id have invalid types")
     if intent.broker != "etoro-demo":
         raise PilotReleaseRefused("only eToro Demo pilots can be released")
-    caps = dict(intent.request_caps)
-    if set(caps) != set(ROUTE_CAPS) or any(caps[k] > ROUTE_CAPS[k] or caps[k] < 0 for k in caps):
-        raise PilotReleaseRefused("request caps exceed the SD-044 plan")
-    if caps["open"] + caps["close"] > 2 or sum(caps.values()) > 12:
-        raise PilotReleaseRefused("request caps exceed 12 requests / 2 writes")
+    try:
+        check_caps(dict(intent.request_caps))
+    except PilotError as exc:
+        raise PilotReleaseRefused(str(exc)) from None
     for name in ("units", "max_limit_rate", "reference_price", "max_notional_usd"):
         value = getattr(intent, name)
         if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:

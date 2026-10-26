@@ -109,7 +109,8 @@ def run_pilot(*, intent: PilotIntent, release_signature: str, principal: str,
     approval_verifier = SshSignatureVerifier(signers_path, principal,
                                              namespace=APPROVAL_NAMESPACE)
     controls = ApprovalKillSwitch(paths.controls, approval_verifier)
-    budget = PilotBudget(paths.budget, pilot_id=intent.pilot_id)   # scoped to this signed pilot
+    # Scoped to this signed pilot and bound to its signed per-route and total caps.
+    budget = PilotBudget(paths.budget, pilot_id=intent.pilot_id, caps=dict(intent.request_caps))
     store = PilotReleaseStore(paths.releases)
     lineage = EtoroDemoLineage(paths.lineage,
                                baseline_position_ids=[b.position_id for b in baseline],
@@ -225,9 +226,10 @@ def recorded_baseline_status(ledger_path: str) -> str:
 
 
 # ---- production entry point (SD-053 MSFT pilot) -------------------------------------
-# Fresh Monday 2026-10-26 pilot intent (after the three Friday attempts).
-# Older digests (consumed b0be3fe2, 0e1ab7c2, 4e1cea6f, bff0fef6) are not reusable.
-PINNED_INTENT_DIGEST = "1ab4d2c8f85c94ef6fca78164b3e1e593929cc6e3cf7c52c82eae135c3d7fd4a"
+# Tuesday 2026-10-27 pilot intent (Option B: signed 15-request / 2-write caps, 4 quote reads),
+# prepared after Monday's 1ab4d2c8 stale-quote abort. Older digests (consumed b0be3fe2,
+# 0e1ab7c2, 4e1cea6f, bff0fef6, 1ab4d2c8) are not reusable.
+PINNED_INTENT_DIGEST = "40ee9682e44ff773da25849701a50caa098e94e5601450d9c46a5c7a2d2a69cb"
 PRINCIPAL = "owner@sidedeck"
 # SHA-256 of the owner's ssh-ed25519 public key blob in data/approval_allowed_signers
 # (verified 2026-10-22). A different or additional signer key is refused.
