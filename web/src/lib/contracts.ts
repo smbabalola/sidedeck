@@ -111,7 +111,7 @@ export function isDayTraderSummary(d: unknown): d is DayTraderSummary {
     && d.source.license === "MIT" && isStr(d.source.module_version) && isStr(d.source.verification)
     && isStr(d.source.origin) && isArr(d.capabilities) && d.capabilities.every(c => isObj(c)
       && isStr(c.id) && isStr(c.role) && isArr(c.network_hosts_blocked) && c.network_hosts_blocked.every(isStr)
-      && isStr(c.claude_only_not_used)) && isArr(d.opportunities) && isArr(d.plans) && isArr(d.simulations)
+      && isStr(c.claude_only_not_used)) && isArr(d.opportunities) && isArr(d.plans)
     && isArr(d.owner_actions) && d.owner_actions.every(isStr) && isArr(d.limitations) && d.limitations.every(isStr)
     && isArr(d.opportunities) && isArr(d.plans) && (isObj(d.simulations) || isArr(d.simulations)) && isArr(d.rejected) && isArr(d.errors)
     && (d.latest === null || isObj(d.latest)) && isArr(d.runs) && d.runs.every(r => isObj(r) && isStr(r.run_id)

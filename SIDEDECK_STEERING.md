@@ -437,3 +437,8 @@ coverage and fixed five-minute samples, with SD-077 signature verification and p
 budgeting. It must stop on identity, entitlement, coverage or schema failure, and it must never
 retry, paginate beyond the signed scope, read credentials before signature verification, or touch
 the Demo trading transport. Review: `docs/SD120_ETORO_DISCOVERY_REVIEW.md`.
+
+The Day Trader dashboard contract fix is a presentation/validation correction only. It does not
+create research runs, genuine market evidence, strategy admission or execution authority. The
+dashboard remains read-only; Demo execution remains governed by the separate SD-058 runbook and
+transport gates.

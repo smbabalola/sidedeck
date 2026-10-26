@@ -4,7 +4,7 @@ import marketTracks from "../fixtures/market-tracks.json";
 import releaseGate from "../fixtures/release-gate.json";
 import demo from "../fixtures/demo-summary.json";
 import marketUk from "../fixtures/market-uk.json";
-import { isDemoSummary, isMarketTracks, isReleaseGate, isScanSnapshot, isUkMarkets } from "../../src/lib/contracts";
+import { isDayTraderSummary, isDemoSummary, isMarketTracks, isReleaseGate, isScanSnapshot, isUkMarkets } from "../../src/lib/contracts";
 import { compactUsd, gbp, pct, plainPct, tone, words } from "../../src/lib/format";
 import { href, parseRoute } from "../../src/lib/router";
 
@@ -31,6 +31,21 @@ describe("contracts accept real backend payloads and reject unsafe ones", () => 
     bad.instruments[0].last_close = "abc";
     expect(isScanSnapshot(bad)).toBe(false);
     expect(isScanSnapshot({ status: "UNAVAILABLE", execution_enabled: false, reason: "none" })).toBe(true);
+  });
+});
+
+describe("Day Trader contract", () => {
+  it("accepts the persisted-run summary with object or array simulations", () => {
+    const summary = {
+      schema_version: 1, module: "DAY_TRADER", book: "DAY_TRADER_SKILL", mode: "RESEARCH_ONLY",
+      enabled: true, execution_enabled: false, broker_execution: "DISABLED", data_status: "NO_SAVED_RUN",
+      performance_status: "RESEARCH_ONLY", source: { name: "day-trader-skill", version: "2.0.0", commit: "fixture", license: "MIT", module_version: "1", verification: "verified", origin: "vendored" },
+      capabilities: [{ id: "scanner", role: "scan", network_hosts_blocked: [], claude_only_not_used: "not used" }],
+      opportunities: [], plans: [], simulations: { status: "EMPTY" }, rejected: [], errors: [], runs: [], latest: null,
+      owner_actions: [], limitations: [],
+    };
+    expect(isDayTraderSummary(summary)).toBe(true);
+    expect(isDayTraderSummary({ ...summary, simulations: [] })).toBe(true);
   });
 });
 
