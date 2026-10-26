@@ -52,11 +52,10 @@ from sidedeck.domain.etoro_demo_orders import (
 )
 
 NETWORK_TRANSPORT_ENABLED = False   # development lock (owner instruction 2026-10-22)
-# Release-bound unlock for the owner-approved Monday MSFT Demo connectivity pilot only
-# (digest 1ab4d2c8, window 2026-10-26 14:00-16:00 UTC; owner accepted NAIVE_AS_UTC for this
-# pilot). Re-lock to None immediately after the run, whatever the outcome.
-UNLOCKED_PILOT_DIGEST: str | None = (
-    "1ab4d2c8f85c94ef6fca78164b3e1e593929cc6e3cf7c52c82eae135c3d7fd4a")
+# Release-bound unlock: Monday pilot 1ab4d2c8 ended ABORTED_PREFLIGHT (realtime quote aged
+# 72.2 s > 60 s, 2026-10-26 14:37 UTC; 3 reads, 0 writes) and is closed. None means locked.
+# A future pilot requires a new separately reviewed and owner-authorized lock-lift commit.
+UNLOCKED_PILOT_DIGEST: str | None = None
 ETORO_HOST = "https://public-api.etoro.com"
 USER_AGENT = "SideDeck/0.1 (eToro Demo pilot transport)"
 MAX_RESPONSE_BYTES = 1_000_000
