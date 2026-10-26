@@ -6,7 +6,10 @@ from sidedeck.application.sd077_data_authorization import DataRequestLedger
 from sidedeck.application.sd120_etoro_five_minute import (
     SAMPLE_FROM,
     SAMPLE_TO,
+    check_diagnostic_scope,
     draft_authorization,
+    draft_diagnostic_authorization,
+    run_diagnostic,
     run_discovery,
 )
 
@@ -97,3 +100,53 @@ def test_http_status_is_classified_and_stops_before_repeating_failure(tmp_path):
     assert report["records"][0]["status"] == 403
     assert report["records"][0]["classification"] == "ACCESS_OR_ENTITLEMENT_DENIED"
     assert [row["status"] for row in report["records"][1:]] == ["SKIPPED", "SKIPPED"]
+
+
+def test_single_aapl_diagnostic_is_distinct_and_exactly_one_get(tmp_path):
+    auth = draft_diagnostic_authorization(datetime(2026, 10, 26, tzinfo=UTC), owner_terms_reviewed=True)
+    check_diagnostic_scope(auth, api_key_env="ETORO_API_KEY", user_key_env="ETORO_USER_KEY")
+    assert auth.max_requests == 1 and auth.max_retries == 0
+    assert auth.scope["symbol"] == "AAPL"
+    assert auth.urls == ("https://public-api.etoro.com/api/v1/market-data/search",)
+
+    calls = []
+
+    def opener(request, timeout=20):
+        del timeout
+        calls.append((request.full_url, request.get_method(), request.headers))
+        return Response({"results": [{"internalSymbolFull": "AAPL", "instrumentId": 9999}]})
+
+    report = run_diagnostic(
+        auth, DataRequestLedger(tmp_path / "ledger.sqlite3", auth),
+        api_key="redacted", user_key="redacted", out_dir=tmp_path / "out",
+        opener=opener, now=lambda: datetime(2026, 10, 26, tzinfo=UTC),
+    )
+    assert len(calls) == 1
+    assert calls[0][0].endswith("internalSymbolFull=AAPL")
+    assert calls[0][1] == "GET"
+    assert report["status"] == 200
+    assert report["classification"] == "SUCCESS"
+    assert report["schema_result"] == "VALID_SEARCH_RESPONSE"
+    assert report["result_count"] == 1
+    assert report["response_sha256"] and "9999" not in json.dumps(report)
+
+
+def test_single_aapl_diagnostic_records_numeric_http_failure_without_body(tmp_path):
+    calls = []
+
+    def opener(request, timeout=20):
+        del timeout
+        calls.append(request.full_url)
+        raise HTTPError(request.full_url, 403, "forbidden", {"X-Secret": "do-not-record"}, None)
+
+    auth = draft_diagnostic_authorization(datetime(2026, 10, 26, tzinfo=UTC), owner_terms_reviewed=True)
+    report = run_diagnostic(
+        auth, DataRequestLedger(tmp_path / "ledger.sqlite3", auth),
+        api_key="redacted", user_key="redacted", out_dir=tmp_path / "out",
+        opener=opener, now=lambda: datetime(2026, 10, 26, tzinfo=UTC),
+    )
+    assert len(calls) == 1 and report["requests_used"] == 1
+    assert report["status"] == 403
+    assert report["classification"] == "ACCESS_OR_ENTITLEMENT_DENIED"
+    assert report["response_sha256"] is None
+    assert "X-Secret" not in json.dumps(report)

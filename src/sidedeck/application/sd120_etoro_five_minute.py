@@ -46,6 +46,8 @@ PINNED_SIGNER_KEY_SHA256 = "600a7f7e6597cfa2f87b1f3f9891de224c4e2a18b9d534da6288
 SAMPLE_FROM = "2026-10-23T14:00:00Z"
 SAMPLE_TO = "2026-10-23T15:00:00Z"
 MAX_REQUESTS = 9
+DIAGNOSTIC_MAX_REQUESTS = 1
+DIAGNOSTIC_SYMBOL = "AAPL"
 
 
 class EtoroDiscoveryError(ValueError):
@@ -124,6 +126,47 @@ def check_scope(auth: DataAuthorization, *, api_key_env: str, user_key_env: str)
         raise AuthorizationRefused("authorization scope does not match requested symbols or parameters")
 
 
+def draft_diagnostic_authorization(
+    issued_at: datetime, *, hours: int = 48, owner_terms_reviewed: bool = False,
+    api_key_env: str = "ETORO_API_KEY", user_key_env: str = "ETORO_USER_KEY",
+) -> DataAuthorization:
+    """Create the deliberately separate, single-AAPL diagnostic scope."""
+    if issued_at.tzinfo is None:
+        raise EtoroDiscoveryError("issued_at must be timezone-aware")
+    return DataAuthorization(
+        authorization_id=f"sd120-aapl-diagnostic-{issued_at:%Y%m%d%H%M%S}",
+        provider=PROVIDER,
+        purpose="SD-120 one-request eToro Demo AAPL HTTP diagnostic",
+        urls=(f"{HOST}{SEARCH_PATH}",),
+        max_requests=DIAGNOSTIC_MAX_REQUESTS,
+        max_retries=0,
+        credentials_required=True,
+        issued_at=issued_at,
+        expires_at=issued_at + timedelta(hours=hours),
+        owner_terms_reviewed=owner_terms_reviewed,
+        notes="GET-only; one AAPL search; no broker/account/order endpoints",
+        scope={
+            "method": "GET", "symbol": DIAGNOSTIC_SYMBOL, "endpoint": SEARCH_PATH,
+            "credential_source": {"api_key_env": api_key_env, "user_key_env": user_key_env},
+            "query": {"internalSymbolFull": DIAGNOSTIC_SYMBOL},
+        },
+    )
+
+
+def check_diagnostic_scope(
+    auth: DataAuthorization, *, api_key_env: str, user_key_env: str,
+) -> None:
+    expected = {
+        "method": "GET", "symbol": DIAGNOSTIC_SYMBOL, "endpoint": SEARCH_PATH,
+        "credential_source": {"api_key_env": api_key_env, "user_key_env": user_key_env},
+        "query": {"internalSymbolFull": DIAGNOSTIC_SYMBOL},
+    }
+    if (auth.provider != PROVIDER or auth.max_requests != DIAGNOSTIC_MAX_REQUESTS
+            or auth.max_retries != 0 or auth.urls != (f"{HOST}{SEARCH_PATH}",)
+            or auth.scope != expected):
+        raise AuthorizationRefused("authorization is not the fixed SD-120 AAPL diagnostic scope")
+
+
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
         raise EtoroDiscoveryError("redirect rejected")
@@ -161,6 +204,23 @@ def _read_json(response: Any) -> tuple[int, bytes, dict[str, Any]]:
 
 def _url(path: str, query: dict[str, str] | None = None) -> str:
     return HOST + path + ("?" + urllib.parse.urlencode(query) if query else "")
+
+
+def _valid_aapl_search(payload: dict[str, Any]) -> bool:
+    rows = payload.get("results", payload.get("items", payload.get("data")))
+    if not isinstance(rows, list):
+        return False
+    matches = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("internalSymbolFull", row.get("symbol", ""))).upper()
+        if symbol.split("/", 1)[0] == DIAGNOSTIC_SYMBOL:
+            instrument_id = row.get("instrumentId", row.get("internalInstrumentId"))
+            if isinstance(instrument_id, bool) or not isinstance(instrument_id, int) or instrument_id <= 0:
+                return False
+            matches.append(row)
+    return len(matches) == 1
 
 
 def run_discovery(
@@ -275,12 +335,68 @@ def run_discovery(
     return report
 
 
+def run_diagnostic(
+    auth: DataAuthorization, ledger: DataRequestLedger, *, api_key: str, user_key: str,
+    api_key_env: str = "ETORO_API_KEY", user_key_env: str = "ETORO_USER_KEY",
+    out_dir: Path, opener: Callable[..., Any] = _safe_open,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> dict[str, Any]:
+    """Run exactly one signed-scope AAPL GET and retain sanitized evidence only."""
+    check_diagnostic_scope(auth, api_key_env=api_key_env, user_key_env=user_key_env)
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise AuthorizationRefused("output directory is not empty")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    full = _url(SEARCH_PATH, {"internalSymbolFull": DIAGNOSTIC_SYMBOL})
+    request_id = ledger.reserve(full, now())
+    req = urllib.request.Request(full, method="GET", headers={
+        "Accept": "application/json", "x-api-key": api_key,
+        "x-user-key": user_key, "x-request-id": str(uuid4()),
+    })
+    evidence: dict[str, Any] = {
+        "schema": "sidedeck-etoro-aapl-diagnostic/1", "research_only": True,
+        "authorization_id": auth.authorization_id, "authorization_digest": auth.digest,
+        "endpoint": f"{HOST}{SEARCH_PATH}", "method": "GET", "symbol": DIAGNOSTIC_SYMBOL,
+        "requests_used": 1, "max_requests": DIAGNOSTIC_MAX_REQUESTS,
+        "broker_execution": "DISABLED", "response_sha256": None,
+        "schema_result": "UNAVAILABLE", "result_count": None,
+    }
+    try:
+        with opener(req, timeout=20) as response:
+            status, raw, payload = _read_json(response)
+        evidence["status"] = status
+        evidence["classification"] = "SUCCESS"
+        evidence["response_sha256"] = hashlib.sha256(raw).hexdigest()
+        if not _valid_aapl_search(payload):
+            evidence["schema_result"] = "INVALID_SEARCH_RESPONSE"
+        else:
+            evidence["schema_result"] = "VALID_SEARCH_RESPONSE"
+        results = payload.get("results")
+        evidence["result_count"] = len(results) if isinstance(results, list) else None
+        ledger.record(request_id, f"HTTP_{status}")
+    except urllib.error.HTTPError as exc:
+        status = int(exc.code)
+        evidence.update({"status": status, "classification": _classify_http_status(status)})
+        ledger.record(request_id, f"HTTP_{status}")
+    except Exception as exc:
+        ledger.record(request_id, f"FAILED:{type(exc).__name__}")
+        raise
+    (out_dir / "summary.json").write_text(
+        json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return evidence
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="SD-120 eToro five-minute discovery (owner-signed, GET-only)")
     sub = parser.add_subparsers(dest="command", required=True)
     draft = sub.add_parser("draft")
     draft.add_argument("--out", required=True)
     draft.add_argument("--owner-confirms-terms-reviewed", action="store_true")
+    diagnostic_draft = sub.add_parser("diagnostic-draft")
+    diagnostic_draft.add_argument("--out", required=True)
+    diagnostic_draft.add_argument("--owner-confirms-terms-reviewed", action="store_true")
+    diagnostic_draft.add_argument("--api-key-env", default="ETORO_API_KEY")
+    diagnostic_draft.add_argument("--user-key-env", default="ETORO_USER_KEY")
     run = sub.add_parser("run")
     run.add_argument("--authorization", required=True)
     run.add_argument("--signature", required=True)
@@ -289,6 +405,14 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--out-dir", default="data/sd120-etoro-5m")
     run.add_argument("--api-key-env", default="ETORO_API_KEY")
     run.add_argument("--user-key-env", default="ETORO_USER_KEY")
+    diagnostic = sub.add_parser("diagnostic-run")
+    diagnostic.add_argument("--authorization", required=True)
+    diagnostic.add_argument("--signature", required=True)
+    diagnostic.add_argument("--allowed-signers", default="data/approval_allowed_signers")
+    diagnostic.add_argument("--ledger", default=str(DEFAULT_LEDGER))
+    diagnostic.add_argument("--out-dir", default="data/sd120-aapl-diagnostic")
+    diagnostic.add_argument("--api-key-env", default="ETORO_API_KEY")
+    diagnostic.add_argument("--user-key-env", default="ETORO_USER_KEY")
     args = parser.parse_args(argv)
     if args.command == "draft":
         target = Path(args.out)
@@ -298,10 +422,25 @@ def main(argv: list[str] | None = None) -> int:
         target.write_text(draft_authorization(datetime.now(UTC), owner_terms_reviewed=True).canonical(), encoding="utf-8")
         print(f"DRAFT_WRITTEN={target}; NETWORK_REQUESTS=0")
         return 0
+    if args.command == "diagnostic-draft":
+        target = Path(args.out)
+        if target.exists() or not args.owner_confirms_terms_reviewed:
+            parser.error("refusing to overwrite or draft without owner terms confirmation")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(draft_diagnostic_authorization(
+            datetime.now(UTC), owner_terms_reviewed=True,
+            api_key_env=args.api_key_env, user_key_env=args.user_key_env,
+        ).canonical(), encoding="utf-8")
+        print(f"DRAFT_WRITTEN={target}; NETWORK_REQUESTS=0")
+        return 0
     from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifier
     from sidedeck.application.sd064_unlock_grant import require_pinned_signer
     auth = DataAuthorization.from_json(Path(args.authorization).read_text(encoding="utf-8"))
-    check_scope(auth, api_key_env=args.api_key_env, user_key_env=args.user_key_env)
+    diagnostic_mode = args.command == "diagnostic-run"
+    if diagnostic_mode:
+        check_diagnostic_scope(auth, api_key_env=args.api_key_env, user_key_env=args.user_key_env)
+    else:
+        check_scope(auth, api_key_env=args.api_key_env, user_key_env=args.user_key_env)
     require_pinned_signer(Path(args.allowed_signers), PRINCIPAL, PINNED_SIGNER_KEY_SHA256)
     verifier = SshSignatureVerifier(args.allowed_signers, PRINCIPAL, namespace=NAMESPACE)
     verify_authorization(auth, Path(args.signature).read_text(encoding="ascii"), verifier=verifier,
@@ -310,11 +449,20 @@ def main(argv: list[str] | None = None) -> int:
     api_key = _credential(args.api_key_env)
     user_key = _credential(args.user_key_env)
     claim_authorization(Path(args.authorization), auth)
-    report = run_discovery(auth, DataRequestLedger(Path(args.ledger), auth), api_key=api_key,
-                           user_key=user_key, api_key_env=args.api_key_env,
-                           user_key_env=args.user_key_env, out_dir=Path(args.out_dir))
-    print(json.dumps({"requests_used": report["requests_used"], "records": len(report["records"]),
-                      "broker_execution": "DISABLED"}, sort_keys=True))
+    if diagnostic_mode:
+        report = run_diagnostic(auth, DataRequestLedger(Path(args.ledger), auth),
+                                api_key=api_key, user_key=user_key,
+                                api_key_env=args.api_key_env, user_key_env=args.user_key_env,
+                                out_dir=Path(args.out_dir))
+        print(json.dumps({"requests_used": report["requests_used"], "status": report["status"],
+                          "classification": report["classification"],
+                          "broker_execution": "DISABLED"}, sort_keys=True))
+    else:
+        report = run_discovery(auth, DataRequestLedger(Path(args.ledger), auth), api_key=api_key,
+                               user_key=user_key, api_key_env=args.api_key_env,
+                               user_key_env=args.user_key_env, out_dir=Path(args.out_dir))
+        print(json.dumps({"requests_used": report["requests_used"], "records": len(report["records"]),
+                          "broker_execution": "DISABLED"}, sort_keys=True))
     return 0
 
 

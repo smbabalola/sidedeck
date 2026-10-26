@@ -59,3 +59,34 @@ The owner should first inspect the eToro portal for Demo environment, key pairin
 permission, expiry and IP restrictions. If that does not identify the cause, sign this one-request
 scope in the existing `sidedeck-data-authorization` namespace and run it once through SD-077.
 Do not reuse `sd120-etoro-5m-20261026123521`, its digest, signature, ledger budget or marker.
+
+## Executable diagnostic (still not authorized or run)
+
+The single-GET package is now executable through the existing SD-077 verifier and persistent
+ledger. It is a distinct authorization shape (`max_requests=1`, AAPL only), so the consumed
+nine-request authorization cannot validate against it. The command sequence is:
+
+```powershell
+Set-Location 'C:\Users\smbab\OneDrive\Documents\Projects\sidedeck\sidedeck'
+\.venv\Scripts\python.exe -m sidedeck.application.sd120_etoro_five_minute diagnostic-draft `
+  --out data\authorizations\sd120-aapl-diagnostic.json --owner-confirms-terms-reviewed
+\.venv\Scripts\python.exe -m sidedeck.application.sd077_data_authorization `
+  data\authorizations\sd120-aapl-diagnostic.json --out-dir data\authorizations
+```
+
+The second command prints the digest and the exact owner signing command. After the owner signs
+the generated `.digest.payload` with the pinned SSH key, the one-shot launch is:
+
+```powershell
+\.venv\Scripts\python.exe -m sidedeck.application.sd120_etoro_five_minute diagnostic-run `
+  --authorization data\authorizations\sd120-aapl-diagnostic.json `
+  --signature data\authorizations\sd120-aapl-diagnostic.digest.payload.sig `
+  --allowed-signers data\approval_allowed_signers `
+  --ledger data\data-authorization-ledger.sqlite3 `
+  --out-dir data\sd120-aapl-diagnostic
+```
+
+The run verifies signature, signer, expiry and scope before loading credentials; reserves one
+GET, rejects redirects and records only numeric status, bounded classification, response hash and
+sanitized schema evidence. It never records response bodies, headers, identifiers or secrets.
+No fresh authorization, credential use or network request has occurred in this batch.
