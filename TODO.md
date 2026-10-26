@@ -6,6 +6,17 @@
 
 ## Current execution board — ordered by priority and dependencies
 
+### Milestone 6 — Day Trader independent module (steering §17; owner directive 2026-10-26)
+
+> Initial batch is offline-only. The installed skill is pinned to version 2.0.0 / commit
+> `3d0f4ef6986f4984b7c6bd46f7ff4f87744c3abd`, with MIT attribution and per-script digests.
+> Module mode is `RESEARCH_ONLY`; broker execution is `DISABLED`; no authenticated request,
+> paid provider call, credential read or order is authorized by this milestone.
+
+- [ ] **SD-113 | P0 | IMPLEMENTED_PENDING_VERIFICATION | deps: SD-069, SD-070 | Independent Day Trader module.** Pinned installed/vendored source, eleven-skill capability manifest, credential-free network-blocked sandbox, strict untrusted-output adapters, SideDeck ResearchSignal/proposal boundary, dedicated `DAY_TRADER_SKILL` attribution and offline simulation hooks. **Evidence:** `src/sidedeck/modules/day_trader/`, `third_party/day-trader-skill/`, `tests/test_day_trader_module.py`, `docs/ADR-004-day-trader-module.md`.
+- [ ] **SD-114 | P1 | IMPLEMENTED_PENDING_VERIFICATION | deps: SD-113 | Read-only Day Trader workspace.** `/api/day-trader/summary` reports pinned provenance, 11 capabilities, unavailable-data state, limitations and owner actions; React `Day Trader` workspace has no order, capital, permission or schedule controls. **Evidence:** `sd113_day_trader_api.py`, `tests/test_sd113_day_trader_api.py`, `web/src/workspaces/DayTrader.tsx`.
+- [ ] **SD-115 | P0 | BLOCKED_EXTERNAL | deps: SD-113 | Genuine intraday acceptance.** Requires an owner-approved, provenance-tagged intraday source and locked-OOS evaluation with realistic spreads, fees, slippage, latency and gaps. No live feed or paid provider call is authorized; no Day Trader execution release is implied.
+
 ### Milestone 5 — integrated trading pipeline (steering §16; owner directive 2026-10-26; controlling engineering priority)
 
 > **Gates (2026-10-26):** ENGINEERING VERIFIED — latest verified exact-HEAD CI: **run 706 on

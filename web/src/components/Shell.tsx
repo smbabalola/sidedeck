@@ -7,7 +7,7 @@ import type { Theme } from "../lib/theme";
 import { words } from "../lib/format";
 
 const ICONS: Record<WorkspaceId, typeof Gauge> = {
-  overview: Gauge, engine: BarChart3, markets: Radar, tracks: Layers, agents: Bot, strategies: Activity, portfolio: Briefcase, operations: Wrench,
+  overview: Gauge, engine: BarChart3, markets: Radar, tracks: Layers, agents: Bot, strategies: Activity, portfolio: Briefcase, operations: Wrench, "day-trader": Radar,
 };
 
 type Gate = ReturnType<typeof useResource<ReleaseGate>>;

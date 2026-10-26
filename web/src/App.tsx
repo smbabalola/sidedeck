@@ -8,6 +8,7 @@ import Engine from "./workspaces/Engine";
 import Overview from "./workspaces/Overview";
 import { Agents, Strategies } from "./workspaces/Research";
 import Tracks from "./workspaces/Tracks";
+import DayTrader from "./workspaces/DayTrader";
 import "./index.css";
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
     strategies: <Strategies/>,
     portfolio: <Portfolio/>,
     operations: <Operations/>,
+    "day-trader": <DayTrader/>,
   } as const;
   return <Shell active={route.workspace} theme={theme} onToggleTheme={toggleTheme}>
     <ErrorBoundary resetKey={route.workspace + (route.detail ?? "")}>{views[route.workspace]}</ErrorBoundary>

@@ -22,6 +22,7 @@ from sidedeck.application.sd086_ops_api import authorization_ledger_summary, tra
 from sidedeck.application.sd097_uk_markets_api import uk_markets_summary
 from sidedeck.application.sd104_pipeline_api import pipeline_summary
 from sidedeck.application.sd109_research_schedule import history_summary
+from sidedeck.application.sd113_day_trader_api import day_trader_summary
 
 
 def baseline_summary(db_path: str) -> dict[str, Any]:
@@ -316,6 +317,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = pipeline_summary(pipeline_report)
                 elif route == "/api/pipeline/history":
                     data = history_summary(pipeline_history)
+                elif route == "/api/day-trader/summary":
+                    data = day_trader_summary()
                 else:
                     self.send_error(404)
                     return

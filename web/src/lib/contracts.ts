@@ -90,6 +90,28 @@ export function isReleaseGate(d: unknown): d is ReleaseGate {
 // --- /api/market/tracks --------------------------------------------------------------
 export type TrackId = "DAY" | "SWING" | "POSITION";
 export const TRACKS: TrackId[] = ["DAY", "SWING", "POSITION"];
+
+// --- /api/day-trader/summary --------------------------------------------------------
+export type DayTraderSummary = {
+  schema_version: 1; module: "DAY_TRADER"; book: "DAY_TRADER_SKILL"; mode: "RESEARCH_ONLY";
+  enabled: boolean; execution_enabled: false; broker_execution: "DISABLED";
+  data_status: string; performance_status: string;
+  source: { name: string; version: string; commit: string; license: "MIT"; module_version: string; verification: string; origin: string };
+  capabilities: { id: string; role: string; network_hosts_blocked: string[]; claude_only_not_used: string }[];
+  opportunities: unknown[]; plans: unknown[]; simulations: unknown[];
+  owner_actions: string[]; limitations: string[];
+};
+export function isDayTraderSummary(d: unknown): d is DayTraderSummary {
+  return isObj(d) && d.schema_version === 1 && d.module === "DAY_TRADER" && d.book === "DAY_TRADER_SKILL"
+    && d.mode === "RESEARCH_ONLY" && d.execution_enabled === false && d.broker_execution === "DISABLED"
+    && typeof d.enabled === "boolean" && isStr(d.data_status) && isStr(d.performance_status)
+    && isObj(d.source) && isStr(d.source.name) && isStr(d.source.version) && isStr(d.source.commit)
+    && d.source.license === "MIT" && isStr(d.source.module_version) && isStr(d.source.verification)
+    && isStr(d.source.origin) && isArr(d.capabilities) && d.capabilities.every(c => isObj(c)
+      && isStr(c.id) && isStr(c.role) && isArr(c.network_hosts_blocked) && c.network_hosts_blocked.every(isStr)
+      && isStr(c.claude_only_not_used)) && isArr(d.opportunities) && isArr(d.plans) && isArr(d.simulations)
+    && isArr(d.owner_actions) && d.owner_actions.every(isStr) && isArr(d.limitations) && d.limitations.every(isStr);
+}
 export type RiskBudget = { risk_per_trade_pct: string; max_positions: number; max_drawdown_pct: string; max_daily_loss_pct: string; max_orders_per_day: number; exit_policy: string; virtual_capital: string; basis: string };
 export type MarketTrack = {
   track: TrackId; mode: string; horizon_trading_days: [number, number]; data_status: string; usable_sources: string[];

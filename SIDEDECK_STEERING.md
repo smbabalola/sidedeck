@@ -357,6 +357,23 @@ pilot or change its reviewed execution behaviour. eToro Real is excluded permane
 | Independent review of the full policy-to-transport lifecycle | BLOCKED on the wiring above |
 | Owner release of a bounded autonomous Demo operating period | BLOCKED_OWNER |
 
+## 17. Day Trader independent module (owner directive 2026-10-26)
+
+The MIT-licensed `day-trader-skill` is an independent SideDeck module, not a replacement for the
+central pipeline. Its installed version is pinned and verified before use; all eleven skills run,
+if at all, in a credential-free, network-blocked sandbox. The module starts in `RESEARCH_ONLY` and
+may use `SIMULATION_ONLY` for labelled offline acceptance. Its dedicated `DAY_TRADER_SKILL` book
+is attribution only; it is not a second broker account or an execution permission.
+
+The upstream broker component may render a ticket for inspection but must never forward a broker
+connector payload. Day Trader output is untrusted input and becomes a SideDeck `ResearchSignal`
+or proposal only after schema validation. SideDeck strategy admission, risk, portfolio allocation,
+order journal and reconciliation remain authoritative. No Day Trader execution is released until
+approved intraday data, independent locked-OOS strategy admission, a reviewed gateway path and a
+separate owner release exist. Yahoo or other public feeds are never promoted to real-time or
+execution data by this module. The Day Trader dashboard is read-only and exposes no order,
+capital, permission or schedule controls.
+
 ## 16. Integration-first: one operational trading pipeline (owner directive 2026-10-26)
 
 **Controlling engineering priority:** integrate the existing components into one pipeline —

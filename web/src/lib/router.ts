@@ -9,6 +9,7 @@ export const WORKSPACES = [
   { id: "strategies", label: "Strategies" },
   { id: "portfolio", label: "Portfolio" },
   { id: "operations", label: "Operations" },
+  { id: "day-trader", label: "Day Trader" },
 ] as const;
 export type WorkspaceId = (typeof WORKSPACES)[number]["id"];
 

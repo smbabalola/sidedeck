@@ -1,0 +1,2 @@
+# Vendored upstream: keep bytes exact so pinned SHA-256 hashes hold on every platform.
+* -text
