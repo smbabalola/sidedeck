@@ -226,10 +226,11 @@ def recorded_baseline_status(ledger_path: str) -> str:
 
 
 # ---- production entry point (SD-053 MSFT pilot) -------------------------------------
-# Tuesday 2026-10-27 pilot intent (Option B: signed 15-request / 2-write caps, 4 quote reads),
-# prepared after Monday's 1ab4d2c8 stale-quote abort. Older digests (consumed b0be3fe2,
-# 0e1ab7c2, 4e1cea6f, bff0fef6, 1ab4d2c8) are not reusable.
-PINNED_INTENT_DIGEST = "40ee9682e44ff773da25849701a50caa098e94e5601450d9c46a5c7a2d2a69cb"
+# Monday 2026-10-26 15:30-19:30 UTC pilot intent e7987485 (Option B: signed 15-request /
+# 2-write caps, 4 quote reads), prepared after the 14:37 UTC 1ab4d2c8 stale-quote abort.
+# Older digests (consumed b0be3fe2, 0e1ab7c2, 4e1cea6f, bff0fef6, 1ab4d2c8; signed but
+# unused Tuesday 40ee9682) are not pinned and therefore not runnable.
+PINNED_INTENT_DIGEST = "4119f25c82ea64042f9126275e69b45ca79edda70c181eb361c9c69b8671b7dd"
 PRINCIPAL = "owner@sidedeck"
 # SHA-256 of the owner's ssh-ed25519 public key blob in data/approval_allowed_signers
 # (verified 2026-10-22). A different or additional signer key is refused.

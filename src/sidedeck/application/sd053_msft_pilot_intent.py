@@ -11,8 +11,10 @@ Fixed parameters (owner configuration 2026-10-22):
 * the actual limit is derived at preflight: min(552.56, fresh realtime ask x 1.005);
 * ``reference_price`` 526.25 is the SD-052 search ``currentRate``: a **planning**
   reference that bounds the signed maximum (+5 %); it is never used as an executable ask;
-* window Tuesday 2026-10-27 10:00-12:00 America/New_York (EDT) = 14:00-16:00 UTC (= UK, GMT)
-  (after the Monday 1ab4d2c8 stale-quote abort; fresh id and digest; prior intents preserved);
+* window **Monday 2026-10-26 15:30-19:30 UTC** (= UK, GMT) = 11:30-15:30 America/New_York
+  (EDT), inside the US regular session, ending 30 min before the 20:00 UTC close (owner
+  decision 2026-10-26: attempt today, not Tuesday). Fresh id and digest; the signed Tuesday
+  intent ``sd053-msft-pilot-intent-20261027`` and all earlier intents are preserved untouched;
 * request caps (owner decision 2026-10-26, Option B): the SD-044 plan with up to **4** quote
   reads (initial + 3 stale-only re-reads ~15 s apart): **15 requests / 2 writes** in total,
   signed here and enforced at runtime.
@@ -40,12 +42,12 @@ REFERENCE_PRICE = Decimal("526.25")          # planning reference only (SD-052 c
 MAX_LIMIT_RATE = (REFERENCE_PRICE * (1 + MAX_PLANNING_HEADROOM)).quantize(
     Decimal("0.01"), rounding=ROUND_DOWN)    # 552.56
 MAX_NOTIONAL_USD = Decimal("50")
-NOT_BEFORE = datetime(2026, 10, 27, 14, 0, tzinfo=timezone.utc)   # 10:00 EDT
-EXPIRES_AT = datetime(2026, 10, 27, 16, 0, tzinfo=timezone.utc)   # 12:00 EDT
+NOT_BEFORE = datetime(2026, 10, 26, 15, 30, tzinfo=timezone.utc)  # 11:30 EDT
+EXPIRES_AT = datetime(2026, 10, 26, 19, 30, tzinfo=timezone.utc)  # 15:30 EDT
 REQUEST_CAPS = {**SD044_CAPS, "rates": 4}                          # 15 requests / 2 writes
-# Preserve all prior signed intents (incl. consumed 1ab4d2c8); this attempt has its own
-# file and digest.
-INTENT_PATH = lookup.DATA_DIR / "sd053-msft-pilot-intent-20261027.json"
+# Preserve all prior signed intents (incl. consumed 1ab4d2c8 and the signed, unused Tuesday
+# 40ee9682); this attempt has its own file and digest.
+INTENT_PATH = lookup.DATA_DIR / "sd053-msft-pilot-intent-20261026-optb.json"
 
 
 class IntentRefused(RuntimeError):
