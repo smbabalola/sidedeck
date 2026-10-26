@@ -321,3 +321,84 @@ def test_genuine_bundles_produce_an_honest_no_trade():
     cmr = {s["instrument"]: s for s in report["strategies"]
            if s["strategy_id"] == "channel_mean_reversion"}
     assert cmr["US:SPY"]["out_of_sample"]["oos_trades"] == 12
+
+
+# ---- independent-review regressions (2026-10-26) --------------------------------------------------
+
+def test_review_m1_replay_refuses_a_used_workdir(ctx_bundle, tmp_path):
+    ctx, _ = fresh(ctx_bundle)
+    p.replay(ctx, start=SHORT[0], end=date(2026, 6, 10), workdir=tmp_path)
+    with pytest.raises(p.PipelineError, match="fresh ledger"):
+        p.replay(replace(ctx, signal_maps={}), start=SHORT[0], end=date(2026, 6, 10),
+                 workdir=tmp_path)
+
+
+def test_review_m2_same_pass_batch_is_risk_checked_as_a_set(ctx_bundle, tmp_path):
+    ctx, _ = fresh(ctx_bundle)
+    import tempfile
+    from sidedeck.application.sd079_track_ledgers import TrackLedger
+    cfg = replace(ctx.cfg, max_positions=1)
+    narrow = replace(ctx, cfg=cfg)
+    approved_days = 0
+    with tempfile.TemporaryDirectory() as scratch:
+        ledger = TrackLedger.open(Path(scratch) / "l.sqlite3", "SWING", cfg.virtual_capital)
+        for day in p.expected_regular_sessions(*SHORT):
+            out = p.decision_pass(narrow, through=day, now=p.session_close_utc(day)
+                                  + timedelta(minutes=5), ledger=ledger, run_key=str(day),
+                                  scan=False)
+            assert len(out["orders"]) <= 1          # never two entries past max_positions=1
+            approved_days += bool(out["orders"])
+    assert approved_days > 0
+
+
+def test_review_m3_halt_is_immediate_and_exits_on_outage_are_unconfirmed(ctx_bundle, tmp_path):
+    ctx, _ = fresh(ctx_bundle)
+    clean = p.replay(ctx, start=SHORT[0], end=SHORT[1], workdir=tmp_path / "clean")
+    closes = [e for e in clean["events"] if e["event"] == "CLOSED"]
+    assert closes
+    outage_day = date.fromisoformat(closes[0]["day"])
+    broker = p.SimulatedBroker(Decimal(5), Decimal(5), outage_days=frozenset({outage_day}))
+    result = p.replay(replace(ctx, signal_maps={}), start=SHORT[0], end=SHORT[1],
+                      workdir=tmp_path / "outage", broker=broker)
+    assert result["halted"]
+    unconfirmed = [e for e in result["events"] if e["event"] in ("EXIT_UNCONFIRMED",
+                                                                 "UNRESOLVED")]
+    assert unconfirmed
+    halt_day = unconfirmed[0]["day"]
+    later_fills = [e for e in result["events"] if e["event"] in ("FILLED", "PARTIALLY_FILLED")
+                   and e["day"] > halt_day]
+    assert later_fills == []
+
+
+def test_review_m3_zero_fill_opens_nothing(ctx_bundle, tmp_path):
+    ctx, _ = fresh(ctx_bundle)
+    broker = p.SimulatedBroker(Decimal(5), Decimal(5), partial_ratio=Decimal("0.00001"))
+    result = p.replay(ctx, start=SHORT[0], end=SHORT[1], workdir=tmp_path, broker=broker)
+    assert [e for e in result["events"] if e["event"] == "EXPIRED_NO_FILL"]
+    assert all(Decimal(a["units_filled"]) > 0 for a in result["attribution"].values())
+
+
+def test_review_l1_decision_pass_enforces_the_route(ctx_bundle):
+    ctx, _ = fresh(ctx_bundle)
+    with pytest.raises(p.ExecutionNotReleased):
+        p.run_report(replace(ctx, cfg=replace(ctx.cfg, route="ETORO_DEMO")), {},
+                     now=p.session_close_utc(p.ACCEPTANCE_WINDOW[1]), mode="run")
+
+
+def test_review_l4_replay_enforces_the_admission_lock(ctx_bundle, tmp_path):
+    ctx, _ = fresh(ctx_bundle)
+    with pytest.raises(p.PipelineError, match="admission lock"):
+        p.replay(ctx, start=date(2026, 4, 1), end=date(2026, 5, 29), workdir=tmp_path)
+
+
+def test_review_l5_overridden_admissions_are_labelled(acceptance_report):
+    assert acceptance_report["admitted_strategies"]
+    assert all(s.endswith("[FIXTURE_OVERRIDE]") for s in acceptance_report["admitted_strategies"])
+
+
+def test_review_l3_scanner_shortlist_gates_decisions(acceptance_report):
+    scanner = acceptance_report["scanner"]
+    listed = {c["canonical_id"] for c in scanner["shortlist"]}
+    for row in acceptance_report["decisions"]:
+        if row["symbol"] not in listed:
+            assert row["reasons"] == ["NOT_ON_SCANNER_SHORTLIST"]

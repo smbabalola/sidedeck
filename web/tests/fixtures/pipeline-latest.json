@@ -426,9 +426,9 @@
  ],
  "no_trade": null,
  "admitted_strategies": [
-  "US:SPY:channel_mean_reversion@1.0.0",
-  "US:QQQ:channel_mean_reversion@1.0.0",
-  "US:MSFT:channel_mean_reversion@1.0.0"
+  "US:SPY:channel_mean_reversion@1.0.0 [FIXTURE_OVERRIDE]",
+  "US:QQQ:channel_mean_reversion@1.0.0 [FIXTURE_OVERRIDE]",
+  "US:MSFT:channel_mean_reversion@1.0.0 [FIXTURE_OVERRIDE]"
  ],
  "broker_routes": {
   "ALPACA_PAPER": "NOT_RELEASED: account separation UNVERIFIED and authorization exhausted",

@@ -79,12 +79,29 @@ look-ahead (signal causality). `tests/test_sd103_trading_pipeline.py`, `tests/te
 
 Daily-bar position management is a monitoring rule, not a resting stop order: a gap fills at
 the open, and if stop and target are both touched in one bar the stop is assumed (conservative).
+Partial IOC fills are a resolved broker outcome (filled units open, the rest expire); a zero
+fill opens nothing. Unknown outcomes (outage, over-fill) and exits on an outage day are
+UNRESOLVED: the run halts immediately and later intents are recorded `NOT_SUBMITTED_HALTED`.
+
+**Independent review (2026-10-26, read-only reviewer):** 0 CRITICAL, 0 HIGH, 3 MEDIUM, 6 LOW;
+causality of `generate_signals`, the admission lock, the fixture-override guard and dashboard
+provenance were confirmed. All findings fixed with regression tests (`test_review_*`):
+M1 replay into a used workdir now refused; M2 a same-close batch is risk-checked as a set
+(provisional holdings, reserved cash, per-pass entry count, fill-time position re-check);
+M3 halt is immediate, zero fills open nothing, outage-day exits are unconfirmed and halt;
+L1 route enforced in every decision pass; L2 real session-start equity in the daily-loss gate;
+L3 the scanner shortlist gates `run` decisions (`NOT_ON_SCANNER_SHORTLIST`; replay keeps a
+fixed universe); L4 `replay()` enforces the admission lock; L5 overrides labelled in
+`admitted_strategies`; L6 API size cap, row/key bounds, strict finite numbers, malformed → UNAVAILABLE.
+Accepted observations: cash reconciliation is ledger-internal (no broker statement exists yet);
+in genuine replays only mapped instruments (MSFT) are execution-eligible while the benchmark
+averages all three.
 
 ## 5. Gates (2026-10-26)
 
 | Gate | Status | Evidence / blocker |
 |---|---|---|
-| ENGINEERING | VERIFIED locally; exact-HEAD CI pending | 1,564 passed / 1 skipped; Ruff, mypy, tsc, build, Vitest 15, Playwright 36 passed |
+| ENGINEERING | VERIFIED | 1,573 passed locally; Ruff, mypy, tsc, build, Vitest 15, Playwright 36 passed; CI run 705 (`33f3a73`) success, review-fix commit CI recorded in TODO |
 | REAL_DATA | VERIFIED (daily, research-only limits) | SD-021 admitted bundles; split-adjusted, dividends excluded, corporate actions not independently verified |
 | STRATEGY_ADMISSION | BLOCKED | no strategy ≥ 30 locked-OOS trades (§3) |
 | AI_RESEARCH | BLOCKED | no authorized agent run (provider spend approval) |

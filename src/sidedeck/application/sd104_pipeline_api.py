@@ -9,6 +9,7 @@ controls and no write path; ``execution_enabled`` is always false.
 from __future__ import annotations
 
 import json
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -22,17 +23,27 @@ def _t(value: Any) -> str | None:
     return None if value is None else str(value)[:MAX_TEXT]
 
 
+MAX_REPORT_BYTES = 5_000_000
+MAX_KEYS = 40
+
+
 def _num(value: Any) -> str | None:
-    if value is None:
+    """A finite decimal number as text, else None (UNDEFINED, inf, nan, junk)."""
+    if value is None or isinstance(value, bool):
         return None
-    text = str(value)
+    text = str(value).strip()
     try:
-        if text.upper() in ("UNDEFINED", "NAN", "INF", "-INF"):
+        if len(text) > 40 or not Decimal(text).is_finite():
             return None
-        float(text)
-    except ValueError:
+    except InvalidOperation:
         return None
-    return text[:40]
+    return text
+
+
+def _map(value: Any) -> dict[str, str | None]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k)[:40]: _t(v) for k, v in list(value.items())[:MAX_KEYS]}
 
 
 def _strs(values: Any, limit: int = 20) -> list[str]:
@@ -52,11 +63,20 @@ def pipeline_summary(report_path: str | None) -> dict[str, Any]:
         return unavailable("No pipeline run yet: run python -m "
                            "sidedeck.application.sd103_trading_pipeline run")
     try:
+        if target.stat().st_size > MAX_REPORT_BYTES:
+            return unavailable("Pipeline report is too large")
         report = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return unavailable("Pipeline report is unreadable")
     if not isinstance(report, dict) or report.get("schema") != SCHEMA:
         return unavailable("Pipeline report has an unknown schema")
+    try:
+        return _project(report)
+    except (TypeError, AttributeError, KeyError, ValueError, IndexError):
+        return unavailable("Pipeline report is malformed")
+
+
+def _project(report: dict[str, Any]) -> dict[str, Any]:
     basis = report.get("data_basis")
     if basis not in (REAL_DATA, FIXTURE):
         return unavailable("Pipeline report has an unknown data basis")
@@ -67,13 +87,12 @@ def pipeline_summary(report_path: str | None) -> dict[str, Any]:
         "generated_at": _t(report.get("generated_at")),
         "cutoff_session": _t(report.get("cutoff_session")),
         "admission_through": _t(report.get("admission_through")),
-        "data_freshness": {k: _t(v) for k, v in (report.get("data_freshness") or {}).items()},
+        "data_freshness": _map(report.get("data_freshness")),
         "market_data": [{"canonical_id": _t(m.get("canonical_id")), "first": _t(m.get("first")),
                          "last": _t(m.get("last")), "sessions": int(m.get("sessions", 0)),
                          "limitations": _strs(m.get("limitations"))}
                         for m in report.get("market_data", [])][:MAX_ROWS],
-        "excluded_instruments": {str(k)[:40]: _t(v) for k, v in
-                                 (report.get("excluded_instruments") or {}).items()},
+        "excluded_instruments": _map(report.get("excluded_instruments")),
         "scanner": {"status": _t(scanner.get("status", "NOT_RUN")),
                     "scanned": int(scanner.get("scanned", 0) or 0),
                     "shortlist": [{"canonical_id": _t(c.get("canonical_id")),
@@ -123,9 +142,8 @@ def pipeline_summary(report_path: str | None) -> dict[str, Any]:
                    for o in report.get("orders", [])][:MAX_ROWS],
         "no_trade": _t(report.get("no_trade")),
         "admitted_strategies": _strs(report.get("admitted_strategies"), MAX_ROWS),
-        "broker_routes": {str(k)[:40]: _t(v) for k, v in
-                          (report.get("broker_routes") or {}).items()},
-        "gates": {str(k)[:40]: _t(v) for k, v in (report.get("gates") or {}).items()},
+        "broker_routes": _map(report.get("broker_routes")),
+        "gates": _map(report.get("gates")),
         "replay": None}
     replay = report.get("replay")
     if isinstance(replay, dict):

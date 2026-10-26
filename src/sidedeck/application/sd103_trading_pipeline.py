@@ -525,6 +525,7 @@ class StageContext:
     research: dict[str, StrategyResearch]
     agent_records: tuple[Mapping[str, Any], ...] = ()
     signal_maps: dict[str, dict[str, dict[date, str]]] = field(default_factory=dict)
+    admission_through: date | None = None
 
 
 def _scan(views: Mapping[str, MarketEvidence]) -> tuple[list[str], dict[str, Any]]:
@@ -545,8 +546,14 @@ def _scan(views: Mapping[str, MarketEvidence]) -> tuple[list[str], dict[str, Any
 
 
 def decision_pass(ctx: StageContext, *, through: date, now: datetime, ledger: TrackLedger,
-                  run_key: str, scan: bool = True) -> dict[str, Any]:
+                  run_key: str, scan: bool = True,
+                  session_start_equity: Decimal | None = None) -> dict[str, Any]:
+    """One decision pass at ``through``'s close. Intents approved earlier in the same pass
+    count as provisional holdings and reserved cash for the next instrument, so a batch is
+    risk-checked as a set. With ``scan`` the scanner shortlist gates which instruments are
+    decided; others ABSTAIN with ``NOT_ON_SCANNER_SHORTLIST``."""
     cfg = ctx.cfg
+    require_route(cfg.route)
     views = {cid: replace(ev, bars=tuple(b for b in ev.bars if b.day <= through))
              for cid, ev in ctx.evidence.items()}
     views = {cid: replace(v, data_cutoff=session_close_utc(v.bars[-1].day))
@@ -558,8 +565,10 @@ def decision_pass(ctx: StageContext, *, through: date, now: datetime, ledger: Tr
         out["no_trade"] = "NO TRADE: no admissible market data at this cutoff"
         return out
     shortlist = sorted(views)
+    gated = False
     if scan:
         shortlist, out["scanner"] = _scan(views)
+        gated = out["scanner"].get("status") == "COMPLETED"
     outcomes = agent_outcomes(ctx.agent_records, shortlist, now)
     out["agents"] = [{"portfolio": o.portfolio, "instrument": o.canonical_id,
                       "status": o.status, "reason": o.reason,
@@ -571,6 +580,10 @@ def decision_pass(ctx: StageContext, *, through: date, now: datetime, ledger: Tr
                 if a.status == "ADMITTED"}
     policy = cfg.policy(now, admitted, views)
     held = {p.canonical_id for p in ledger.positions.values()}
+    base = portfolio_state(ledger, cfg)
+    provisional: list[Holding] = []
+    reserved = ZERO
+    entries_today = ledger.entries_by_day.get(through.isoformat(), 0)
     for cid in sorted(views):
         ev, research = views[cid], ctx.research.get(cid)
         if research is None:
@@ -581,8 +594,15 @@ def decision_pass(ctx: StageContext, *, through: date, now: datetime, ledger: Tr
             out["exit_signals"].append({"canonical_id": cid, "strategies": exiting})
         signals = list(native_signals(ev, states, research, now))
         signals += [s for s in agent_signals if s.canonical_id == cid]
+        if gated and cid not in shortlist:
+            skipped = Decision("ABSTAIN", cid, TRACK, policy.policy_id, now,
+                               ("NOT_ON_SCANNER_SHORTLIST",))
+            out["decisions"].append(decision_row(skipped, evidence=ev, signals=signals, cfg=cfg,
+                                                 held=cid in held, exit_signal=bool(exiting),
+                                                 atr=atr14(ev.bars)))
+            continue
         correlations: dict[str, Decimal] = {}
-        for other in held - {cid}:
+        for other in (held | {h.canonical_id for h in provisional}) - {cid}:
             if other in views:
                 try:
                     correlations[other] = correlation(ev.bars, views[other].bars,
@@ -594,8 +614,9 @@ def decision_pass(ctx: StageContext, *, through: date, now: datetime, ledger: Tr
                                cfg.sectors.get(cid, "UNKNOWN"), session_open=False,
                                execution_eligible=cid in cfg.broker_mappings,
                                correlations=correlations)
-        decision = decide(signals, research.admissions, policy, portfolio_state(ledger, cfg),
-                          market, now)
+        state = PortfolioState(base.holdings + tuple(provisional),
+                               {TRACK: ledger.cash - reserved})
+        decision = decide(signals, research.admissions, policy, state, market, now)
         out["decisions"].append(decision_row(decision, evidence=ev, signals=signals, cfg=cfg,
                                              held=cid in held, exit_signal=bool(exiting),
                                              atr=atr))
@@ -608,14 +629,17 @@ def decision_pass(ctx: StageContext, *, through: date, now: datetime, ledger: Tr
             reasons.append("MISSING_MARK_PRICE_FOR_OPEN_POSITION")
             gate_info = {"drawdown_pct": "UNAVAILABLE", "daily_loss_pct": "UNAVAILABLE"}
         else:
-            gate = ledger.risk_gate(cfg.limits(), prices, ledger.equity(prices),
+            equity = ledger.equity(prices)
+            gate = ledger.risk_gate(cfg.limits(), prices, session_start_equity or equity,
                                     through.isoformat())
             reasons += list(gate.reasons)
             gate_info = {"drawdown_pct": str(gate.drawdown_pct),
                          "daily_loss_pct": str(gate.daily_loss_pct)}
         required = cfg.with_costs(decision.sizing.notional)
-        if required > ledger.cash:
+        if required > ledger.cash - reserved:
             reasons.append("INSUFFICIENT_CASH_INCLUDING_COSTS")
+        if entries_today + len(provisional) >= cfg.max_entries_per_day:
+            reasons.append("ORDER_FREQUENCY_LIMIT_FOR_THIS_PASS")
         risk = {"canonical_id": cid, "decision": "APPROVED" if not reasons else "REJECTED",
                 "reasons": reasons, **gate_info, "capital_required_usd": str(required)}
         out["risk"].append(risk)
@@ -627,6 +651,9 @@ def decision_pass(ctx: StageContext, *, through: date, now: datetime, ledger: Tr
                                   run_key=run_key)
             intent["_decision"] = decision
             out["orders"].append(intent)
+            provisional.append(Holding(cid, TRACK, decision.sizing.notional,
+                                       cfg.sectors.get(cid, "UNKNOWN")))
+            reserved += required
     out["no_trade"] = None if out["orders"] else no_trade_explanation(out, ctx)
     return out
 
@@ -704,8 +731,13 @@ def manage_position(position: Position, bar: StrategyBar, *, sessions_held: int,
 
 def replay(ctx: StageContext, *, start: date, end: date, workdir: Path,
            broker: SimulatedBroker | None = None) -> dict[str, Any]:
+    """Partial IOC fills are a resolved broker outcome: the filled units open, the rest
+    expire. Unknown outcomes (outage, over-fill) and unconfirmed exits are UNRESOLVED: the
+    run halts at once, later intents are not submitted and no new entries follow."""
     cfg = ctx.cfg
     require_route(cfg.route)
+    if ctx.admission_through is not None and start <= ctx.admission_through:
+        raise PipelineError("replay must start after the admission lock date")
     workdir.mkdir(parents=True, exist_ok=True)
     bases = {ev.basis for ev in ctx.evidence.values()}
     if len(bases) != 1:
@@ -716,6 +748,8 @@ def replay(ctx: StageContext, *, start: date, end: date, workdir: Path,
         raise PipelineError("workdir belongs to a different basis or capital (no account mixing)")
     marker.write_text(json.dumps(meta), encoding="utf-8")
     ledger = TrackLedger.open(workdir / "swing-ledger.sqlite3", TRACK, cfg.virtual_capital)
+    if ledger.positions or ledger.closed:
+        raise PipelineError("replay needs a fresh ledger; this workdir already holds a run")
     broker = broker or SimulatedBroker(cfg.fee_bps, cfg.slippage_bps)
     for cid, ev in ctx.evidence.items():
         ctx.signal_maps.setdefault(cid, {s: generate_signals(_spec(s), ev.bars)
@@ -737,6 +771,13 @@ def replay(ctx: StageContext, *, start: date, end: date, workdir: Path,
             bar = bars_today.get(cid)
             decision: Decision = intent["_decision"]
             record = {k: v for k, v in intent.items() if k != "_decision"}
+            if halted is not None:
+                events.append({**record, "event": "NOT_SUBMITTED_HALTED", "day": str(day)})
+                continue
+            if len(ledger.positions) >= cfg.max_positions:
+                events.append({**record, "event": "REJECTED_AT_FILL", "day": str(day),
+                               "reason": "MAX_POSITIONS"})
+                continue
             if bar is None:
                 events.append({**record, "event": "ORDER_EXPIRED_NO_SESSION", "day": str(day)})
                 continue
@@ -756,6 +797,9 @@ def replay(ctx: StageContext, *, start: date, end: date, workdir: Path,
                 events.append({**record, "event": "EXPIRED_IOC_LIMIT", "day": str(day)})
                 continue
             filled = Decimal(fill["units"])
+            if filled <= 0:
+                events.append({**record, "event": "EXPIRED_NO_FILL", "day": str(day)})
+                continue
             if decision.sizing is None:
                 raise PipelineError("order intent lost its sizing")
             sized = replace(decision, sizing=replace(decision.sizing, quantity=filled))
@@ -801,6 +845,11 @@ def replay(ctx: StageContext, *, start: date, end: date, workdir: Path,
             if outcome is None:
                 continue
             reason, raw = outcome
+            if day in broker.outage_days:
+                halted = halted or f"UNRESOLVED_EXIT {ref}: broker unreachable, exit unconfirmed"
+                events.append({"event": "EXIT_UNCONFIRMED", "intent_id": ref, "day": str(day),
+                               "reason": reason, "basis": SIMULATED_LOCAL})
+                continue
             price = broker.exit_price(raw)
             fee = broker.fee(position.quantity, price)
             at = (session_close_utc(day) if reason == "TIME_EXIT"
@@ -816,7 +865,8 @@ def replay(ctx: StageContext, *, start: date, end: date, workdir: Path,
         if halted is None:
             now = session_close_utc(day) + timedelta(minutes=5)
             result = decision_pass(ctx, through=day, now=now, ledger=ledger,
-                                   run_key=day.isoformat(), scan=False)
+                                   run_key=day.isoformat(), scan=False,
+                                   session_start_equity=previous_equity)
             for intent in result["orders"]:
                 cid = intent["canonical_id"]
                 spec = _spec(intent["strategy"].split("@")[0])
@@ -956,7 +1006,8 @@ def build_context(bundles: Sequence[tuple[dict[str, Any], str]], *, basis: str,
             excluded[cid] = str(exc)
     if not evidence:
         raise PipelineError("no admissible market data")
-    return StageContext(cfg, evidence, research, tuple(agent_records)), excluded
+    return StageContext(cfg, evidence, research, tuple(agent_records),
+                        admission_through=admission_through), excluded
 
 
 def _public(value: Any) -> Any:
@@ -985,8 +1036,9 @@ def run_report(ctx: StageContext, excluded: Mapping[str, str], *, now: datetime,
     through = max(ev.last_session for ev in ctx.evidence.values())
     snapshot = _decision_snapshot(ctx, through=through, now=now)
     basis = next(iter(ctx.evidence.values())).basis
-    admitted = [f"{r.canonical_id}:{a.strategy_id}@{a.version}" for r in ctx.research.values()
-                for a in r.admissions if a.status == "ADMITTED"]
+    admitted = [f"{r.canonical_id}:{a.strategy_id}@{a.version}"
+                + (" [FIXTURE_OVERRIDE]" if a.evidence_ref == FIXTURE_OVERRIDE else "")
+                for r in ctx.research.values() for a in r.admissions if a.status == "ADMITTED"]
     age_days = (now - session_close_utc(through)).days
     report: dict[str, Any] = {
         "schema": SCHEMA, "mode": mode, "generated_at": now.isoformat(), "data_basis": basis,

@@ -46,3 +46,15 @@ def test_values_are_bounded_and_non_numeric_numbers_dropped(tmp_path):
     path.write_text(json.dumps(report), encoding="utf-8")
     row = pipeline_summary(str(path))["decisions"][0]
     assert row["stop_loss"] is None and len(row["reasons"][0]) <= 240
+
+
+def test_malformed_rows_and_non_finite_numbers_fail_closed(tmp_path):
+    path = tmp_path / "r.json"
+    path.write_text(json.dumps(_minimal(market_data=[{"sessions": "x"}])), encoding="utf-8")
+    assert pipeline_summary(str(path))["status"] == "UNAVAILABLE"
+    path.write_text(json.dumps(_minimal(decisions=[{
+        "symbol": "US:SPY", "direction": "ABSTAIN", "decision": "ABSTAIN", "strategy": [],
+        "reasons": [], "stop_loss": "+inf", "target": "Infinity",
+        "entry": {"reference_close": "nan"}}])), encoding="utf-8")
+    row = pipeline_summary(str(path))["decisions"][0]
+    assert row["stop_loss"] is None and row["target"] is None and row["reference_close"] is None
