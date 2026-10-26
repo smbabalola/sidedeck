@@ -35,3 +35,12 @@ The package establishes neither entitlement nor data quality until the owner run
 scope. A successful sample does not establish five-year history, corporate-action adjustment,
 consolidated/SIP semantics, exchange-session completeness, volume meaning or strategy validity.
 The Day Trader module remains `RESEARCH_ONLY`; broker execution remains disabled.
+
+## Consumed-run diagnostic follow-up
+
+The owner-run authorization `sd120-etoro-5m-20261026123521` is consumed and must not be rerun.
+Its three search failures were recorded only as `HTTPError`, so the historical report cannot
+establish whether the cause was authentication, entitlement, endpoint routing or rate limiting.
+The collector now records the numeric HTTP status and a bounded classification, and stops after
+the first HTTP failure. The next authenticated action, if still needed, is a separately signed
+single-GET diagnostic for the same v1 search endpoint; it is not authorized by this change.

@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from urllib.error import HTTPError
 
 from sidedeck.application.sd077_data_authorization import DataRequestLedger
 from sidedeck.application.sd120_etoro_five_minute import (
@@ -75,3 +76,24 @@ def test_offline_collector_uses_nine_gets_and_skips_no_coverage(tmp_path):
     assert all(query.get("side", ["both"])[0] == "both" for _, query in seen[6:])
     assert all(query.get("from", [SAMPLE_FROM])[0] == SAMPLE_FROM for _, query in seen[6:])
     assert all(query.get("to", [SAMPLE_TO])[0] == SAMPLE_TO for _, query in seen[6:])
+
+
+def test_http_status_is_classified_and_stops_before_repeating_failure(tmp_path):
+    calls = []
+
+    def opener(request, timeout=20):
+        del timeout
+        calls.append(request.full_url)
+        raise HTTPError(request.full_url, 403, "forbidden", {}, None)
+
+    auth = draft_authorization(datetime(2026, 10, 26, tzinfo=UTC), owner_terms_reviewed=True)
+    report = run_discovery(auth, DataRequestLedger(tmp_path / "ledger.sqlite3", auth),
+                           api_key="redacted", user_key="redacted", out_dir=tmp_path / "out",
+                           opener=opener, now=lambda: datetime(2026, 10, 26, tzinfo=UTC))
+    assert len(calls) == 1 and report["requests_used"] == 1
+    assert report["stopped_early"] == {
+        "symbol": "SPY", "status": 403, "classification": "ACCESS_OR_ENTITLEMENT_DENIED"
+    }
+    assert report["records"][0]["status"] == 403
+    assert report["records"][0]["classification"] == "ACCESS_OR_ENTITLEMENT_DENIED"
+    assert [row["status"] for row in report["records"][1:]] == ["SKIPPED", "SKIPPED"]

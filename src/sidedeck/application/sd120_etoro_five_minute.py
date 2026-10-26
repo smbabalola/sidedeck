@@ -52,6 +52,29 @@ class EtoroDiscoveryError(ValueError):
     pass
 
 
+class EtoroHttpError(EtoroDiscoveryError):
+    """Sanitized HTTP failure; body and headers are intentionally discarded."""
+
+    def __init__(self, status: int, classification: str) -> None:
+        super().__init__(f"HTTP_{status}:{classification}")
+        self.status = status
+        self.classification = classification
+
+
+def _classify_http_status(status: int) -> str:
+    if status == 401:
+        return "AUTHENTICATION_FAILURE"
+    if status == 403:
+        return "ACCESS_OR_ENTITLEMENT_DENIED"
+    if status == 404:
+        return "ENDPOINT_NOT_FOUND"
+    if status == 429:
+        return "RATE_LIMITED"
+    if 500 <= status <= 599:
+        return "UPSTREAM_SERVER_FAILURE"
+    return "HTTP_FAILURE"
+
+
 def draft_authorization(issued_at: datetime, *, hours: int = 48,
                         owner_terms_reviewed: bool = False) -> DataAuthorization:
     if issued_at.tzinfo is None:
@@ -162,23 +185,43 @@ def run_discovery(
         try:
             with opener(req, timeout=20) as response:
                 status, raw, payload = _read_json(response)
+        except urllib.error.HTTPError as exc:
+            status = int(exc.code)
+            ledger.record(request_id, f"HTTP_{status}")
+            raise EtoroHttpError(status, _classify_http_status(status)) from None
         except Exception as exc:
             ledger.record(request_id, f"FAILED:{type(exc).__name__}")
             raise
         ledger.record(request_id, f"HTTP_{status}")
         return status, raw, payload
 
-    for symbol in SUPPORTED_SYMBOLS:
+    stopped_early: dict[str, Any] | None = None
+    for index, symbol in enumerate(SUPPORTED_SYMBOLS):
         search_entry: dict[str, Any] = {"symbol": symbol, "kind": "search"}
         try:
             status, raw, payload = request(SEARCH_PATH, {"internalSymbolFull": symbol})
             search_entry.update({"status": status, "sha256": hashlib.sha256(raw).hexdigest()})
             instrument_id = parse_instrument_search(payload, symbol)
             search_entry["identity"] = "EXACT"
+        except EtoroHttpError as exc:
+            search_entry.update({"status": exc.status, "result": "HTTP_ERROR",
+                                 "classification": exc.classification})
+            records.append(search_entry)
+            stopped_early = {"symbol": symbol, "status": exc.status,
+                             "classification": exc.classification}
+            for skipped in SUPPORTED_SYMBOLS[index + 1:]:
+                records.append({"symbol": skipped, "kind": "search", "status": "SKIPPED",
+                                "result": "STOPPED_AFTER_HTTP_ERROR"})
+            break
         except Exception as exc:
             search_entry.update({"status": "FAILED", "result": type(exc).__name__})
             records.append(search_entry)
-            continue
+            stopped_early = {"symbol": symbol, "status": "LOCAL_FAILURE",
+                             "classification": type(exc).__name__}
+            for skipped in SUPPORTED_SYMBOLS[index + 1:]:
+                records.append({"symbol": skipped, "kind": "search", "status": "SKIPPED",
+                                "result": "STOPPED_AFTER_LOCAL_FAILURE"})
+            break
         records.append(search_entry)
 
         coverage_entry: dict[str, Any] = {"symbol": symbol, "kind": "coverage"}
@@ -188,6 +231,13 @@ def run_discovery(
             coverage_entry.update({"status": status, "sha256": hashlib.sha256(raw).hexdigest(),
                                    "coverage": coverage["intervals"]})
             has_5m = any(item["interval"] == "5m" and item["candles"] > 0 for item in coverage["intervals"])
+        except EtoroHttpError as exc:
+            coverage_entry.update({"status": exc.status, "result": "HTTP_ERROR",
+                                   "classification": exc.classification})
+            records.append(coverage_entry)
+            stopped_early = {"symbol": symbol, "status": exc.status,
+                             "classification": exc.classification}
+            break
         except Exception as exc:
             coverage_entry.update({"status": "FAILED", "result": type(exc).__name__})
             records.append(coverage_entry)
@@ -204,6 +254,11 @@ def run_discovery(
             candles = parse_candles(payload, instrument_id=instrument_id, symbol=symbol)
             sample_entry.update({"status": status, "sha256": hashlib.sha256(raw).hexdigest(),
                                  "rows": len(candles), "schema": "ETORO_VERBOSE_BID_ASK_CANONICAL"})
+        except EtoroHttpError as exc:
+            sample_entry.update({"status": exc.status, "result": "HTTP_ERROR",
+                                 "classification": exc.classification})
+            stopped_early = {"symbol": symbol, "status": exc.status,
+                             "classification": exc.classification}
         except Exception as exc:
             sample_entry.update({"status": "FAILED", "result": type(exc).__name__})
         records.append(sample_entry)
@@ -213,7 +268,7 @@ def run_discovery(
         "authorization_id": auth.authorization_id, "authorization_digest": auth.digest,
         "requests_used": ledger.used(), "max_requests": MAX_REQUESTS,
         "window": {"from": SAMPLE_FROM, "to": SAMPLE_TO}, "interval": "5m", "side": "both",
-        "records": records, "broker_execution": "DISABLED",
+        "records": records, "stopped_early": stopped_early, "broker_execution": "DISABLED",
     }
     (out_dir / "summary.json").write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     ledger.auth  # keep the authorization visibly bound to this run
