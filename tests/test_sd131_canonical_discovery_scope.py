@@ -44,3 +44,19 @@ def test_cli_draft_custom_names_creates_document_without_gets(tmp_path: Path) ->
     payload = output.read_text(encoding="utf-8")
     assert CANONICAL_API in payload and CANONICAL_USER in payload
     assert "market-data" not in output.name
+
+
+@pytest.mark.parametrize("api_name,user_name", [
+    ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+    ("ETORO_API_KEY", "ETORO_DEMO_TRADE_USER_KEY"),
+    ("ETORO_DEMO_TRADE_API_KEY", "ETORO_USER_KEY"),
+])
+def test_unreviewed_credential_name_sources_never_enter_signed_data_scope(
+    api_name: str, user_name: str,
+) -> None:
+    from sidedeck.application.sd120_etoro_five_minute import EtoroDiscoveryError
+
+    with pytest.raises(EtoroDiscoveryError, match="not approved"):
+        draft_authorization(
+            NOW, owner_terms_reviewed=True,
+            api_key_env=api_name, user_key_env=user_name)
