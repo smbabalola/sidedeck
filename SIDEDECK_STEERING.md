@@ -472,7 +472,7 @@ monitoring/soak**. An autonomous *development* loop is approved; autonomous
 *broker order transmission* remains **NOT_RELEASED**. This directive supersedes
 §19's instruction to complete every Day Trader UI task before advancing Demo
 gateway engineering, but **does not override §§2, 7, 10, 15, 17, 18 or
-\`AGENTS.md\` safety gates**. Avoid switching to new isolated apps, agents or
+`AGENTS.md` safety gates**. Avoid switching to new isolated apps, agents or
 brokers when the integrated eToro Demo path can be improved offline.
 
 ### 20.1 Confirmed baseline — do not rediscover it
@@ -482,27 +482,27 @@ brokers when the integrated eToro Demo path can be improved offline.
   **0.09-unit** Demo position. The follow-up lookup by reference returned **404
   ~0.8 seconds after acceptance**; SideDeck **HALTED** and never automatically
   closed it. The owner subsequently closed the position manually.
-- **27 October:** a separately owner-authorised read-only eToro Demo \`/pnl\`
+- **27 October:** a separately owner-authorised read-only eToro Demo `/pnl`
   GET returned **200 / MATCHED**: all **four original protected positions**
   intact, no MSFT pilot position, no pending or unexplained positions. Closing
   price/P&L remain unverified; the historical pilot is **not** an automatically
   completed end-to-end trade. Pilot kill switch remains HALTED until the owner
   separately approves a recorded reset.
 - Existing eToro key: **Demo environment, Read/Write permissions, expiry not
-  defined**, reconfirmed by owner; canonical \`ETORO_DEMO_TRADE_*\` variable
+  defined**, reconfirmed by owner; canonical `ETORO_DEMO_TRADE_*` variable
   names, no legacy-name collision. **Do not ask to regenerate keys or repeat
   permission checks.**
 - **AAPL market-data search alone** returned **HTTP 403** after a different
   signed one-GET diagnostic. Its two one-shot authorizations (earlier
-  \`FAILED:URLError\`, later HTTP 403) remain **consumed**. Treat this as a
+  `FAILED:URLError`, later HTTP 403) remain **consumed**. Treat this as a
   **market-data endpoint/access issue**, not a failed Demo trading-key test.
   No repeat unauthorised probes; isolate a legitimately licensed feed.
-- The historical supervised pilot's SD-105 delayed lookup and strict \`/pnl\`
+- The historical supervised pilot's SD-105 delayed lookup and strict `/pnl`
   fallback are already implemented **offline**; SD-129/134/135 add separate
   transport-neutral recovery and close classification. Do not rebuild working
   contracts or mark offline simulation as live broker readiness.
 - Current isolated engineering branch:
-  \`codex/sd122-etoro-data-autodemo-20261027\`, draft PR #8. Reconcile actual
+  `codex/sd122-etoro-data-autodemo-20261027`, draft PR #8. Reconcile actual
   branch HEAD and CI rather than assuming an older recorded SHA is current.
 
 ### 20.2 The run–verify–record–repeat algorithm
@@ -512,18 +512,18 @@ below without waiting for owner instructions between ordinary engineering
 tasks. This is a deterministic **development workflow**, not an unattended
 scheduler or permission to issue external orders.
 
-1. **RECONCILE:** inspect \`AGENTS.md\`, this charter, the first "Autonomous
-   eToro Demo delivery loop" section of \`TODO.md\`, the current worktree and
+1. **RECONCILE:** inspect `AGENTS.md`, this charter, the first "Autonomous
+   eToro Demo delivery loop" section of `TODO.md`, the current worktree and
    branch, recent commits and exact-head GitHub Actions status. Read relevant
    SD-063/064/074/105/107/108/125/126/129/134/135 contracts before editing.
    Do not overwrite another worktree, credential file, consumed grant or the
    old pilot ledger. If a previously marked task has failed CI, reopen it.
-2. **SELECT:** from TODO pick the highest-risk-reducing \`READY\` P0 task
+2. **SELECT:** from TODO pick the highest-risk-reducing `READY` P0 task
    whose dependencies are verified. Select 2–5 related items per batch when
    practical, preferably a broker lifecycle task plus its failure-injection
    test/observability task. A queue item with unmet dependencies is not
-   runnable even if queued \`READY\`. Never choose a \`BLOCKED_OWNER\` or
-   \`BLOCKED_EXTERNAL\` task as if its external evidence exists.
+   runnable even if queued `READY`. Never choose a `BLOCKED_OWNER` or
+   `BLOCKED_EXTERNAL` task as if its external evidence exists.
 3. **DESIGN:** write down pre/postconditions, durable identity, explicit
    broker-state transitions, request/write caps, quote freshness and exact
    rejection criteria. Add failing positive, negative, crash/restart and
@@ -545,12 +545,12 @@ scheduler or permission to issue external orders.
    only on disposable SQLite/PostgreSQL, frontend typecheck/build/unit,
    relevant desktop/mobile Playwright, dependency/security and explicit
    locked-route tests. Record skipped unavailable infrastructure as
-   \`UNVERIFIED\`, never \`PASS\`. Check the exact pushed commit in Actions;
+   `UNVERIFIED`, never `PASS`. Check the exact pushed commit in Actions;
    investigate red CI instead of using an older green run.
 7. **RECORD:** make small reviewable commits on the authorized feature branch,
    push, link the exact successful CI run, and update TODO task status,
    acceptance evidence, negative cases and specific external blockers.
-   Reconcile \`SIDEDECK_STEERING.md\`, \`STEERING.md\`, \`AGENTS.md\`, runbooks
+   Reconcile `SIDEDECK_STEERING.md`, `STEERING.md`, `AGENTS.md`, runbooks
    and PR description when requirements change. No merge to default branch,
    branch reset, force push, destructive cleanup or external deployment.
 8. **REPEAT:** determine the next dependency-clearing batch and execute it
@@ -571,7 +571,7 @@ unresolved orders or baseline drift; kill switch HALTED; missing genuine
 data/admission; audit-anchor failure; strategy not admitted; uncontrolled
 credential exposure; CI/security failure; unclear ownership/price; or
 unauthorised broker/provider network access. Stop only the unsafe action;
-continue offline work. Do not reset \`.consumed\` markers, journal rows, a
+continue offline work. Do not reset `.consumed` markers, journal rows, a
 kill switch or a denied endpoint to make progress appear successful.
 
 ### 20.3 Dependency-directed delivery sequence (SD-136 through SD-151)
@@ -583,7 +583,7 @@ SD-063/SD-074 journal across restarts; SD-138 implement the policy-bound
 Demo-only transport adapter behind an invariant **hard network lock**,
 independent SD-064 per-call signed grants, endpoint allowlists and durable
 request/response reservation; SD-139 implement authoritative strict Demo
-\`/pnl\` fill/close/attribution verification, no duplicate close and no
+`/pnl` fill/close/attribution verification, no duplicate close and no
 position ownership by ticker; SD-140 integrate exchange-session-aware
 DAY/SWING/POSITION cycle scheduling, recovery and protective reduce-only
 exits; SD-141 perform full crash/replay/partial fill/kill-switch and
@@ -610,7 +610,7 @@ secret-safe telemetry, operator kill/reset/runbook, protective close under
 expired entry grants and off-hours incidents. SD-147 build read-only Demo
 readiness and reconciliation displays with actual broker status only when
 the corresponding read has been authorised; synthetic runs remain
-\`SIMULATED_LOCAL\`. SD-148 conduct restart/reconciliation operational
+`SIMULATED_LOCAL`. SD-148 conduct restart/reconciliation operational
 rehearsals and a multi-day **offline simulated** soak. Record degraded
 outcomes, not just happy-path success.
 
@@ -630,7 +630,7 @@ building B/C offline. Don't ask for a Demo release before data, strategy
 admission, code security, independent review and external anchors are
 VERIFIED. A demonstration of Demo POST HTTP 200 from the historical MSFT
 pilot is *access evidence*, not an autonomous go-live authorization.
-\`TODO.md\` is the precise current assignment and owner of each gate.
+`TODO.md` is the precise current assignment and owner of each gate.
 
 ### 20.4 One integrated lifecycle contract (definition of done)
 
@@ -638,8 +638,8 @@ Only the reviewed SideDeck decision/risk controller may promote an admitted
 strategy proposal into a signed policy-bound order intent. Model/agent
 recommendations never self-authorize. A production Demo route must:
 
-- Persist \`proposal_id → intent_id → referenceId → accepted_orderId →
-  confirmed positionId → close referenceId → close orderId\` with
+- Persist `proposal_id → intent_id → referenceId → accepted_orderId →
+  confirmed positionId → close referenceId → close orderId` with
   append-only provenance, monotonic transitions and reconciliation against
   real broker responses. Reconcile preexisting protected Demo holdings by
   fixed known baseline identifiers, never by ticker alone.
@@ -648,19 +648,19 @@ recommendations never self-authorize. A production Demo route must:
   market-calendar window, virtual cash/exposure/position caps, time-limited
   owner signatures, strategy proof, grant revocation, ledger anchors,
   redaction and real-money prohibition on **every** request.
-- An accepted POST is only \`ACCEPTED\`; follow up by bounded
-  \`referenceId\` and linked \`orderId\` GETs (as observed, first referenceId
-  404 may be transient), then a strict separately budgeted \`/pnl\` recovery.
-  Unknown/partial/multi-position/contradictory cases remain \`UNRESOLVED\`,
+- An accepted POST is only `ACCEPTED`; follow up by bounded
+  `referenceId` and linked `orderId` GETs (as observed, first referenceId
+  404 may be transient), then a strict separately budgeted `/pnl` recovery.
+  Unknown/partial/multi-position/contradictory cases remain `UNRESOLVED`,
   trigger halt and permit **read-only** investigation, never POST replay.
 - A close is full **reduce-only**, uses only a broker-verified SideDeck-owned
   position and its independent protective authority. Broker close-info
   reporting FILLED is not proof of a flat reconciled portfolio; demand
-  fresh \`/pnl\` (zero attributable position, no pending order, all four
+  fresh `/pnl` (zero attributable position, no pending order, all four
   protected unchanged) and independently verified execution price before
   claiming net realised P&L. A manual operator close must never be
   fabricated as a SideDeck order.
-- Enforce correct trading hours in \`America/New_York\` using exchange
+- Enforce correct trading hours in `America/New_York` using exchange
   calendars, DST and early closes. DAY no-entry final 30 minutes and
   flatten 10 minutes before close; overdue overnight positions stop new
   entries and require an incident/recovery path. SWING/POSITION tracks
@@ -679,16 +679,16 @@ owner policy + grants + protective/recovery authority, verified 1:1
 lineage and broker endpoints, immutable four-position baseline, durable
 off-machine audit/revocation and independent acceptance tests; G5 monitored
 Demo-only bounded canary and one-month soak. Each must be independently
-marked \`PASS\`, \`FAIL\`, \`BLOCKED\` or \`NOT_ASSESSED\`; keep launch locked
+marked `PASS`, `FAIL`, `BLOCKED` or `NOT_ASSESSED`; keep launch locked
 until all prerequisites actually pass.
 
 ### 20.5 Machine-readable handoff convention (in TODO)
 
-At the **top** of \`TODO.md\`, maintain a stable block with
-\`GOAL\`, \`REPO/BRANCH\`, \`LAST_VERIFIED_HEAD\`, \`EXACT_HEAD_CI\`,
-\`BROKER_ROUTE\`, \`HISTORICAL_PILOT_KILL_SWITCH\`, \`G0–G5\`,
-\`CURRENT_BATCH\`, \`NEXT_READY\` and \`BLOCKED_OWNER\`/
-\`BLOCKED_EXTERNAL\`. Reconcile it every cycle; never carry an outdated
+At the **top** of `TODO.md`, maintain a stable block with
+`GOAL`, `REPO/BRANCH`, `LAST_VERIFIED_HEAD`, `EXACT_HEAD_CI`,
+`BROKER_ROUTE`, `HISTORICAL_PILOT_KILL_SWITCH`, `G0–G5`,
+`CURRENT_BATCH`, `NEXT_READY` and `BLOCKED_OWNER`/
+`BLOCKED_EXTERNAL`. Reconcile it every cycle; never carry an outdated
 SHA as "latest." Every SD-136…151 item requires priority, status, deps,
 owner, acceptance, test/evidence, next action and whether real
 provider/broker I/O is authorized. Keep existing TODO chronology intact.
