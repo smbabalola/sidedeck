@@ -2,7 +2,7 @@
 
 ## Mandatory steering / self-directed work
 
-Read [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md) **before** selecting tasks. It is the durable engineering mandate and governs the live execution board at the top of [TODO.md](TODO.md). Continue coordinated, offline-safe, tested development batches without requiring one new owner instruction per task. Update TODO as work proceeds; stop only actions requiring specific external access/spend/trading authorization under the steering charter. Preserve stricter safety conditions in this file. Never infer authorization from the existence of credentials.
+Start at [STEERING.md](STEERING.md) (short owner-requested entry point), then read [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md) **especially §20** before selecting tasks. It is the durable engineering mandate and governs the live execution board at the top of [TODO.md](TODO.md). Continue the self-directed `TODO.md` autonomous eToro Demo delivery loop in each **active** Codex session: reconcile exact HEAD and CI, implement unblocked dependency-ready tasks, run full regressions, update board evidence, commit/push, then repeat without another routine owner prompt. The steering file does not create a background runner. Update TODO as work proceeds; stop only actions requiring specific external access/spend/trading authorization under the steering charter. Preserve stricter safety conditions in this file. Never infer authorization from the existence of credentials.
 
 
 ## Scope
