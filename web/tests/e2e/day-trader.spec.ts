@@ -1,23 +1,12 @@
-import { expect, test as base } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { fixture, mockApi } from "./mock";
 
-const test = base.extend<{ pageErrors: string[] }>({
-  pageErrors: async ({ page }, use) => {
-    const errors: string[] = [];
-    page.on("pageerror", e => errors.push(e.message));
-    await mockApi(page);
-    await use(errors);
-    expect(errors).toEqual([]);
-  },
-});
-
 test("Day Trader desk distinguishes offline research, virtual configuration and simulated P&L", async ({ page }) => {
+  await mockApi(page);
   await page.goto("/#/day-trader");
   await expect(page.getByRole("heading", { level: 1, name: "Day Trader" })).toBeVisible();
   await expect(page.getByText("Execution locked")).toBeVisible();
   await expect(page.getByText("eToro Demo · NOT RELEASED")).toBeVisible();
-  await page.waitForTimeout(500);
-  console.log("SD127_DESK_SNAPSHOT", (await page.locator("main").innerText()).slice(0, 2200));
   await expect(page.getByRole("region", { name: "DAY simulated accounting" })).toBeVisible();
   await expect(page.getByRole("region", { name: "DAY risk configuration" })).toBeVisible();
   await expect(page.getByText("Research only", { exact: true })).toBeVisible();
@@ -27,6 +16,7 @@ test("Day Trader desk distinguishes offline research, virtual configuration and 
 });
 
 test("Day Trader symbol filter keeps plan decisions research-only", async ({ page }) => {
+  await mockApi(page);
   await page.goto("/#/day-trader");
   await page.getByRole("tab", { name: "Opportunities & plans" }).click();
   const watchlist = page.getByRole("region", { name: /Watchlist/ });
@@ -40,6 +30,7 @@ test("Day Trader symbol filter keeps plan decisions research-only", async ({ pag
 });
 
 test("Day Trader audit rows are evidence metadata, not historical trade claims", async ({ page }) => {
+  await mockApi(page);
   await page.goto("/#/day-trader");
   await page.getByRole("tab", { name: "Run history & audit" }).click();
   const history = page.getByRole("table", { name: "Saved Day Trader research runs" });
@@ -51,6 +42,7 @@ test("Day Trader audit rows are evidence metadata, not historical trade claims",
 });
 
 test("Day Trader readiness has five explicit gates and no broker unlock buttons", async ({ page }) => {
+  await mockApi(page);
   await page.goto("/#/day-trader");
   const tab = page.getByRole("tab", { name: "Execution readiness" });
   await tab.click();
@@ -67,8 +59,6 @@ test("Day Trader fails closed on forged readiness and never shows success", asyn
   await mockApi(page, { "/api/day-trader/readiness": forged });
   await page.goto("/#/day-trader");
   await page.getByRole("tab", { name: "Execution readiness" }).click();
-  await page.waitForTimeout(500);
-  console.log("SD127_READINESS_SNAPSHOT", (await page.locator("main").innerText()).slice(0, 2200));
   await expect(page.getByRole("alert").filter({ hasText: /did not match the expected contract/ })).toBeVisible();
   await expect(page.getByText("Autonomous eToro Demo execution")).toHaveCount(0);
 });
