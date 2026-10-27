@@ -254,3 +254,34 @@ def test_later_broker_closed_lookup_revokes_stale_close_authority() -> None:
     with pytest.raises(DemoLineageRefused):
         port.submit_owned_close(close_request(), owner=earlier)
     assert all(method == "GET" for method, _, _ in fake.calls)
+
+
+def test_offline_full_demo_order_cycle_404_fallback_then_close_not_flat_claim() -> None:
+    """Same adapter, real contract shapes, but no broker network or account access."""
+    fake = FakeDemoRoute([
+        accepted(), TransportNotFound("reference lookup 404"), lookup(),
+        {"orderForClose": {
+            "orderID": 202, "positionID": 100001, "instrumentID": 1004,
+        }},
+        {"orderID": 202, "statusID": 3,
+         "positions": [{"positionID": 100001, "units": 0.09}]},
+    ])
+    port = EtoroDemoOrderPort(fake)
+    acceptance = port.submit_open(request())
+    recovered = port.recover_accepted_open(
+        request(), acceptance,
+        wait_before_first_lookup=lambda: None,
+        wait_before_order_id_fallback=lambda: None,
+    )
+    assert recovered.classification == "BROKER_CONFIRMED_OPEN"
+    assert recovered.requests_used == 2
+    owner = recovered.position
+    assert owner is not None
+    close_acceptance = port.submit_owned_close(close_request(), owner=owner)
+    close_read = port.lookup_close(
+        close_acceptance, request=close_request(), owner=owner)
+    assert close_read.position_status == (
+        "BROKER_REPORTS_FULL_CLOSE_PENDING_PORTFOLIO_RECONCILIATION")
+    assert close_read.realised_pnl_status == "UNAVAILABLE_WITHOUT_BROKER_CLOSE_PRICE"
+    assert [c[0] for c in fake.calls] == ["POST", "GET", "GET", "POST", "GET"]
+    assert all("/real/" not in c[1] for c in fake.calls)
