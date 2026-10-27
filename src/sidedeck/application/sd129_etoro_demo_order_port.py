@@ -164,6 +164,7 @@ class EtoroDemoOrderPort:
                       durable_order_id if durable_order_id is not None else order_id),
         )
         if row is not None and durable_order_id is None:
+            assert self._lineage is not None
             # A lost POST acknowledgement can be recovered from a genuine,
             # independently authorised read; never issue another open POST.
             self._lineage.set_state(request.reference_id, "ACCEPTED",
@@ -193,6 +194,7 @@ class EtoroDemoOrderPort:
             remaining_units=opened.remaining_units, avg_price=opened.avg_price,
         )
         if row is not None:
+            assert self._lineage is not None
             self._lineage.register_position(
                 reference_id=request.reference_id, order_id=outcome.order_id,
                 book_id=row["book_id"], instrument_id=request.instrument_id,
