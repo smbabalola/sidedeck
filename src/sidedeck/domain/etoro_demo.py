@@ -141,6 +141,7 @@ class DemoPosition:
     opened_at: datetime
     unrealized_pnl: Decimal | None
     mirror_id: int = 0          # non-zero: a copy-trade/agent-portfolio child, never direct
+    open_rate: Decimal | None = None   # broker-reported ``openRate`` (None when absent)
 
 
 @dataclass(frozen=True)
@@ -236,7 +237,8 @@ def _position(row: Any) -> DemoPosition:
         is_buy=row["isBuy"], units=units, amount=amount,
         leverage=_int(row.get("leverage"), "leverage"),
         opened_at=_utc(row.get("openDateTime"), "position openDateTime"),
-        unrealized_pnl=pnl)
+        unrealized_pnl=pnl,
+        open_rate=_optional_decimal(row, "openRate", "position openRate"))
 
 
 def _pending(collection: str, row: Any) -> PendingOrder:

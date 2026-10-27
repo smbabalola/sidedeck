@@ -35,7 +35,8 @@ from typing import Any
 
 from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch
 from sidedeck.application.sd036_etoro_demo_desk import (
-    EtoroDemoDesk, EtoroDemoLineage, EtoroDemoTransport, close_scope, open_scope,
+    AcceptedOrderNotVisible, EtoroDemoDesk, EtoroDemoLineage, EtoroDemoTransport, close_scope,
+    open_scope,
 )
 from sidedeck.application.sd058_forensic_audit import PreflightAudit
 from sidedeck.domain.etoro_demo import DemoPortfolioSnapshot, field_type_issues, parse_demo_portfolio
@@ -54,7 +55,15 @@ SD044_CAPS = {"pnl": 3, "eligibility": 1, "rates": 1, "open": 1, "lookup": 3, "c
               "close_info": 2}
 # Per-route ceilings a signed intent may name (owner decision 2026-10-26: up to 4 quote
 # reads). The binding limits are the signed intent's caps, enforced at runtime.
+# PROPOSED, NOT APPROVED (2026-10-27): a pnl ceiling of 4 (with lookup 2, total still 15) so
+# an accepted-but-not-visible open can be recovered from /pnl and still closed. Until the
+# owner approves that, the /pnl recovery below refuses for lack of budget.
 ROUTE_CAPS = {**SD044_CAPS, "rates": 4}
+# Seconds to wait before each open lookup. 4119f25c looked up 0.8 s after acceptance and
+# got 404 for an order that had filled.
+OPEN_LOOKUP_DELAYS = (3.0, 5.0, 8.0)
+# /pnl reads an open recovery needs: the recovery read, the close-time read, the final read.
+PNL_READS_FOR_OPEN_RECOVERY = 3
 MAX_TOTAL_REQUESTS = 15
 MAX_WRITES = 2
 QUOTE_RETRY_SPACING = timedelta(seconds=15)
@@ -383,15 +392,32 @@ class EtoroDemoPilot:
                                            request=request, quote=quote,
                                            eligibility=self._eligibility)
             outcome = None
-            for _ in range(self._budget.caps["lookup"]):
-                outcome = self._desk.refresh_open(request.reference_id)
+            not_visible = False
+            for attempt in range(self._budget.caps["lookup"]):
+                self._sleep(OPEN_LOOKUP_DELAYS[min(attempt, len(OPEN_LOOKUP_DELAYS) - 1)])
+                if attempt and self._controls.is_halted():
+                    raise PilotError("kill switch engaged during open lookups")
+                try:
+                    # By our referenceId; after a 404, by the orderId the acceptance linked.
+                    outcome = self._desk.refresh_open(
+                        request.reference_id, by_order_id=not_visible and state == "ACCEPTED",
+                        halt_on_missing=False)
+                except AcceptedOrderNotVisible:
+                    outcome, not_visible = None, True
+                    continue
+                not_visible = False
                 if outcome is None or outcome.terminal:
                     break
         except Exception as exc:  # any kill criterion after a write attempt
             return self._unresolved("open", type(exc).__name__)
+        except BaseException:     # e.g. Ctrl-C during a lookup wait: an order may exist
+            self._unresolved("open", "interrupted after the open was sent")
+            raise
         if state == "OUTCOME_UNKNOWN":
             return self._unresolved("open", "open acknowledgement lost; lookup-only state "
                                     "recorded, operator must reconcile")
+        if outcome is None and not_visible:
+            return self._recover_open_from_pnl(request, quote)
         if outcome is None:
             return self._unresolved("open", "order not found after submission")
         if not outcome.terminal:
@@ -421,6 +447,37 @@ class EtoroDemoPilot:
                 "source": "BROKER_REPORTED (orders:lookup positionExecutions)"}
         return self._result("OPEN_FILLED_AWAITING_CLOSE_APPROVAL", "open",
                             open_status=outcome.status, entry=self._entry)
+
+    def _recover_open_from_pnl(self, request: DemoOpenRequest,
+                               quote: FreshQuote) -> dict[str, Any]:
+        """Accepted order never visible by lookup: resolve it from one fresh /pnl read."""
+        if self._lineage.order(request.reference_id)["state"] != "ACCEPTED":
+            return self._unresolved("open", "order was seen by lookup, then not visible; "
+                                    "/pnl recovery applies only to a never-seen accepted order")
+        remaining = self._budget.caps["pnl"] - self._budget.usage()["pnl"]
+        if remaining < PNL_READS_FOR_OPEN_RECOVERY:
+            return self._unresolved("open", "accepted order not visible by lookup; signed /pnl "
+                                    "cap leaves no room to recover and still close")
+        try:
+            snapshot = self._snapshot()
+            live = self._desk.recover_open_from_snapshot(
+                request.reference_id, snapshot=snapshot, now=datetime.now(timezone.utc))
+        except Exception as exc:
+            return self._unresolved("open", "accepted order not visible by lookup; /pnl "
+                                    f"recovery failed: {type(exc).__name__}")
+        if self._controls.is_halted():
+            return self._unresolved("open", "kill switch engaged during /pnl open recovery")
+        order_id = self._lineage.order(request.reference_id)["order_id"]
+        self._position_id = live.position_id
+        self._entry = {
+            "position_id": str(live.position_id), "order_id": str(order_id),
+            "units": str(live.units), "avg_price": str(live.open_rate),
+            "fees": "NOT_REPORTED (/pnl)", "notional_usd": str(live.units * live.open_rate),
+            "limit_rate": str(request.limit_rate), "fresh_ask": str(quote.ask),
+            "slippage_vs_ask_per_unit": str(live.open_rate - quote.ask),
+            "source": "BROKER_REPORTED (/pnl orderID -> positionID; orders:lookup 404)"}
+        return self._result("OPEN_FILLED_AWAITING_CLOSE_APPROVAL", "open",
+                            open_status="RECONCILED_FILLED_BY_SNAPSHOT", entry=self._entry)
 
     def close_request(self, reference_id: str) -> tuple[DemoCloseRequest, str]:
         """The exact close request and the approval scope the owner must sign."""

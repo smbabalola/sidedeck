@@ -82,6 +82,15 @@ class TransportNotFound(RuntimeError):
     """The broker reports no such order (HTTP 404)."""
 
 
+class AcceptedOrderNotVisible(EtoroDemoOrderError):
+    """``orders:lookup`` returned 404 for an order whose acceptance echoed our referenceId.
+
+    Observed live on 2026-10-26 (pilot 4119f25c): the Demo BUY was accepted (orderId linked)
+    and filled, yet a lookup 0.8 s later returned 404. Not proof the order is gone; the
+    caller decides (retry by orderId, then /pnl recovery). Never a reason to resubmit.
+    """
+
+
 class EtoroDemoTransport(Protocol):
     offline_simulation: bool
 
@@ -414,17 +423,29 @@ class EtoroDemoDesk:
         return DemoOpenRequest(row["reference_id"], row["instrument_id"], Decimal(row["units"]),
                                Decimal(row["limit_rate"]))
 
-    def refresh_open(self, reference_id: str) -> DemoOrderOutcome | None:
-        """Read-only lookup by referenceId; records verified fills and owned positions."""
+    def refresh_open(self, reference_id: str, *, by_order_id: bool = False,
+                     halt_on_missing: bool = True) -> DemoOrderOutcome | None:
+        """Read-only lookup by referenceId (or the linked orderId); records verified fills.
+
+        ``halt_on_missing=False``: a 404 for an order whose acceptance was verified raises
+        :class:`AcceptedOrderNotVisible` without tripping the kill switch, so the caller can
+        look again or recover from /pnl. A 404 with no linked order still halts.
+        """
         row = self._lineage.order(reference_id)
         if row["kind"] != "OPEN":
             raise EtoroDemoOrderError("not an open-order reference")
         intent_id = row["intent_id"]
+        if by_order_id and row["order_id"] is None:
+            raise EtoroDemoOrderError("no broker order ID is linked to this reference")
+        query = ({"orderId": str(row["order_id"])} if by_order_id
+                 else {"referenceId": reference_id})
         try:
             payload = self._send("GET", DEMO_ORDER_LOOKUP_PATH, reference_id=str(uuid.uuid4()),
-                                 query={"referenceId": reference_id})
-        except TransportNotFound:
+                                 query=query)
+        except TransportNotFound as exc:
             if row["order_id"] is not None:
+                if not halt_on_missing:
+                    raise AcceptedOrderNotVisible(f"accepted order not visible: {exc}") from None
                 self._halt("accepted order missing from broker lookup")
                 raise EtoroDemoOrderError("broker no longer reports an accepted order") from None
             # A 404 is inconclusive: eToro may still land the order. Stay halted; no rejection
@@ -456,6 +477,63 @@ class EtoroDemoDesk:
         if outcome.status_id in NO_FILL_TERMINAL:
             self._outbox.record_rejection(intent_id, outcome.status)
         return outcome
+
+    def recover_open_from_snapshot(self, reference_id: str, *,
+                                   snapshot: DemoPortfolioSnapshot, now: datetime) -> Any:
+        """Resolve an accepted open that ``orders:lookup`` does not show, from fresh /pnl.
+
+        Lineage: our x-request-id was echoed as ``referenceId`` in the acceptance, which
+        linked ``orderId``; a /pnl position whose ``orderID`` equals that order is the
+        broker's own orderId -> positionId link. Exactly one such position must exist, on the
+        requested instrument, long, 1x, direct (not mirrored), with 0 < units <= requested
+        and a reported ``openRate`` <= the signed limit. Anything else halts. Never resubmits.
+        """
+        row = self._lineage.order(reference_id)
+        if (row["kind"] != "OPEN" or row["state"] != "ACCEPTED" or row["order_id"] is None
+                or Decimal(row["filled_units"]) != ZERO):
+            raise EtoroDemoOrderError("only an accepted, unfilled open can be recovered")
+        snapshot.require_fresh(now)
+        matches = [p for p in snapshot.positions if p.order_id == row["order_id"]]
+        if not matches:
+            self._lineage.set_state(reference_id, "NOT_FOUND_INCONCLUSIVE")
+            self._halt("accepted order has no lookup record and no /pnl position")
+            raise EtoroDemoOrderError("accepted order not visible in lookup or /pnl")
+        problem = None
+        live = matches[0]
+        whole = reconcile_demo(snapshot, baseline=self._baseline,
+                               attributions=self._lineage.attributions(), now=now)
+        if any(o.order_id == row["order_id"] for o in snapshot.pending_orders):
+            problem = "order still pending at the broker"
+        elif whole.status != "MATCHED":
+            problem = "recovery snapshot does not reconcile (baseline or unexplained position)"
+        elif len(matches) != 1:
+            problem = "more than one /pnl position for the order"
+        elif live.instrument_id != row["instrument_id"]:
+            problem = "position instrument differs from the order"
+        elif not live.is_buy or live.leverage != 1 or live.mirror_id != 0:
+            problem = "position is not a direct 1x long"
+        elif not ZERO < live.units <= Decimal(row["units"]):
+            problem = "position units exceed the order"
+        elif live.open_rate is None or live.open_rate > Decimal(row["limit_rate"]):
+            problem = "position open rate missing or above the signed limit"
+        if problem is not None:
+            self._halt(f"open recovery snapshot contradicts lineage: {problem}")
+            raise EtoroDemoBookError(problem)
+        try:
+            self._lineage.register_position(
+                reference_id=reference_id, order_id=row["order_id"], book_id=row["book_id"],
+                instrument_id=live.instrument_id, position_id=live.position_id,
+                units=live.units, remaining=live.units)
+        except (EtoroDemoOrderError, EtoroDemoBookError):
+            self._halt("open recovery could not register the position")
+            raise
+        self._lineage.set_state(reference_id, "RECONCILED_FILLED_BY_SNAPSHOT",
+                                filled_units=live.units)
+        intent_id = row["intent_id"]
+        if self._outbox.get(intent_id)["state"] == "SUBMITTED_SIMULATED":
+            self._outbox.acknowledge(intent_id)
+        self._outbox.record_fill(intent_id, live.units)
+        return live
 
     def recover(self) -> dict[str, str]:
         """After restart: look up every unresolved open by referenceId. Never resubmits."""
@@ -620,6 +698,7 @@ class OfflineEtoroDemoSimulator:
         self.close_mode = "FILL"              # FILL | PARTIAL | PENDING
         self.lose_next_response = False
         self.drop_next_request = False        # never reaches the broker (lookup -> 404)
+        self.lookup_not_visible = 0           # next N lookups 404 although the order exists
         self.force_position_id: int | None = None
         self.baseline_rows: list[dict[str, Any]] = []   # served by the simulated /pnl GET
         self.ask: Decimal = fill_price               # simulated realtime ask (rates GET)
@@ -665,7 +744,15 @@ class OfflineEtoroDemoSimulator:
         if method == "POST" and path == DEMO_OPEN_PATH:
             result = self._open(reference_id, body or {})
         elif method == "GET" and path == DEMO_ORDER_LOOKUP_PATH:
-            order = self._orders.get((query or {}).get("referenceId", ""))
+            q = query or {}
+            if self.lookup_not_visible > 0:     # accepted, but not (yet) visible to lookup
+                self.lookup_not_visible -= 1
+                raise TransportNotFound("order not found")
+            if "orderId" in q:
+                order = next((o for o in self._orders.values()
+                              if str(o["orderId"]) == q["orderId"]), None)
+            else:
+                order = self._orders.get(q.get("referenceId", ""))
             if order is None:
                 raise TransportNotFound("order not found")
             return order
@@ -741,6 +828,7 @@ class OfflineEtoroDemoSimulator:
                                  "instrumentID": order["asset"]["instrumentId"],
                                  "orderID": order["orderId"], "isBuy": True,
                                  "units": float(remaining), "amount": 1, "leverage": 1,
+                                 "openRate": e["openingData"]["avgPrice"],
                                  "openDateTime": "2026-10-21T14:30:00Z",
                                  "unrealizedPnL": {"pnL": 0}})
         return {"clientPortfolio": {"positions": rows, "credit": 0, "bonusCredit": 0,

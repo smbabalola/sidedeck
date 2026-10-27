@@ -83,6 +83,38 @@ class _NoRedirect(HTTPRedirectHandler):
         raise EtoroDemoTransportError("REDIRECT_REFUSED")
 
 
+_PROBLEM_TEXT = re.compile(r"[^ -~]")
+# UUIDs and long digit runs (account, order or position identifiers) are masked.
+_PROBLEM_IDS = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}|\d{5,}")
+MAX_PROBLEM_BYTES = 4096
+
+
+def _problem_summary(exc: HTTPError) -> str:
+    """Bounded, printable ``title``/``detail``/``status`` of an RFC 7807 error body.
+
+    ``instance``, ``traceId`` and any other fields are dropped (they may carry account or
+    request identifiers). Unreadable bodies yield ``"body unreadable"``.
+    """
+    try:
+        raw = exc.read(MAX_PROBLEM_BYTES + 1)
+        if not raw:
+            return "empty body"
+        if len(raw) > MAX_PROBLEM_BYTES:
+            return "body too large"
+        body = json.loads(raw)
+    except Exception:
+        return "body unreadable"
+    if not isinstance(body, dict):
+        return "body not an object"
+    parts = []
+    for key in ("status", "title", "detail"):
+        value = body.get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            text = _PROBLEM_IDS.sub("#", _PROBLEM_TEXT.sub("?", str(value)))
+            parts.append(f"{key}={text[:120]}")
+    return "; ".join(parts) or "no title/detail"
+
+
 def _classify(status: int) -> str:
     return {401: "AUTH_REJECTED", 403: "ACCESS_DENIED", 400: "VALIDATION_FAILED",
             429: "RATE_LIMITED"}.get(status, "UNEXPECTED_RESPONSE")
@@ -228,7 +260,10 @@ class EtoroDemoHttpTransport:
         except HTTPError as exc:
             cf_ray = exc.headers.get("CF-Ray") if exc.headers else None
             if exc.code == 404:
-                raise TransportNotFound("eToro Demo order not found") from None
+                # Keep the broker's own reason: a 404 can mean "order not (yet) visible"
+                # or a routing error, and the audit must be able to tell them apart.
+                raise TransportNotFound(
+                    f"eToro Demo order not found (HTTP 404; {_problem_summary(exc)})") from None
             if write and (exc.code >= 500 or exc.code == 408):
                 raise TransportOutcomeUnknown(f"write outcome unknown (HTTP {exc.code})") from None
             raise EtoroDemoTransportError(_classify(exc.code), http_status=exc.code,
