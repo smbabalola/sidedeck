@@ -18,6 +18,8 @@ from sidedeck.application.sd036_etoro_demo_desk import (
     open_scope, rehearse,
 )
 from sidedeck.application.sd137_pnl_recovery import recover_from_pnl
+from sidedeck.application.sd074_external_anchor import WriteOnceDirectoryAnchor
+from sidedeck.application.sd145_audit_journal import AuditJournal
 from sidedeck.domain import etoro_demo_orders as orders_module
 from sidedeck.domain.etoro_demo import EtoroDemoDataError, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import BaselinePosition, EtoroDemoBookError
@@ -134,6 +136,42 @@ def test_open_body_is_long_unleveraged_price_protected_usd():
     assert body == {"action": "open", "transaction": "buy", "instrumentId": 1001,
                     "orderType": "limitIOC", "limitRate": 101.25, "units": 2.5, "leverage": 1,
                     "orderCurrency": "usd"}
+
+
+def test_audit_anchor_outage_refuses_order_before_simulated_send(h, tmp_path):
+    class FailedAudit:
+        def append(self, *args, **kwargs):
+            raise RuntimeError("anchor unavailable")
+
+    desk = EtoroDemoDesk(
+        outbox=h.outbox, controls=h.controls, lineage=h.lineage, transport=h.sim,
+        policy=DemoDeskPolicy(Decimal(h.cap), frozenset({1001}), h.max_open),
+        baseline=h.baseline, budget=h.budget, audit_journal=FailedAudit(),
+    )
+    request = DemoOpenRequest(ref(), 1001, Decimal("1"), Decimal("101"))
+    h.approve("audit-failure", open_scope(BOOK, request))
+    with pytest.raises(RuntimeError, match="anchor unavailable"):
+        desk.submit_open(intent_id="audit-failure", strategy="tradingagents", request=request)
+    assert h.posts() == []
+    assert h.lineage.orders() == []
+
+
+def test_order_reservation_and_send_are_externally_anchored_before_simulator(h, tmp_path):
+    journal = AuditJournal(tmp_path / "audit.sqlite", stream_id="desk-test",
+                           anchor=WriteOnceDirectoryAnchor(tmp_path / "remote"),
+                           device_key=b"external-audit-test-key-32-bytes-long")
+    journal.initialize(h.now)
+    desk = EtoroDemoDesk(
+        outbox=h.outbox, controls=h.controls, lineage=h.lineage, transport=h.sim,
+        policy=DemoDeskPolicy(Decimal(h.cap), frozenset({1001}), h.max_open),
+        baseline=h.baseline, budget=h.budget, audit_journal=journal,
+    )
+    request = DemoOpenRequest(ref(), 1001, Decimal("1"), Decimal("101"))
+    h.approve("audit-events", open_scope(BOOK, request))
+    assert desk.submit_open(intent_id="audit-events", strategy="tradingagents",
+                            request=request) == "ACCEPTED"
+    assert [r.event_type for r in journal.records()] == ["ORDER_RESERVATION", "SEND"]
+    journal.close()
 
 
 @pytest.mark.parametrize("kwargs", [

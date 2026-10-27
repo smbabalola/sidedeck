@@ -31,6 +31,7 @@ from typing import Any, Iterable, Iterator, Protocol
 
 from sidedeck.application.sd032_durable_paper_intent import DurablePaperIntentStore, PaperIntent
 from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch, intent_digest
+from sidedeck.application.sd145_audit_journal import AuditJournal
 from sidedeck.domain.etoro_demo import DemoPortfolioSnapshot, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import (
     STRATEGY_BOOKS, BaselinePosition, EtoroDemoBookError, OrderAttribution, reconcile_demo,
@@ -329,7 +330,8 @@ class EtoroDemoDesk:
     def __init__(self, *, outbox: DurablePaperIntentStore, controls: ApprovalKillSwitch,
                  lineage: EtoroDemoLineage, transport: EtoroDemoTransport,
                  policy: DemoDeskPolicy, baseline: Iterable[BaselinePosition],
-                 budget: DemoRateBudget, pilot_release: Any = None) -> None:
+                 budget: DemoRateBudget, pilot_release: Any = None,
+                 audit_journal: AuditJournal | None = None) -> None:
         self._pilot_release = None
         if getattr(transport, "offline_simulation", False) is not True:
             # The general release stays NO_GO. The only exception is one active, owner-signed
@@ -350,6 +352,13 @@ class EtoroDemoDesk:
         self._transport, self._policy = transport, policy
         self._baseline = tuple(baseline)
         self._budget = budget
+        self._audit_journal = audit_journal
+
+    def _audit(self, event_type: str, *, entity_id: str, payload: dict[str, Any],
+               at: datetime | None = None) -> None:
+        if self._audit_journal is not None:
+            self._audit_journal.append(event_type, entity_id=entity_id, payload=payload,
+                                       at=at or datetime.now(timezone.utc))
 
     # ---- transport boundary -------------------------------------------------
     def _send(self, method: str, path: str, *, reference_id: str,
@@ -393,6 +402,10 @@ class EtoroDemoDesk:
                 raise EtoroDemoOrderError("open differs from the signed pilot intent")
             self._require_preflight_evidence(request, quote, eligibility)
         self._budget.acquire("write")
+        self._audit("ORDER_RESERVATION", entity_id=request.reference_id,
+                    payload={"kind": "OPEN", "intent_id": intent_id, "book_id": book,
+                             "instrument_id": request.instrument_id,
+                             "units": str(request.units), "limit_rate": str(request.limit_rate)})
         self._outbox.enqueue(PaperIntent(
             intent_id, request.reference_id, "sidedeck", "etoro", "paper", "etoro-demo", book,
             f"etoro:{request.instrument_id}", "BUY", request.units, request.limit_rate))
@@ -404,6 +417,9 @@ class EtoroDemoDesk:
                                      instrument_id=request.instrument_id, units=request.units,
                                      limit_rate=request.limit_rate, position_id=None)
         self._outbox.record_simulated_submission(intent_id)
+        self._audit("SEND", entity_id=request.reference_id,
+                    payload={"method": "POST", "path": DEMO_OPEN_PATH,
+                             "intent_id": intent_id, "kind": "OPEN"})
         try:
             payload = self._send("POST", DEMO_OPEN_PATH, reference_id=request.reference_id,
                                  body=request.body())
@@ -512,6 +528,9 @@ class EtoroDemoDesk:
         requested instrument, long, 1x, direct (not mirrored), with 0 < units <= requested
         and a reported ``openRate`` <= the signed limit. Anything else halts. Never resubmits.
         """
+        self._audit("RECONCILIATION", entity_id=reference_id,
+                    payload={"kind": "OPEN", "evidence": "SIGNED_PORTFOLIO_SNAPSHOT",
+                             "observed_at": snapshot.observed_at.isoformat()}, at=now)
         row = self._lineage.order(reference_id)
         if (row["kind"] != "OPEN" or row["state"] != "ACCEPTED" or row["order_id"] is None
                 or Decimal(row["filled_units"]) != ZERO):
@@ -611,11 +630,20 @@ class EtoroDemoDesk:
         if not self._controls.is_approved(intent_id, close_scope(owned["book_id"], request)):
             raise EtoroDemoOrderError("no verified, unexpired approval for this exact close")
         self._budget.acquire("write")
+        self._audit("ORDER_RESERVATION", entity_id=request.reference_id,
+                    payload={"kind": "CLOSE", "intent_id": intent_id,
+                             "book_id": owned["book_id"],
+                             "instrument_id": request.instrument_id,
+                             "position_id": request.position_id,
+                             "units": str(request.units_to_deduct or remaining)})
         self._lineage.record_pending(reference_id=request.reference_id, kind="CLOSE",
                                      intent_id=intent_id, book_id=owned["book_id"],
                                      instrument_id=request.instrument_id,
                                      units=request.units_to_deduct or remaining,
                                      limit_rate=None, position_id=request.position_id)
+        self._audit("SEND", entity_id=request.reference_id,
+                    payload={"method": "POST", "path": request.path,
+                             "intent_id": intent_id, "kind": "CLOSE"})
         try:
             payload = self._send("POST", request.path, reference_id=request.reference_id,
                                  body=request.body())
@@ -683,6 +711,9 @@ class EtoroDemoDesk:
         actor/order executed the close, realised P&L or permission for another POST.
         The kill switch stays HALTED; clearing it requires independent authority.
         """
+        self._audit("RECONCILIATION", entity_id=reference_id,
+                    payload={"kind": "CLOSE", "evidence": "SIGNED_PORTFOLIO_SNAPSHOT",
+                             "observed_at": snapshot.observed_at.isoformat()}, at=now)
         with self._lineage.transaction():
             return self._recover_close_from_snapshot_locked(
                 reference_id, snapshot=snapshot, now=now,
@@ -731,6 +762,11 @@ class EtoroDemoDesk:
 
     # ---- reconciliation -----------------------------------------------------
     def reconcile(self, snapshot: DemoPortfolioSnapshot, now: datetime) -> dict[str, Any]:
+        self._audit("RECONCILIATION", entity_id="portfolio",
+                    payload={"kind": "PORTFOLIO", "evidence": "SIGNED_PORTFOLIO_SNAPSHOT",
+                             "observed_at": snapshot.observed_at.isoformat(),
+                             "position_count": len(snapshot.positions),
+                             "pending_order_count": len(snapshot.pending_orders)}, at=now)
         report = reconcile_demo(snapshot, baseline=self._baseline,
                                 attributions=self._lineage.attributions(), now=now)
         issues = list(report.discrepancies)

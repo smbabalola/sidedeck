@@ -42,7 +42,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from sidedeck.application.sd145_audit_journal import AuditJournal
 
 GRANT_NAMESPACE = "sidedeck-network-unlock-grant"
 SCHEMA = "sidedeck-unlock-grant/1"
@@ -306,14 +309,22 @@ class GrantLedger:
 class UnlockAuthority:
     """Decides whether the order network may open for one subject digest, right now."""
 
-    def __init__(self, *, verifier: Verifier, principal: str, ledger: GrantLedger) -> None:
+    def __init__(self, *, verifier: Verifier, principal: str, ledger: GrantLedger,
+                 audit_journal: AuditJournal | None = None) -> None:
         if getattr(verifier, "namespace", None) != GRANT_NAMESPACE:
             raise GrantRefused("grants must be verified in the unlock-grant namespace")
         self._verify, self._principal, self._ledger = verifier, principal, ledger
+        self._audit_journal = audit_journal
 
     def _validate(self, document: Any, signature: str, subject_digest: str,
                   moment: datetime) -> UnlockGrant:
         grant = UnlockGrant.from_document(document)
+        if self._audit_journal is not None:
+            try:
+                self._audit_journal.verify()
+            except Exception:
+                raise GrantRefused("external grant audit anchor is unavailable or inconsistent") \
+                    from None
         if grant.issued_by != self._principal:
             raise GrantRefused("grant must be issued by the owner principal")
         if not self._ledger.verify_chain():
@@ -347,6 +358,10 @@ class UnlockAuthority:
             raise
         self._ledger.append(grant.grant_id, grant.digest(), "ACTIVE_CHECK_PASSED",
                             f"subject={subject_digest} kind={grant.kind}")
+        if self._audit_journal is not None:
+            self._audit_journal.append("GRANT", entity_id=grant.grant_id,
+                                       payload={"digest": grant.digest(), "kind": grant.kind,
+                                                "subject_digest": subject_digest}, at=moment)
         return grant
 
     def authorize_request(self, *, document: Any, signature: str, subject_digest: str,
@@ -358,6 +373,12 @@ class UnlockAuthority:
         try:
             grant = self._validate(document, signature, subject_digest, moment)
             self._ledger.reserve_use(grant, write=write, reference_id=reference_id)
+            if self._audit_journal is not None:
+                self._audit_journal.append(
+                    "GRANT_USE", entity_id=grant.grant_id,
+                    payload={"grant_digest": grant.digest(), "write": write,
+                             "reference_id": reference_id,
+                             "subject_digest": subject_digest}, at=moment)
         except GrantRefused as exc:
             self._refuse(document, exc)
             raise
@@ -366,6 +387,10 @@ class UnlockAuthority:
     def revoke(self, grant_id: str, reason: str) -> None:
         """Permanent; anyone may revoke (it only removes privilege)."""
         self._ledger.append(grant_id, "-", "REVOKED", reason or "revoked")
+        if self._audit_journal is not None:
+            self._audit_journal.append("REVOCATION", entity_id=grant_id,
+                                       payload={"reason": reason or "revoked"},
+                                       at=datetime.now(timezone.utc))
 
 
 # ---- owner tooling: prepare a grant for signing (never signs) ---------------------------
