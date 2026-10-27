@@ -376,7 +376,12 @@ capital, permission or schedule controls.
 
 ## 16. Integration-first: one operational trading pipeline (owner directive 2026-10-26)
 
-**Controlling engineering priority:** integrate the existing components into one pipeline —
+**Paused engineering workstream (owner directive 2026-10-27):** this integration remains the
+long-term target, but further gateway feature work is paused while the Day Trader module is
+completed on an isolated branch. Keep the existing autonomous execution draft PR open and
+unmerged. Continue to preserve every release, data and admission gate below.
+
+The former engineering priority was to integrate the existing components into one pipeline —
 MARKET DATA → SCANNER → STRATEGIES → AI AGENTS → DECISION ENGINE → RISK ENGINE → PORTFOLIO
 ALLOCATION → PAPER BROKER → FILLS → POSITION MANAGEMENT → EXIT → PERFORMANCE — rather than
 adding isolated pilots or demonstrations. Entry point and evidence:
@@ -442,3 +447,16 @@ The Day Trader dashboard contract fix is a presentation/validation correction on
 create research runs, genuine market evidence, strategy admission or execution authority. The
 dashboard remains read-only; Demo execution remains governed by the separate SD-058 runbook and
 transport gates.
+
+## 19. Day Trader completion priority (owner directive 2026-10-27)
+
+Complete the Day Trader research product before resuming autonomous gateway features. Scope:
+build out its read-only dashboard and provenance-safe offline data pipeline; implement
+research-only strategy backtests; provide a deterministic, synthetic end-to-end simulation
+through scan, signal, SideDeck decision, authorized simulated order, fill, position management,
+close and reconciliation; complete scheduling, restart recovery and audit trail; and fix the
+Playwright CI installation stall without removing browser coverage. Retain all eleven installed
+skills. Preserve `ETORO_DEMO NOT_RELEASED`, `RESEARCH_ONLY`, all existing kill-switch/HALTED
+state and broker/data authorization gates. Synthetic simulation authorizations are confined to
+offline acceptance and cannot produce a production permission or strategy admission. No
+authenticated requests, provider spend, trades, or pilot checkout changes are in scope.

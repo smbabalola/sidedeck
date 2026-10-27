@@ -1,4 +1,6 @@
 from pathlib import Path
+import sqlite3
+import pytest
 
 from sidedeck.application.sd114_day_trader_runs import RunStore, day_trader_run_summary
 from sidedeck.modules.day_trader.orchestrator import DayTraderConfig, run_module, upstream_fixture_inputs
@@ -29,3 +31,20 @@ def test_summary_has_bounded_empty_state(tmp_path: Path) -> None:
     assert summary["runs"] == []
     assert summary["data_status"] == "NO_SAVED_RUN"
     assert not missing.exists()
+
+
+def test_run_ledger_is_append_only_and_duplicate_runs_are_preserved(tmp_path: Path) -> None:
+    report = run_module(upstream_fixture_inputs(Path("third_party/day-trader-skill")),
+                        DayTraderConfig(mode="SIMULATION_ONLY"))
+    path = tmp_path / "runs.sqlite3"
+    store = RunStore(path)
+    try:
+        first = store.save(report)
+        second = store.save(report)
+        assert first != second
+        assert len(store.list_runs()) == 2
+    finally:
+        store.close()
+    with sqlite3.connect(path) as db:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            db.execute("DELETE FROM day_trader_runs")
