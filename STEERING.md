@@ -2,7 +2,7 @@
 
 **Active workstream:** build and verify the complete **autonomous eToro Demo trading application** in an iterative engineering loop. This is the concise entry point requested by the owner on **27 October 2026**.
 
-**Authoritative policy:** [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md), in particular **§20 — Continuous eToro Demo autonomy delivery loop**, together with [AGENTS.md](AGENTS.md). **Live task assignments:** the top **Autonomous eToro Demo delivery loop** block of [TODO.md](TODO.md). This entry point does not replace those documents or dilute their security rules.
+**Authoritative policy:** [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md), in particular **§20 — Continuous engineering loop** and **§21 — Demo GO-LIVE delivery contract**, together with [AGENTS.md](AGENTS.md). **Live task assignments:** the top **Autonomous eToro Demo delivery loop** block of [TODO.md](TODO.md). This entry point does not replace those documents or dilute their security rules.
 
 ## Mission
 
@@ -19,6 +19,20 @@ Deliver one integrated, reliable path from genuine licensed data and an independ
 5. Commit/push isolated branch, log exact evidence and remaining blockers in TODO; update PR. Generate the next READY dependency-clearing batch and **repeat without waiting for a routine "proceed"** while the Codex session is active.
 6. If blocked by data, entitlement, external audit infrastructure or owner signatures, stop only that action. Continue other safe offline tasks. Preserve a resumable handoff. A steering file **does not itself run in the background**.
 
+## Five-lane GO-LIVE delivery sequence
+
+Codex must progress **all dependency-ready offline lanes in parallel** (without asking for routine `proceed`), using the exact SD task IDs and evidence rules in [TODO.md](TODO.md):
+
+1. **Data — SD-142/143:** provider-neutral validated full-session five-minute history, lawful feed rights and genuinely timely execution prices. Evaluate Alpaca as **data-only** alongside eToro/other suppliers; neither availability nor licence is presumed. Provider access or spend is separately owner-approved.
+2. **Strategy — SD-144:** admit **one** reproducible genuine-data strategy with locked out-of-sample evidence, ≥30 qualified OOS trades under current rules and realistic costs. Only independently admitted strategies can propose executable intents.
+3. **Broker — SD-137–141:** complete durable restart-safe Demo buy/fill/close, independent signed network policy, orderId recovery after transient 404, strict /pnl settlement, protected four-position baseline and crash/partial/duplicate fault tests. Keep transport LOCKED while building.
+4. **Always-on safety — SD-145–149 and new SD-152:** off-machine audit/grant anchors, security review, read-only operator status, durable single-writer scheduler with alerts and safe restart, simulated multi-day soak and independently reviewed release dossier.
+5. **Signed Demo launch — SD-150/151:** the human owner signs a bounded, expiring policy and any required kill-switch reset. Approved service executes **one** automatic Demo opening and full confirmed closing (not manual), verifies fresh /pnl and protected baseline 4/4, then completes a one-month Demo-only soak with separately approved renewals.
+
+**Illustrative canary numbers, NOT approval:** $1,000 virtual allocation, $100 max notional, $10 daily-loss limit, one new entry/day, one strategy and symbol, one position, long-only 1×. Existing stricter ceilings and eToro minimums take precedence until reconciled and signed; do not activate the illustration. Prepare one consolidated owner decision package at real data, remote anchor, and execution release hinges only.
+
+**Unattended means an engineered, externally released SD-152 service, not a perpetually running Codex/chat session.** Service must default to `NOT_RELEASED`, fence concurrent workers, respect market hours and never submit a duplicate request after an ambiguous outcome.
+
 ## Implementation phases / acceptance gates
 
 | Phase | TODO IDs | Key deliverable | Release state |
@@ -26,7 +40,8 @@ Deliver one integrated, reliable path from genuine licensed data and an independ
 | A: recover and execute safely | SD-136–141 | Verified durable Demo gateway, lookup-404 recovery, no duplicated POST, strict close + /pnl, DAY exit schedule, failure tests | Offline only |
 | B: data/strategy | SD-142–144 | Licensed provenance-checked full-session 5m feed and independent locked-OOS qualified signals | External gates retained |
 | C: security/operations | SD-145–148 | Off-machine anchors, risk/kill-switch audits, clear UI, restart simulation and soak | Offline until approved |
-| D: release/canary | SD-149–151 | Signed narrow Demo-only owner policy, monitored canary, one-month Demo soak | **Separate owner signature/approval required** |
+| D: release/canary | SD-149–151 | Independent review, signed narrow Demo-only owner policy, one fully autonomous reconciled canary, then one-month Demo soak | **Separate owner signature/approval required** |
+| E: unattended runtime | SD-152 | Fenced single-writer service, signed-policy startup gate, durable restart/alerts, multi-session fake-broker testing | Offline only until authorised deployment |
 
 ## Non-negotiable status
 
@@ -37,4 +52,4 @@ Deliver one integrated, reliable path from genuine licensed data and an independ
 - No duplicate writes, no simulated closing prices presented as broker P&L, no synthetic data silently promoted to strategy qualification, no grants signed by Codex.
 - Do not merge default branches, touch other worktrees, or run destructive changes on personal/broker account databases.
 
-**Start now with the first `NEXT_READY` work items in TODO.** See the authoritative charter §20 for the precise lifecycle contract, dependency DAG, test requirements and stop conditions.
+**Start now with the first eligible `NEXT_READY` items in TODO** (currently finish SD-137; parallel SD-142 and SD-145, then SD-152 when its prerequisites are ready). Follow charter §§20–21 and the five-lane launch matrix. Do not stop after writing plans: in each active Codex session carry out the offline build/test/fix/commit/push/TODO loop until genuine external/owner gates or a session limit is reached.
