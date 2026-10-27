@@ -607,6 +607,76 @@ def test_close_recovery_refuses_contradictions(h):
                                            snapshot=h.snapshot(), now=h.now)
 
 
+
+def test_close_snapshot_refuses_baseline_drift_before_durable_mutation(h):
+    position_id, close = _lost_close(h)
+    previous = h.lineage.owned(position_id)["remaining_units"]
+    payload = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    protected = SYNTHETIC_BASELINE_ROWS[0]["positionID"]
+    payload["clientPortfolio"]["positions"] = [
+        p for p in payload["clientPortfolio"]["positions"]
+        if p["positionID"] != protected
+    ]
+    with pytest.raises(EtoroDemoBookError, match="baseline"):
+        h.desk.recover_close_from_snapshot(
+            close.reference_id, snapshot=parse_demo_portfolio(payload, observed_at=h.now),
+            now=h.now,
+        )
+    assert h.lineage.owned(position_id)["state"] == "OPEN"
+    assert h.lineage.owned(position_id)["remaining_units"] == previous
+    assert h.lineage.order(close.reference_id)["state"] == "OUTCOME_UNKNOWN"
+    assert h.controls.is_halted()
+
+
+def test_close_snapshot_refuses_pending_order_before_durable_mutation(h):
+    position_id, close = _lost_close(h)
+    previous = h.lineage.owned(position_id)["remaining_units"]
+    payload = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    payload["clientPortfolio"]["orders"] = [{"orderID": 424242, "amount": 25}]
+    with pytest.raises(EtoroDemoBookError, match="pending"):
+        h.desk.recover_close_from_snapshot(
+            close.reference_id, snapshot=parse_demo_portfolio(payload, observed_at=h.now),
+            now=h.now,
+        )
+    assert h.lineage.owned(position_id)["state"] == "OPEN"
+    assert h.lineage.owned(position_id)["remaining_units"] == previous
+    assert h.lineage.order(close.reference_id)["state"] == "OUTCOME_UNKNOWN"
+    assert h.controls.is_halted()
+
+
+def test_close_snapshot_refuses_foreign_position_before_durable_mutation(h):
+    position_id, close = _lost_close(h)
+    previous = h.lineage.owned(position_id)["remaining_units"]
+    payload = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    foreign = dict(SYNTHETIC_BASELINE_ROWS[0])
+    foreign["positionID"], foreign["orderID"] = 991337, 991338
+    payload["clientPortfolio"]["positions"].append(foreign)
+    with pytest.raises(EtoroDemoBookError, match="baseline"):
+        h.desk.recover_close_from_snapshot(
+            close.reference_id, snapshot=parse_demo_portfolio(payload, observed_at=h.now),
+            now=h.now,
+        )
+    assert h.lineage.owned(position_id)["remaining_units"] == previous
+    assert h.lineage.order(close.reference_id)["state"] == "OUTCOME_UNKNOWN"
+    assert h.controls.is_halted()
+
+
+def test_close_snapshot_refuses_changed_owned_instrument_and_keeps_unknown(h):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    payload = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    live = next(p for p in payload["clientPortfolio"]["positions"]
+                if p["positionID"] == position_id)
+    live["instrumentID"] = 999999
+    previous = h.lineage.owned(position_id)["remaining_units"]
+    with pytest.raises(EtoroDemoBookError, match="lineage"):
+        h.desk.recover_close_from_snapshot(
+            close.reference_id, snapshot=parse_demo_portfolio(payload, observed_at=h.now),
+            now=h.now,
+        )
+    assert h.lineage.owned(position_id)["remaining_units"] == previous
+    assert h.lineage.order(close.reference_id)["state"] == "OUTCOME_UNKNOWN"
+    assert h.controls.is_halted()
+
 def test_close_lookup_recovery_is_explicitly_unverified():
     assert desk_module.CLOSE_LOOKUP_RECOVERY == "NOT_VERIFIED"
 
