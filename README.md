@@ -1,4 +1,4 @@
-﻿# SideDeck
+# SideDeck
 
 SideDeck is a local, deterministic research and virtual-accounting workstation. Research outputs are proposals only. Broker execution, paid model calls, authenticated market-data requests and real-money trading are disabled.
 
@@ -60,3 +60,43 @@ scan on the native scanner/decision engine and a SIMULATION order desk.
 No genuine UK market data is held locally, so real-data UK scans abstain; the runner's scan and
 trade use a labelled synthetic fixture. UK broker execution is not enabled, and the MSFT eToro
 Demo pilot authorization does not extend to UK instruments.
+## Day Trader research module
+
+The Day Trader workspace is a read-only research surface. Its pinned-skill fixture command runs
+offline and stores sanitized reports locally:
+
+```powershell
+.venv\Scripts\python.exe -m sidedeck.application.sd114_day_trader run --fixture --db data/day-trader-runs.sqlite3
+```
+
+An isolated synthetic lifecycle acceptance harness exercises SD-071 decisions, SD-072 track
+risk, and the SD-079 append-only simulated ledger through protective exit and SQLite restart
+reconciliation. It requires a fresh work directory and an explicit fixture-only flag:
+
+```powershell
+.venv\Scripts\python.exe -m sidedeck.application.sd121_day_trader_simulation --fixture-acceptance --workdir data/sd121-acceptance
+```
+
+The opt-in fixture scheduler reuses SD-068 durable slots and leases, runs 45 minutes after the
+XNYS close, and stores append-only schedule audit rows. A Windows Task Scheduler job may invoke
+this tick every 30 minutes; it only runs when the scheduled slot is due:
+
+```powershell
+.venv\Scripts\python.exe -m sidedeck.application.sd121_day_trader_schedule --fixture-acceptance
+```
+
+It runs only the pinned offline fixtures, never real market data.
+
+Its synthetic admission and instrument eligibility are test overrides, labelled
+`FIXTURE_ONLY_OVERRIDE_NOT_EVIDENCE`; this does not admit a strategy or enable any broker route.
+Genuine intraday data, locked out-of-sample admission, and eToro Demo execution remain blocked.
+
+For a locally supplied CSV, use the research-only backtest command (the input source and rights
+note are traceability strings only; SideDeck does not verify either):
+
+```powershell
+.venv\Scripts\python.exe -m sidedeck.application.sd114_day_trader backtest-csv --csv .\data\bars.csv --source-label "owner-supplied" --licence-reference "review-note"
+```
+
+The CSV must have `timestamp,open,high,low,close,volume` columns and explicit-offset UTC bar
+timestamps. Results remain `OWNER_SUPPLIED_UNVERIFIED_NOT_ADMISSION_EVIDENCE`.

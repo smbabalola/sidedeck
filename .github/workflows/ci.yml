@@ -44,6 +44,24 @@ jobs:
       - name: Dashboard unit tests
         working-directory: web
         run: npm test
+  browser-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Keep the image version exactly aligned with web/package-lock.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.64.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci --ignore-scripts
+      - name: Build dashboard for browser tests
+        working-directory: web
+        run: npm run build
       - name: Dashboard browser end-to-end tests (mocked API, desktop/tablet/phone)
         working-directory: web
-        run: npx playwright install --with-deps chromium && npx playwright test workstation
+        timeout-minutes: 8
+        run: npx playwright test

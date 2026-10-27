@@ -11,7 +11,9 @@
 """
 from __future__ import annotations
 
+import csv
 import gzip
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,6 +27,68 @@ from sidedeck.application.sd069_entry_exit import entry_trigger, exit_plan
 
 NY = ZoneInfo("America/New_York")
 STEP = timedelta(minutes=5)
+MAX_CSV_BYTES = 100_000_000
+MAX_CSV_ROWS = 2_000_000
+
+
+def load_owner_csv(path: Path, *, source_label: str, licence_reference: str
+                   ) -> tuple[list[IntradayBar], dict[str, Any]]:
+    """Load a user-supplied five-minute CSV without upgrading its provenance.
+
+    The caller must supply source/license notes for traceability; SideDeck does not treat those
+    strings as proof of entitlement. The resulting bundle remains admission-ineligible.
+    Expected columns: timestamp,open,high,low,close,volume; timestamps require an explicit UTC
+    offset. Duplicate, out-of-order, malformed, non-finite or invalid OHLC rows fail closed.
+    """
+    if not source_label.strip() or not licence_reference.strip():
+        raise ValueError("source label and licence reference are required for traceability")
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_CSV_BYTES:
+        raise ValueError("CSV must be a regular non-symlink file within the size limit")
+    raw = path.read_bytes()
+    try:
+        reader = csv.DictReader(raw.decode("utf-8-sig").splitlines())
+    except UnicodeDecodeError as exc:
+        raise ValueError("CSV must be UTF-8") from exc
+    expected = ["timestamp", "open", "high", "low", "close", "volume"]
+    if reader.fieldnames != expected:
+        raise ValueError(f"CSV columns must be exactly: {','.join(expected)}")
+    bars: list[IntradayBar] = []
+    previous: datetime | None = None
+    for index, row in enumerate(reader, start=2):
+        if index > MAX_CSV_ROWS + 1:
+            raise ValueError("CSV row limit exceeded")
+        try:
+            stamp = datetime.fromisoformat(row["timestamp"])
+            if stamp.tzinfo is None or stamp.utcoffset() is None:
+                raise ValueError("timestamp must include a UTC offset")
+            if stamp.utcoffset() != timedelta(0):
+                raise ValueError("timestamp must be expressed in UTC")
+            stamp = stamp.astimezone(UTC)
+            if stamp.second or stamp.microsecond or stamp.minute % 5:
+                raise ValueError("timestamp is not aligned to a five-minute bar")
+            if previous is not None and stamp <= previous:
+                raise ValueError("timestamps must be strictly increasing and unique")
+            values = [Decimal(row[k]) for k in ("open", "high", "low", "close", "volume")]
+            o, h, low, close, volume = values
+            if any(not value.is_finite() for value in values):
+                raise ValueError("bar values must be finite decimals")
+            if min(o, h, low, close) <= 0 or volume < 0:
+                raise ValueError("OHLC must be positive and volume cannot be negative")
+            if h < max(o, low, close) or low > min(o, h, close):
+                raise ValueError("inconsistent OHLC range")
+        except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
+            raise ValueError(f"invalid five-minute CSV row {index}: {exc}") from exc
+        bars.append(IntradayBar(stamp, o, h, low, close, volume))
+        previous = stamp
+    if not bars:
+        raise ValueError("CSV contains no bars")
+    return bars, {
+        "basis": "OWNER_SUPPLIED_UNVERIFIED_NOT_ADMISSION_EVIDENCE",
+        "source_label": source_label[:120], "licence_reference": licence_reference[:240],
+        "sha256": hashlib.sha256(raw).hexdigest(), "rows": len(bars),
+        "first_bar_utc": bars[0].start.isoformat(), "last_bar_utc": bars[-1].start.isoformat(),
+        "strategy_admission_eligible": False,
+    }
 
 
 def chart_bars(path: Path) -> list[IntradayBar]:
@@ -95,7 +159,10 @@ class Frictions:
 
 
 def orb_backtest(bars: list[IntradayBar], *, frictions: Frictions = Frictions(),
-                 target_r: Decimal = Decimal(2)) -> dict[str, Any]:
+                 target_r: Decimal = Decimal(2),
+                 basis: str = "BACKTEST_ON_UPSTREAM_FIXTURE_UNAPPROVED_SOURCE_NOT_ADMISSION_EVIDENCE") -> dict[str, Any]:
+    if not target_r.is_finite() or target_r <= 0:
+        raise ValueError("target R must be a positive finite Decimal")
     sessions: dict[Any, list[IntradayBar]] = {}
     for b in bars:
         sessions.setdefault(b.start.astimezone(NY).date(), []).append(b)
@@ -142,7 +209,7 @@ def orb_backtest(bars: list[IntradayBar], *, frictions: Frictions = Frictions(),
                        "R": float(((realized - entry) / risk).quantize(Decimal("0.001")))})
     rs = [t["R"] for t in trades]
     gains, losses = sum(r for r in rs if r > 0), -sum(r for r in rs if r < 0)
-    return {"basis": "BACKTEST_ON_UPSTREAM_FIXTURE_UNAPPROVED_SOURCE_NOT_ADMISSION_EVIDENCE",
+    return {"basis": basis,
             "sessions": len(sessions), "trades": len(trades), "skipped": skipped,
             "win_rate": round(sum(1 for r in rs if r > 0) / len(rs), 3) if rs else None,
             "avg_R": round(sum(rs) / len(rs), 3) if rs else None,

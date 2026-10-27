@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "module": "DAY_TRADER",
+  "book": "DAY_TRADER_SKILL",
+  "mode": "RESEARCH_ONLY",
+  "enabled": true,
+  "execution_enabled": false,
+  "broker_execution": "DISABLED",
+  "data_status": "LOADED_FROM_LOCAL_RUN",
+  "performance_status": "NOT_ASSESSED",
+  "source": {"name": "day-trader-skill", "version": "2.0.0", "commit": "0123456789abcdef0123456789abcdef01234567", "license": "MIT", "module_version": "1", "verification": "VERIFIED", "origin": "PINNED"},
+  "capabilities": [],
+  "opportunities": [{"symbol": "SYNTH", "score": 0.7, "status": "RESEARCH_CANDIDATE"}],
+  "plans": [{"symbol": "SYNTH", "result": "SKILL_RISK_PASS", "proposal": {"direction": "LONG", "entry": "100", "stop": "98", "target": "104", "sidedeck_decision": {"status": "WATCHLIST", "reasons": ["NO_ADMITTED_STRATEGY_SIGNAL"]}}}],
+  "simulations": {"label": "SIMULATION_ONLY_NOT_PERFORMANCE_EVIDENCE", "status": "SCENARIO_ONLY"},
+  "rejected": [{"symbol": "OTHER", "result": "REJECTED", "reason": "stale fixture"}],
+  "errors": [],
+  "runs": [
+    {"run_id": "run-new-001", "created_at": "2026-10-27T14:05:00+00:00", "basis": "UPSTREAM_FIXTURE_UNAPPROVED_SOURCE", "mode": "SIMULATION_ONLY", "status": "OK", "module_version": "1", "source_commit": "0123456789abcdef0123456789abcdef01234567", "report_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"run_id": "run-old-001", "created_at": "2026-10-27T13:05:00+00:00", "basis": "UPSTREAM_FIXTURE_UNAPPROVED_SOURCE", "mode": "SIMULATION_ONLY", "status": "OK", "module_version": "1", "source_commit": "0123456789abcdef0123456789abcdef01234567", "report_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+  ],
+  "latest": {"run_id": "run-new-001", "created_at": "2026-10-27T14:05:00+00:00", "basis": "UPSTREAM_FIXTURE_UNAPPROVED_SOURCE", "report_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "owner_actions": ["Provide approved, provenance-tagged intraday data before research acceptance."],
+  "limitations": ["Fixture evidence is not strategy admission or performance proof."]
+}

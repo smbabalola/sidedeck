@@ -9,7 +9,9 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ from sidedeck.modules.day_trader.manifest import SOURCE_VERSION, UPSTREAM
 from sidedeck.modules.day_trader.orchestrator import (
     DayTraderConfig, Inputs, run_module, upstream_fixture_inputs,
 )
+from sidedeck.modules.day_trader.research import load_owner_csv, orb_backtest
 
 SCHEMA = "sidedeck-day-trader-run-ledger/1"
 MAX_REPORT_BYTES = 8_000_000
@@ -62,6 +65,14 @@ class RunStore:
             source_commit TEXT NOT NULL, report_sha256 TEXT NOT NULL,
             report_json TEXT NOT NULL, derived_json TEXT NOT NULL
             )""")
+            self.db.executescript("""CREATE TRIGGER IF NOT EXISTS day_trader_runs_no_update
+            BEFORE UPDATE ON day_trader_runs BEGIN
+              SELECT RAISE(ABORT, 'Day Trader run ledger is append-only');
+            END;
+            CREATE TRIGGER IF NOT EXISTS day_trader_runs_no_delete
+            BEFORE DELETE ON day_trader_runs BEGIN
+              SELECT RAISE(ABORT, 'Day Trader run ledger is append-only');
+            END;""")
             self.db.commit()
 
     def close(self) -> None:
@@ -72,8 +83,8 @@ class RunStore:
         if len(raw) > MAX_REPORT_BYTES:
             raise ValueError("Day Trader report exceeds the bounded persistence limit")
         digest = hashlib.sha256(raw).hexdigest()
-        run_id = hashlib.sha256((digest + str(report.get("generated_at", ""))).encode()).hexdigest()[:24]
         created = datetime.now(UTC).isoformat()
+        run_id = uuid.uuid4().hex[:24]
         self.db.execute("""INSERT INTO day_trader_runs
             (run_id, created_at, basis, mode, status, module_version, source_commit,
              report_sha256, report_json, derived_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -86,14 +97,15 @@ class RunStore:
     def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
         limit = max(1, min(limit, 50))
         rows = self.db.execute("""SELECT run_id, created_at, basis, mode, status, module_version,
-            source_commit, report_sha256 FROM day_trader_runs ORDER BY created_at DESC LIMIT ?""", (limit,))
+            source_commit, report_sha256 FROM day_trader_runs
+            ORDER BY created_at DESC, run_id DESC LIMIT ?""", (limit,))
         return [{"run_id": r[0], "created_at": r[1], "basis": r[2], "mode": r[3], "status": r[4],
                  "module_version": r[5], "source_commit": r[6], "report_sha256": r[7]} for r in rows]
 
     def latest(self) -> dict[str, Any] | None:
         row = self.db.execute("""SELECT run_id, created_at, basis, mode, status, module_version,
             source_commit, report_sha256, derived_json FROM day_trader_runs
-            ORDER BY created_at DESC LIMIT 1""").fetchone()
+            ORDER BY created_at DESC, run_id DESC LIMIT 1""").fetchone()
         if row is None:
             return None
         result = json.loads(row[8])
@@ -133,12 +145,33 @@ def _fixture_inputs() -> Inputs:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the pinned Day Trader skill offline")
-    parser.add_argument("run", choices=("run", "latest"))
+    parser.add_argument("run", choices=("run", "latest", "backtest-csv"))
     parser.add_argument("--db", default="data/day-trader-runs.sqlite3")
     parser.add_argument("--fixture", action="store_true", help="use the pinned labelled fixtures")
+    parser.add_argument("--csv", type=Path, help="local five-minute CSV input for backtest-csv")
+    parser.add_argument("--source-label", default="", help="operator-supplied source note (unverified)")
+    parser.add_argument("--licence-reference", default="", help="operator-supplied rights note (unverified)")
+    parser.add_argument("--target-r", default="2", help="positive target multiple for the ORB research backtest")
     args = parser.parse_args(argv)
     if args.run == "latest":
         print(_json(day_trader_run_summary(args.db)))
+        return 0
+    if args.run == "backtest-csv":
+        if args.csv is None:
+            parser.error("backtest-csv requires --csv")
+        try:
+            bars, provenance = load_owner_csv(
+                args.csv, source_label=args.source_label, licence_reference=args.licence_reference,
+            )
+            report = orb_backtest(
+                bars, target_r=Decimal(args.target_r), basis=provenance["basis"],
+            )
+        except (OSError, ValueError, ArithmeticError) as exc:
+            parser.error(str(exc))
+        print(_json({"schema": "sidedeck-day-trader-backtest/1", "provenance": provenance,
+                     "mode": "RESEARCH_ONLY", "performance_status": "NOT_ASSESSED",
+                     "strategy_admission": "BLOCKED", "broker_execution": "DISABLED",
+                     "backtest": report}))
         return 0
     if not args.fixture:
         parser.error("run requires --fixture; genuine data needs a separately approved package")
