@@ -14,7 +14,7 @@ from sidedeck.application.sd129_etoro_demo_order_port import (
     DemoLineageRefused, EtoroDemoOrderPort,
 )
 from sidedeck.domain.etoro_demo_orders import (
-    DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
+    DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
     DemoCloseRequest, DemoOpenRequest, EtoroDemoOrderError, require_demo_route,
 )
 
@@ -210,3 +210,35 @@ def test_close_reconciliation_requires_returned_acceptance() -> None:
     with pytest.raises(DemoLineageRefused):
         port.lookup_close(replace(receipt), request=close_request(), owner=owner)
     assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize("status_id,units,expected", [
+    (3, 0.09, "BROKER_REPORTS_FULL_CLOSE_PENDING_PORTFOLIO_RECONCILIATION"),
+    (3, 0.04, "UNRESOLVED_PARTIAL_OR_PENDING"),
+    (5, 0.04, "UNRESOLVED_PARTIAL_OR_PENDING"),
+    (2, 0.0, "UNRESOLVED_PARTIAL_OR_PENDING"),
+    (4, 0.0, "BROKER_REPORTS_NO_CLOSE"),
+])
+def test_close_info_never_claims_final_broker_settlement(
+    status_id: int, units: float, expected: str,
+) -> None:
+    close_response = {
+        "orderID": 202, "statusID": status_id,
+        "positions": ([{"positionID": 100001, "units": units}] if units > 0 else []),
+    }
+    fake = FakeDemoRoute([
+        lookup(),
+        {"orderForClose": {
+            "orderID": 202, "positionID": 100001, "instrumentID": 1004,
+        }},
+        close_response,
+    ])
+    port = EtoroDemoOrderPort(fake)
+    _, owner = port.lookup_open(request(), order_id=101)
+    assert owner is not None
+    receipt = port.submit_owned_close(close_request(), owner=owner)
+    result = port.lookup_close(receipt, request=close_request(), owner=owner)
+    assert result.position_status == expected
+    assert result.realised_pnl_status == "UNAVAILABLE_WITHOUT_BROKER_CLOSE_PRICE"
+    assert fake.calls[-1][:2] == (
+        "GET", DEMO_CLOSE_INFO_PATH.format(order_id=202))
