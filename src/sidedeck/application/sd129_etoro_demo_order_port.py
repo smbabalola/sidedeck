@@ -89,6 +89,7 @@ class EtoroDemoOrderPort:
         self._verified_positions: dict[int, ConfirmedOpen] = {}
         self._open_attempts: set[str] = set()
         self._accepted_orders: dict[str, OpenAcceptance] = {}
+        self._accepted_requests: dict[str, DemoOpenRequest] = {}
         self._closing_positions: set[int] = set()
         self._accepted_closes: dict[str, CloseAcceptance] = {}
 
@@ -106,11 +107,15 @@ class EtoroDemoOrderPort:
         # A 200/echo is ACCEPTANCE, never a fill.
         acceptance = parse_open_acceptance(payload, reference_id=request.reference_id)
         self._accepted_orders[request.reference_id] = acceptance
+        self._accepted_requests[request.reference_id] = request
         return acceptance
 
     def lookup_open(
         self, request: DemoOpenRequest, *, order_id: int | None = None,
     ) -> tuple[DemoOrderOutcome, ConfirmedOpen | None]:
+        if (request.reference_id in self._accepted_requests and
+                self._accepted_requests[request.reference_id] != request):
+            raise DemoLineageRefused("lookup request differs from original signed open")
         query = ({"orderId": str(order_id)} if order_id is not None else
                  {"referenceId": request.reference_id})
         require_demo_route("GET", DEMO_ORDER_LOOKUP_PATH)
@@ -167,7 +172,8 @@ class EtoroDemoOrderPort:
         separate, signed /pnl recovery is outside this port's authority.
         """
         trusted = self._accepted_orders.get(request.reference_id)
-        if trusted is not acceptance or trusted.order_id != acceptance.order_id:
+        if (trusted is not acceptance or trusted.order_id != acceptance.order_id or
+                self._accepted_requests.get(request.reference_id) != request):
             raise DemoLineageRefused("recovery requires this session's validated acceptance")
         if not callable(wait_before_first_lookup) or not callable(wait_before_order_id_fallback):
             raise DemoLineageRefused("both audited read-schedule hooks are required")
