@@ -638,25 +638,55 @@ class EtoroDemoDesk:
         self._lineage.set_state(reference_id, outcome.status, filled_units=outcome.closed_units)
         return outcome.status
 
-    def recover_close_from_snapshot(self, reference_id: str, *,
-                                    snapshot: DemoPortfolioSnapshot, now: datetime) -> str:
-        """Resolve a close whose response was lost, using a fresh documented /pnl snapshot.
+    def unknown_close_snapshot_identity(self, reference_id: str) -> sqlite3.Row:
+        """Preflight persisted UNKNOWN CLOSE before consuming a separately signed /pnl GET.
 
-        ``orders:lookup`` for close orders is ``CLOSE_LOOKUP_RECOVERY=NOT_VERIFIED``, so the
-        broker-reported position units decide. The kill-switch stays tripped; clearing it is
-        a separate operator action.
+        The close is *not* claimed as executed just because it was reserved or
+        because a later portfolio snapshot no longer shows the owned position.
         """
         row = self._lineage.order(reference_id)
         if row["kind"] != "CLOSE" or row["state"] != "OUTCOME_UNKNOWN":
-            raise EtoroDemoOrderError("only a close with an unknown outcome can be recovered")
-        snapshot.require_fresh(now)
+            raise EtoroDemoOrderError("snapshot recovery requires an unknown close outcome")
         owned = self._lineage.owned(row["position_id"])
-        if owned is None:
-            raise EtoroDemoBookError("position has no SideDeck lineage")
+        if owned is None or owned["state"] != "OPEN":
+            raise EtoroDemoBookError("close recovery lacks an open SideDeck-owned position")
+        if (row["book_id"] != owned["book_id"]
+                or row["instrument_id"] != owned["instrument_id"]
+                or row["position_id"] != owned["position_id"]
+                or owned["order_id"] is None
+                or any(p.position_id == row["position_id"] for p in self._baseline)
+                or Decimal(row["units"]) <= ZERO
+                or Decimal(row["units"]) > Decimal(owned["remaining_units"])):
+            raise EtoroDemoBookError("close recovery identity or reserved units contradict lineage")
+        return row
+
+    def recover_close_from_snapshot(self, reference_id: str, *,
+                                    snapshot: DemoPortfolioSnapshot, now: datetime) -> str:
+        """Reconcile a lost CLOSE response using a fresh *whole-account* /pnl snapshot.
+
+        This can prove observed position reduction or absence, but NOT which
+        actor/order executed the close, realised P&L or permission for another POST.
+        The kill switch stays HALTED; clearing it requires independent authority.
+        """
+        row = self.unknown_close_snapshot_identity(reference_id)
+        snapshot.require_fresh(now)
+        # Validate all four protected baseline IDs and refuse foreign, mirrored,
+        # pending or contradictory orders BEFORE reducing any durable units.
+        whole = reconcile_demo(snapshot, baseline=self._baseline,
+                               attributions=self._lineage.attributions(), now=now)
+        if whole.status != "MATCHED" or snapshot.pending_orders:
+            self._halt("close recovery snapshot does not reconcile protected account")
+            raise EtoroDemoBookError("close recovery snapshot contradicts baseline or has pending orders")
+        owned = self._lineage.owned(row["position_id"])
+        assert owned is not None  # proven by unknown_close_snapshot_identity
         before = Decimal(owned["remaining_units"])
         live = next((p for p in snapshot.positions if p.position_id == row["position_id"]), None)
-        if live is not None and (live.order_id != owned["order_id"] or live.units > before):
-            self._halt("close recovery snapshot contradicts lineage")
+        if live is not None and (
+                live.order_id != owned["order_id"]
+                or live.instrument_id != owned["instrument_id"]
+                or not live.is_buy or live.leverage != 1 or live.mirror_id != 0
+                or live.units > before):
+            self._halt("close recovery snapshot contradicts exact owned-position lineage")
             raise EtoroDemoBookError("snapshot contradicts SideDeck lineage")
         closed = before if live is None else before - live.units
         if closed > Decimal(row["units"]):
