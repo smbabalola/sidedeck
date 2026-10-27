@@ -30,7 +30,7 @@ test("Day Trader symbol filter keeps plan decisions research-only", async ({ pag
   const watchlist = page.getByRole("region", { name: /Watchlist/ });
   const plans = page.getByRole("region", { name: /Entry \/ exit plans/ });
   await expect(watchlist.getByText("SYNTH", { exact: true })).toBeVisible();
-  await expect(plans.getByText("Watchlist", { exact: true })).toBeVisible();
+  await expect(plans.getByText("WATCHLIST", { exact: true })).toBeVisible();
   await expect(plans.getByText("No broker order permission.")).toBeVisible();
   await page.getByLabel("Search Day Trader symbols").fill("NOTPRESENT");
   await expect(watchlist.getByText(/No candidates match/)).toBeVisible();
