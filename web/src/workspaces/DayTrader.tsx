@@ -4,7 +4,7 @@ import {
   isDayTraderReadiness, isDayTraderSummary, isMarketTracks, isTrackLedgers,
   type DayTraderSummary, type Provenance,
 } from "../lib/contracts";
-import { price, when, words } from "../lib/format";
+import { plainPct, price, when, words } from "../lib/format";
 import { Badge, KeyValues, Metric, Panel, SearchBox, StateBlock, Tabs } from "../components/ui";
 
 type Section = "desk" | "research" | "audit" | "readiness";
@@ -81,10 +81,10 @@ function SimulatedBook() {
         const day = d.tracks.find(x => x.track === "DAY");
         return day ? <KeyValues rows={[
           ["Execution", words(day.execution)], ["Data", words(day.data_status)],
-          ["Virtual capital (configuration)", price(day.risk_budget.virtual_capital)],
+          ["Virtual capital (configuration)", day.risk_budget.virtual_capital === "NOT_ALLOCATED" ? "Not allocated" : price(day.risk_budget.virtual_capital)],
           ["Max positions", day.risk_budget.max_positions],
-          ["Daily loss limit", day.risk_budget.max_daily_loss_pct],
-          ["Drawdown limit", day.risk_budget.max_drawdown_pct],
+          ["Daily loss limit", plainPct(day.risk_budget.max_daily_loss_pct)],
+          ["Drawdown limit", plainPct(day.risk_budget.max_drawdown_pct)],
           ["Exit policy", words(day.risk_budget.exit_policy)],
         ]}/> : <p className="text-sm text-muted">DAY risk configuration unavailable.</p>;
       }}</StateBlock>
