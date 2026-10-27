@@ -646,7 +646,7 @@ class EtoroDemoDesk:
         """
         row = self._lineage.order(reference_id)
         if row["kind"] != "CLOSE" or row["state"] != "OUTCOME_UNKNOWN":
-            raise EtoroDemoOrderError("snapshot recovery requires an unknown close outcome")
+            raise EtoroDemoOrderError("only a close with an unknown outcome can be recovered")
         owned = self._lineage.owned(row["position_id"])
         if owned is None or owned["state"] != "OPEN":
             raise EtoroDemoBookError("close recovery lacks an open SideDeck-owned position")
