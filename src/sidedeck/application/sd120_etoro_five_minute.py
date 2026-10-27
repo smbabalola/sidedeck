@@ -78,7 +78,9 @@ def _classify_http_status(status: int) -> str:
 
 
 def draft_authorization(issued_at: datetime, *, hours: int = 48,
-                        owner_terms_reviewed: bool = False) -> DataAuthorization:
+                        owner_terms_reviewed: bool = False,
+                        api_key_env: str = "ETORO_API_KEY",
+                        user_key_env: str = "ETORO_USER_KEY") -> DataAuthorization:
     if issued_at.tzinfo is None:
         raise EtoroDiscoveryError("issued_at must be timezone-aware")
     return DataAuthorization(
@@ -104,7 +106,7 @@ def draft_authorization(issued_at: datetime, *, hours: int = 48,
             "interval": "5m",
             "side": "both",
             "limit": LOCAL_PAGE_LIMIT,
-            "credential_source": {"api_key_env": "ETORO_API_KEY", "user_key_env": "ETORO_USER_KEY"},
+            "credential_source": {"api_key_env": api_key_env, "user_key_env": user_key_env},
             "request_sequence": ["search", "coverage", "sample"],
         },
     )
@@ -392,6 +394,8 @@ def main(argv: list[str] | None = None) -> int:
     draft = sub.add_parser("draft")
     draft.add_argument("--out", required=True)
     draft.add_argument("--owner-confirms-terms-reviewed", action="store_true")
+    draft.add_argument("--api-key-env", default="ETORO_API_KEY")
+    draft.add_argument("--user-key-env", default="ETORO_USER_KEY")
     diagnostic_draft = sub.add_parser("diagnostic-draft")
     diagnostic_draft.add_argument("--out", required=True)
     diagnostic_draft.add_argument("--owner-confirms-terms-reviewed", action="store_true")
@@ -419,7 +423,10 @@ def main(argv: list[str] | None = None) -> int:
         if target.exists() or not args.owner_confirms_terms_reviewed:
             parser.error("refusing to overwrite or draft without owner terms confirmation")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(draft_authorization(datetime.now(UTC), owner_terms_reviewed=True).canonical(), encoding="utf-8")
+        target.write_text(draft_authorization(
+            datetime.now(UTC), owner_terms_reviewed=True,
+            api_key_env=args.api_key_env, user_key_env=args.user_key_env,
+        ).canonical(), encoding="utf-8")
         print(f"DRAFT_WRITTEN={target}; NETWORK_REQUESTS=0")
         return 0
     if args.command == "diagnostic-draft":
