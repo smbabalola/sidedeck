@@ -73,6 +73,7 @@ class CloseRead:
     acceptance: CloseAcceptance
     outcome: CloseOutcome
     realised_pnl_status: str = "UNAVAILABLE_WITHOUT_BROKER_CLOSE_PRICE"
+    position_status: str = "UNRESOLVED_REQUIRES_PORTFOLIO_RECONCILIATION"
 
 
 class EtoroDemoOrderPort:
@@ -224,4 +225,12 @@ class EtoroDemoOrderPort:
         outcome = parse_close_info(payload, acceptance=acceptance)
         if outcome.closed_units > owner.remaining_units:
             raise EtoroDemoOrderError("close reported more units than SideDeck owned")
-        return CloseRead(acceptance, outcome)
+        if outcome.status == "FILLED" and outcome.closed_units == owner.remaining_units:
+            # Broker close-info has no execution price and does not prove the
+            # /pnl snapshot is flat; a separately authorized read is required.
+            state = "BROKER_REPORTS_FULL_CLOSE_PENDING_PORTFOLIO_RECONCILIATION"
+        elif outcome.terminal and outcome.closed_units == 0:
+            state = "BROKER_REPORTS_NO_CLOSE"
+        else:
+            state = "UNRESOLVED_PARTIAL_OR_PENDING"
+        return CloseRead(acceptance, outcome, position_status=state)
