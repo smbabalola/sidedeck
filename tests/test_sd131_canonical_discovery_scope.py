@@ -24,7 +24,7 @@ def test_custom_demo_pair_is_bound_to_signed_scope() -> None:
         check_scope(auth, api_key_env="ETORO_API_KEY", user_key_env="ETORO_USER_KEY")
     assert auth.max_requests == 9
     assert auth.max_retries == 0
-    assert "ETORO_DEMO_TRADE_API_KEY" in auth.canonical().decode("utf-8")
+    assert "ETORO_DEMO_TRADE_API_KEY" in auth.canonical()
 
 
 def test_legacy_default_draft_still_has_locked_old_scope() -> None:
