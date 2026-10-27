@@ -2,6 +2,7 @@
 import ast
 import inspect
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -565,16 +566,18 @@ def test_lost_full_close_recovered_from_snapshot(h):
     position_id, close = _lost_close(h)
     state = h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
                                                now=h.now)
-    assert state == "RECONCILED_CLOSED_BY_SNAPSHOT"
+    assert state == "POSITION_ABSENT_EXECUTOR_UNVERIFIED"
     assert h.lineage.owned(position_id)["state"] == "CLOSED"
+    assert h.lineage.order(close.reference_id)["state"] == "UNRESOLVED_BY_SNAPSHOT"
     assert h.controls.is_halted()   # separate operator clearance still required
 
 
 def test_lost_partial_close_recovered_from_snapshot(h):
     position_id, close = _lost_close(h, Decimal("0.5"))
     assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
-                                              now=h.now) == "RECONCILED_PARTIAL_BY_SNAPSHOT"
+                                              now=h.now) == "POSITION_REDUCED_EXECUTOR_UNVERIFIED"
     assert Decimal(h.lineage.owned(position_id)["remaining_units"]) == Decimal("1.5")
+    assert h.lineage.order(close.reference_id)["state"] == "UNRESOLVED_BY_SNAPSHOT"
 
 
 def test_close_that_never_reached_broker_recovers_as_not_executed(h):
@@ -584,8 +587,71 @@ def test_close_that_never_reached_broker_recovers_as_not_executed(h):
     h.sim.drop_next_request = True
     h.desk.submit_close(intent_id="c1", request=close, snapshot=h.snapshot(), now=h.now)
     assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
-                                              now=h.now) == "RECONCILED_NOT_EXECUTED"
+                                              now=h.now) == "NO_REDUCTION_OBSERVED"
     assert h.lineage.owned(position_id)["state"] == "OPEN"
+    assert h.lineage.order(close.reference_id)["state"] == "UNRESOLVED_BY_SNAPSHOT"
+
+
+def test_unknown_snapshot_close_reservation_fences_second_worker(h, tmp_path):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(), now=h.now)
+    competing = EtoroDemoLineage(
+        str(tmp_path / "lineage.sqlite3"),
+        baseline_position_ids=[b.position_id for b in h.baseline],
+        baseline_order_ids=[b.order_id for b in h.baseline if b.order_id],
+    )
+    try:
+        with pytest.raises(EtoroDemoOrderError, match="reference or intent already used"):
+            competing.record_pending(
+                reference_id=ref(), kind="CLOSE", intent_id="competing-close",
+                book_id=BOOK, instrument_id=1001, units=Decimal("1.5"),
+                limit_rate=None, position_id=position_id,
+            )
+    finally:
+        competing.close()
+
+
+def test_unknown_close_snapshot_replay_after_restart_is_idempotent(h):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    snapshot = h.snapshot()
+    assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=snapshot,
+                                              now=h.now) == "POSITION_REDUCED_EXECUTOR_UNVERIFIED"
+    h.close_stores()
+    h.open_stores()
+    assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=snapshot,
+                                              now=h.now) == "NO_REDUCTION_OBSERVED"
+    assert Decimal(h.lineage.owned(position_id)["remaining_units"]) == Decimal("1.5")
+    order = h.lineage.order(close.reference_id)
+    assert order["state"] == "UNRESOLVED_BY_SNAPSHOT"
+    assert Decimal(order["filled_units"]) == Decimal("0.5")
+
+
+def test_unknown_close_simultaneous_snapshot_recovery_serializes_two_handles(h, tmp_path):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    snapshot = h.snapshot()
+    def worker():
+        lineage = EtoroDemoLineage(
+            str(tmp_path / "lineage.sqlite3"),
+            baseline_position_ids=[b.position_id for b in h.baseline],
+            baseline_order_ids=[b.order_id for b in h.baseline if b.order_id],
+        )
+        desk = EtoroDemoDesk(
+            outbox=h.outbox, controls=h.controls, lineage=lineage,
+            transport=h.sim,
+            policy=DemoDeskPolicy(Decimal(h.cap), frozenset({1001}), h.max_open),
+            baseline=h.baseline, budget=h.budget,
+        )
+        try:
+            return desk.recover_close_from_snapshot(close.reference_id,
+                                                    snapshot=snapshot, now=h.now)
+        finally:
+            lineage.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        states = set(pool.map(lambda _: worker(), range(2)))
+    assert states == {"POSITION_REDUCED_EXECUTOR_UNVERIFIED", "NO_REDUCTION_OBSERVED"}
+    assert Decimal(h.lineage.owned(position_id)["remaining_units"]) == Decimal("1.5")
+    assert Decimal(h.lineage.order(close.reference_id)["filled_units"]) == Decimal("0.5")
 
 
 def test_close_recovery_refuses_contradictions(h):
@@ -602,7 +668,7 @@ def test_close_recovery_refuses_contradictions(h):
     with pytest.raises(EtoroDemoOrderError, match="more units closed"):
         h.desk.recover_close_from_snapshot(close.reference_id, now=h.now,
                                            snapshot=parse_demo_portfolio(gone, observed_at=h.now))
-    with pytest.raises(EtoroDemoOrderError, match="unknown outcome"):
+    with pytest.raises(EtoroDemoOrderError, match="unresolved close"):
         h.desk.recover_close_from_snapshot(h.lineage.orders()[0]["reference_id"],
                                            snapshot=h.snapshot(), now=h.now)
 

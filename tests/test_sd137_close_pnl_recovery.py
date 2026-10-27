@@ -78,9 +78,9 @@ def recover(route=None, authority=None, desk=None, **changes):
 
 
 @pytest.mark.parametrize("state,classification", [
-    ("RECONCILED_NOT_EXECUTED", "NO_REDUCTION_OBSERVED"),
-    ("RECONCILED_PARTIAL_BY_SNAPSHOT", "POSITION_REDUCED_EXECUTOR_UNVERIFIED"),
-    ("RECONCILED_CLOSED_BY_SNAPSHOT", "POSITION_ABSENT_EXECUTOR_UNVERIFIED"),
+    ("NO_REDUCTION_OBSERVED", "NO_REDUCTION_OBSERVED"),
+    ("POSITION_REDUCED_EXECUTOR_UNVERIFIED", "POSITION_REDUCED_EXECUTOR_UNVERIFIED"),
+    ("POSITION_ABSENT_EXECUTOR_UNVERIFIED", "POSITION_ABSENT_EXECUTOR_UNVERIFIED"),
     ("RAISE", "UNRESOLVED"),
 ])
 def test_one_signed_read_never_claims_close_execution_or_realised_pnl(state, classification):

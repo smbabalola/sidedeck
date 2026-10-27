@@ -133,9 +133,9 @@ def recover_close_from_pnl(*, route: PnlReadRoute, authority: UnlockAuthority,
             "UNRESOLVED", snapshot, position_id, close_order_id, grant.grant_id,
         )
     mapping = {
-        "RECONCILED_NOT_EXECUTED": "NO_REDUCTION_OBSERVED",
-        "RECONCILED_PARTIAL_BY_SNAPSHOT": "POSITION_REDUCED_EXECUTOR_UNVERIFIED",
-        "RECONCILED_CLOSED_BY_SNAPSHOT": "POSITION_ABSENT_EXECUTOR_UNVERIFIED",
+        "NO_REDUCTION_OBSERVED": "NO_REDUCTION_OBSERVED",
+        "POSITION_REDUCED_EXECUTOR_UNVERIFIED": "POSITION_REDUCED_EXECUTOR_UNVERIFIED",
+        "POSITION_ABSENT_EXECUTOR_UNVERIFIED": "POSITION_ABSENT_EXECUTOR_UNVERIFIED",
     }
     if state not in mapping:
         return PnlCloseRecoveryResult(

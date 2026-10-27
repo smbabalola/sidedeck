@@ -22,11 +22,12 @@ import json
 import sqlite3
 import tempfile
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Iterator, Protocol
 
 from sidedeck.application.sd032_durable_paper_intent import DurablePaperIntentStore, PaperIntent
 from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch, intent_digest
@@ -227,6 +228,18 @@ class EtoroDemoLineage:
 
     def close(self) -> None:
         self._db.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Serialize multi-row broker reconciliation across SQLite workers."""
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except Exception:
+            self._db.rollback()
+            raise
+        else:
+            self._db.commit()
 
     def record_pending(self, *, reference_id: str, kind: str, intent_id: str, book_id: str,
                        instrument_id: int, units: Decimal | None, limit_rate: Decimal | None,
@@ -645,8 +658,9 @@ class EtoroDemoDesk:
         because a later portfolio snapshot no longer shows the owned position.
         """
         row = self._lineage.order(reference_id)
-        if row["kind"] != "CLOSE" or row["state"] != "OUTCOME_UNKNOWN":
-            raise EtoroDemoOrderError("only a close with an unknown outcome can be recovered")
+        if row["kind"] != "CLOSE" or row["state"] not in {
+                "OUTCOME_UNKNOWN", "UNRESOLVED_BY_SNAPSHOT"}:
+            raise EtoroDemoOrderError("only an unresolved close can be recovered")
         owned = self._lineage.owned(row["position_id"])
         if owned is None or owned["state"] != "OPEN":
             raise EtoroDemoBookError("close recovery lacks an open SideDeck-owned position")
@@ -655,8 +669,9 @@ class EtoroDemoDesk:
                 or row["position_id"] != owned["position_id"]
                 or owned["order_id"] is None
                 or any(p.position_id == row["position_id"] for p in self._baseline)
-                or Decimal(row["units"]) <= ZERO
-                or Decimal(row["units"]) > Decimal(owned["remaining_units"])):
+                or Decimal(row["units"]) - Decimal(row["filled_units"] or "0") < ZERO
+                or Decimal(row["units"]) - Decimal(row["filled_units"] or "0")
+                > Decimal(owned["remaining_units"])):
             raise EtoroDemoBookError("close recovery identity or reserved units contradict lineage")
         return row
 
@@ -668,6 +683,14 @@ class EtoroDemoDesk:
         actor/order executed the close, realised P&L or permission for another POST.
         The kill switch stays HALTED; clearing it requires independent authority.
         """
+        with self._lineage.transaction():
+            return self._recover_close_from_snapshot_locked(
+                reference_id, snapshot=snapshot, now=now,
+            )
+
+    def _recover_close_from_snapshot_locked(self, reference_id: str, *,
+                                            snapshot: DemoPortfolioSnapshot,
+                                            now: datetime) -> str:
         row = self.unknown_close_snapshot_identity(reference_id)
         snapshot.require_fresh(now)
         # Validate all four protected baseline IDs and refuse foreign, mirrored,
@@ -689,16 +712,22 @@ class EtoroDemoDesk:
             self._halt("close recovery snapshot contradicts exact owned-position lineage")
             raise EtoroDemoBookError("snapshot contradicts SideDeck lineage")
         closed = before if live is None else before - live.units
-        if closed > Decimal(row["units"]):
+        previously_observed = Decimal(row["filled_units"] or "0")
+        remaining_reserved = Decimal(row["units"]) - previously_observed
+        cumulative_observed = previously_observed + closed
+        if closed > remaining_reserved or cumulative_observed > Decimal(row["units"]):
             self._halt("close recovery shows more units closed than requested")
             raise EtoroDemoOrderError("more units closed than the close requested")
         if closed > 0:
             self._lineage.reduce_position(row["position_id"], closed)
-        state = ("RECONCILED_NOT_EXECUTED" if closed == 0 else
-                 "RECONCILED_CLOSED_BY_SNAPSHOT" if live is None else
-                 "RECONCILED_PARTIAL_BY_SNAPSHOT")
-        self._lineage.set_state(reference_id, state, filled_units=closed)
-        return state
+        # /pnl reports account state, not which actor/order caused a change.
+        # Keep the write unresolved so the unique pending-close fence blocks a
+        # second close even when the snapshot shows reduction or absence.
+        self._lineage.set_state(reference_id, "UNRESOLVED_BY_SNAPSHOT",
+                                filled_units=cumulative_observed)
+        return ("NO_REDUCTION_OBSERVED" if closed == 0 else
+                "POSITION_ABSENT_EXECUTOR_UNVERIFIED" if live is None else
+                "POSITION_REDUCED_EXECUTOR_UNVERIFIED")
 
     # ---- reconciliation -----------------------------------------------------
     def reconcile(self, snapshot: DemoPortfolioSnapshot, now: datetime) -> dict[str, Any]:
