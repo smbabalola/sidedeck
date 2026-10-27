@@ -85,3 +85,27 @@ SideDeck reconciliation PENDING**. Not COMPLETE.
 To finish: (1) owner supplies the close confirmation (time, price, units, P/L); (2) one
 owner-approved read-only `/pnl` GET shows the four protected positions MATCHED, no MSFT and
 no pending orders; (3) only then is the kill switch cleared, as a separate recorded action.
+
+## Broker verification (2026-10-27 07:20 UTC, owner-authorised single read-only GET)
+
+Exactly one `GET /api/v1/trading/info/demo/pnl` (ADR-004 Demo pair, read-only client limited
+to `/pnl`, single-attempt budget reserved before sending; no retry; 0 orders). Sanitized result:
+
+| Check | Result |
+|---|---|
+| HTTP / schema | 200 / PASSED |
+| Reconciliation | **MATCHED**, 0 discrepancies |
+| Open positions | 4 (= the 4 protected; 4/4 matched) — **pilot MSFT position no longer open** |
+| Pending orders | none |
+| Unexplained / mirrored positions | 0 / none |
+| Protected baseline database | unchanged (hash before = after) |
+
+Evidence (git-ignored): `data/sd105-pnl-check-20261027-0720` (`result.json`, budget DB,
+runner copy). Authorisation consumed. Transport LOCKED.
+
+**Status:** broker flat for the pilot and baseline intact; this independently corroborates the
+owner's manual close. Close price, time and realised P/L remain **unrecorded** (the counts-only
+read does not carry them; owner may supply the eToro confirmation). The kill switch remains
+**HALTED**: clearing it needs the owner's separate approval. SideDeck's pilot lineage still
+shows the open as `ACCEPTED` with no owned position; it will be annotated as closed manually
+outside SideDeck when the kill switch is reviewed, never as a SideDeck fill/close.
