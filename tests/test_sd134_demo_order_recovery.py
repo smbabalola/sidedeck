@@ -242,3 +242,15 @@ def test_close_info_never_claims_final_broker_settlement(
     assert result.realised_pnl_status == "UNAVAILABLE_WITHOUT_BROKER_CLOSE_PRICE"
     assert fake.calls[-1][:2] == (
         "GET", DEMO_CLOSE_INFO_PATH.format(order_id=202))
+
+
+def test_later_broker_closed_lookup_revokes_stale_close_authority() -> None:
+    fake = FakeDemoRoute([lookup(), lookup(state="closed")])
+    port = EtoroDemoOrderPort(fake)
+    _, earlier = port.lookup_open(request(), order_id=101)
+    assert earlier is not None
+    later, current = port.lookup_open(request(), order_id=101)
+    assert later.status == "FILLED" and current is None
+    with pytest.raises(DemoLineageRefused):
+        port.submit_owned_close(close_request(), owner=earlier)
+    assert all(method == "GET" for method, _, _ in fake.calls)
