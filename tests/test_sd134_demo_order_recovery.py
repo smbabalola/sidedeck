@@ -14,7 +14,7 @@ from sidedeck.application.sd129_etoro_demo_order_port import (
     DemoLineageRefused, EtoroDemoOrderPort,
 )
 from sidedeck.domain.etoro_demo_orders import (
-    DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
+    DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
     DemoCloseRequest, DemoOpenRequest, EtoroDemoOrderError, require_demo_route,
 )
 
