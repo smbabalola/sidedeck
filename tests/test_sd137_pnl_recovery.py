@@ -18,6 +18,7 @@ NOW = datetime(2026, 10, 27, 12, tzinfo=timezone.utc)
 def row(pid, oid):
     return {"positionID": pid, "instrumentID": 101, "orderID": oid,
             "isBuy": True, "units": 1, "amount": 10, "leverage": 1,
+            "openRate": 10,
             "openDateTime": "2026-10-27T11:00:00Z",
             "unrealizedPnL": {"pnL": 0}}
 
@@ -82,9 +83,9 @@ def test_signed_read_recovers_only_exact_order_position(tmp_path):
     assert route.calls == [("GET", DEMO_PNL_PATH, {"reference_id": "unique-read-1"})]
 
 
-def test_signed_read_verifies_flat_only_when_baseline_is_exact(tmp_path):
+def test_missing_accepted_order_position_stays_unresolved(tmp_path):
     result = run(Route(None), Authority(), BASE, tmp_path)
-    assert result.classification == "VERIFIED_FLAT" and result.position_id is None
+    assert result.classification == "UNRESOLVED" and result.position_id is None
 
 
 @pytest.mark.parametrize("rows,pending", [

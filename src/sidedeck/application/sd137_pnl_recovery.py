@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Protocol
 
 from sidedeck.application.sd064_unlock_grant import UnlockAuthority, UnlockGrant
@@ -31,7 +32,7 @@ class PnlRecoveryRefused(PermissionError):
 
 @dataclass(frozen=True)
 class PnlRecoveryResult:
-    classification: str  # OWNED_POSITION | VERIFIED_FLAT | UNRESOLVED
+    classification: str  # OWNED_POSITION | UNRESOLVED
     snapshot: DemoPortfolioSnapshot
     position_id: int | None
     order_id: int
@@ -86,12 +87,15 @@ def recover_from_pnl(*, route: PnlReadRoute, authority: UnlockAuthority,
     if len(matches) > 1:
         return PnlRecoveryResult("UNRESOLVED", snapshot, None, order_id, grant.grant_id)
     if not matches:
-        if any(p.position_id not in {base.position_id for base in baseline}
-               for p in snapshot.positions):
-            return PnlRecoveryResult("UNRESOLVED", snapshot, None, order_id, grant.grant_id)
-        return PnlRecoveryResult("VERIFIED_FLAT", snapshot, None, order_id, grant.grant_id)
+        # A missing position does not distinguish an unfilled accepted order from
+        # a position that was opened and then closed. /pnl cannot settle that lineage.
+        return PnlRecoveryResult("UNRESOLVED", snapshot, None, order_id, grant.grant_id)
     position = matches[0]
     if (position.instrument_id != instrument_id or position.mirror_id != 0
+            or not position.is_buy or position.leverage != 1
+            or position.units <= 0 or position.units > Decimal(order["units"])
+            or position.open_rate is None
+            or position.open_rate > Decimal(order["limit_rate"])
             or any(p.position_id not in {base.position_id for base in baseline}
                    and p.position_id != position.position_id for p in snapshot.positions)):
         return PnlRecoveryResult("UNRESOLVED", snapshot, None, order_id, grant.grant_id)
