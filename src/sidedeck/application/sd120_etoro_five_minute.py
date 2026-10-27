@@ -393,6 +393,12 @@ def run_diagnostic(
         status = int(exc.code)
         evidence.update({"status": status, "classification": _classify_http_status(status)})
         ledger.record(request_id, f"HTTP_{status}")
+    except urllib.error.URLError:
+        # A URLError carries *no verified HTTP response status*. Do not include
+        # exception text/reason, because proxies may echo credential-bearing URLs.
+        # The request is consumed, never retried, and a sanitized report survives.
+        evidence.update({"status": None, "classification": "NETWORK_TRANSPORT_ERROR"})
+        ledger.record(request_id, "FAILED:URLError")
     except Exception as exc:
         ledger.record(request_id, f"FAILED:{type(exc).__name__}")
         raise
