@@ -1,5 +1,6 @@
 """Offline contract tests: no provider requests and no admission upgrade."""
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
@@ -8,7 +9,6 @@ from sidedeck.application.sd122_etoro_intraday_bridge import research_bars_from_
 
 
 def _side(base: str, vol: str = "11") -> dict[str, str]:
-    from decimal import Decimal
     p = Decimal(base)
     return {"open": str(p), "high": str(p + 1), "low": str(p - 1),
             "close": str(p + Decimal("0.5")), "volume": vol}
@@ -32,7 +32,7 @@ def test_etoro_bid_ask_sample_is_research_only_and_preserves_lineage():
     bars, evidence = research_bars_from_etoro_sample(
         _payload(), instrument_id=1004, symbol="MSFT", cutoff=_CUTOFF)
     assert len(bars) == 2
-    assert bars[0].open == __import__("decimal").Decimal("100.05")
+    assert bars[0].open == Decimal("100.05")
     assert bars[1].start.isoformat() == "2026-10-23T13:35:00+00:00"
     assert len(evidence["source_payload_sha256"]) == 64
     assert evidence["complete_sessions"] == 0
@@ -61,9 +61,11 @@ def test_etoro_sample_fails_closed(mutation: str, reason: str):
         rows[0]["time"] = "2026-10-23T13:40:00Z"
     else:
         rows[1]["time"] = "2026-10-23T13:25:00Z"
+    cutoff = (datetime(2026, 10, 23, 13, 45, tzinfo=UTC)
+              if mutation == "timestamp_gap" else _CUTOFF)
     with pytest.raises(EtoroMarketDataError, match=reason):
         research_bars_from_etoro_sample(
-            payload, instrument_id=1004, symbol="MSFT", cutoff=_CUTOFF)
+            payload, instrument_id=1004, symbol="MSFT", cutoff=cutoff)
 
 
 def test_etoro_sample_rejects_unfinished_bars_and_identity_mismatch():
