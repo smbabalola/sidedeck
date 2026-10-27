@@ -12,7 +12,7 @@
 
 ## Autonomous eToro Demo delivery loop — authoritative live queue (owner: 2026-10-27)
 
-> **Execution controller:** [STEERING.md](STEERING.md) → [SIDEDECK_STEERING.md §20](SIDEDECK_STEERING.md), with [AGENTS.md](AGENTS.md) safety precedence. In an **active** Codex session repeatedly **RECONCILE → SELECT → TEST → IMPLEMENT OFFLINE → ATTACK → VERIFY → COMMIT/PUSH → UPDATE TODO → SELECT NEXT**. Continue without routine owner prompts. This plan does **not** schedule background execution or grant ongoing broker network access. Historical milestones below remain evidence, not the selection order.
+> **Execution controller:** [STEERING.md](STEERING.md) → [SIDEDECK_STEERING.md §§20–21](SIDEDECK_STEERING.md), with [AGENTS.md](AGENTS.md) safety precedence. In an **active** Codex session repeatedly **RECONCILE → SELECT → TEST → IMPLEMENT OFFLINE → ATTACK → VERIFY → COMMIT/PUSH → UPDATE TODO → SELECT NEXT**. Continue without routine owner prompts. This plan does **not** schedule background execution or grant ongoing broker network access. Historical milestones below remain evidence, not the selection order.
 
 | Control | Current reconciled truth / required behaviour |
 |---|---|
@@ -29,10 +29,10 @@
 | **G3 / STRATEGY** | `BLOCKED` — independent genuine-data locked-OOS admission, ≥30 OOS trades under current rule, cost/robustness tests outstanding; fixtures cannot pass |
 | **G4 / DEMO RELEASE** | `BLOCKED` — production transport integration, independent audit, remote append-only anchors, protected exits and separately signed bounded owner release all outstanding |
 | **G5 / OPERATIONS** | `BLOCKED` — approved monitored Demo canary and planned one-month Demo-only soak not run |
-| **CURRENT_BATCH** | **SD-136 VERIFIED_OFFLINE; SD-137 IN_PROGRESS (restart-safe OPEN+CLOSE port slices verified); SD-142/145 READY**. Complete signed /pnl recovery and hard-gateway integration tests before marking SD-137 done; no external I/O. |
-| **NEXT_READY** | First implement **SD-136** and **SD-137**; in parallel **SD-142** or **SD-145**. As dependencies pass take SD-138/139/140/141 and SD-146/147/148; do not await another owner "proceed" |
-| **BLOCKED_EXTERNAL** | SD-133 eToro market-data 403; SD-143 source/license/permission, SD-144 genuine data and strategy admission; independently verify provider constraints |
-| **BLOCKED_OWNER** | Any authenticated eToro/broker/data read, new Demo order/close, paid provider call, remote-anchor account provision, broker transport unlock, historical kill-switch reset, execution policy signing, canary/release and merge. No inherited permission from the prior pilot |
+| **CURRENT_BATCH** | **SD-136 VERIFIED_OFFLINE; SD-137 IN_PROGRESS (restart-safe OPEN+CLOSE slices verified); SD-142/145 READY; SD-152 QUEUED**. Finish SD-137 signed-budget strict /pnl + unknown/partial/restart tests; in parallel SD-142 five-minute importer and SD-145 external-anchor harness. SD-152 runner implements offline when deps verified; no external I/O. |
+| **NEXT_READY** | **SD-137** remaining /pnl/faults, parallel **SD-142** and **SD-145**; then **SD-138/139/140/141**, SD-152 when controller/anchor ready, SD-146/147/148/149; owner-only SD-150/151. No routine prompts. |
+| **BLOCKED_EXTERNAL** | SD-133 eToro market-data 403; SD-143 lawful 5m history + timely execution data/rights (eToro or Alpaca data-only or another provider); SD-144 genuine locked-OOS admission, with verified provider constraints |
+| **BLOCKED_OWNER** | Any authenticated eToro/broker/data read, Demo order/close, provider subscription or paid call, real anchor/deployment account, transport unlock, historical kill-switch reset, owner grant/signature, canary/release or merge. Prior owner-confirmed Demo credentials are settled; historical MSFT release has no carryover |
 
 ### Demo autonomy GO-LIVE critical path — five lanes (steering §21)
 
