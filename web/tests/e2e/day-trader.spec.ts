@@ -7,6 +7,11 @@ test("Day Trader desk distinguishes offline research, virtual configuration and 
   await expect(page.getByRole("heading", { level: 1, name: "Day Trader" })).toBeVisible();
   await expect(page.getByText("Execution locked")).toBeVisible();
   await expect(page.getByText("eToro Demo · NOT RELEASED")).toBeVisible();
+  const pipeline = page.getByRole("region", { name: "Autonomous trading pipeline" });
+  await expect(pipeline).toBeVisible();
+  await expect(pipeline.getByRole("listitem")).toHaveCount(5);
+  await expect(pipeline.getByText("Demo transport locked")).toBeVisible();
+  await expect(pipeline.getByText("2 of 5 stages implemented offline")).toBeVisible();
   await expect(page.getByRole("region", { name: "DAY simulated accounting" })).toBeVisible();
   await expect(page.getByRole("region", { name: "DAY risk configuration" })).toBeVisible();
   await expect(page.getByText("Research only", { exact: true }).first()).toBeVisible();
