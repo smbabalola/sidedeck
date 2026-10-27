@@ -155,7 +155,7 @@ class _ReleaseLedger:
 
 class EtoroDemoHttpTransport:
     def __init__(self, *, api_key: str, user_key: str, release: PilotRelease, ledger_path: str,
-                 opener: Opener | None = None) -> None:
+                 opener: Opener | None = None, test_only_opener: bool = False) -> None:
         if not isinstance(release, PilotRelease):
             raise BrokerExecutionDisabled("a signed pilot release is required")
         release.require_active()
@@ -164,6 +164,9 @@ class EtoroDemoHttpTransport:
                 raise ValueError("Demo credentials are missing or malformed")
         if isinstance(opener, OpenerDirector):
             raise BrokerExecutionDisabled("real urllib openers cannot be injected")
+        if opener is not None and (test_only_opener is not True
+                                   or network_transport_enabled(release.digest)):
+            raise BrokerExecutionDisabled("custom openers are restricted to locked offline tests")
         active: Any = opener
         if active is None:
             if not network_transport_enabled(release.digest):
@@ -181,12 +184,14 @@ class EtoroDemoHttpTransport:
 
     @classmethod
     def from_environment(cls, env: Mapping[str, str], *, release: PilotRelease,
-                         ledger_path: str, opener: Opener | None = None
+                         ledger_path: str, opener: Opener | None = None,
+                         test_only_opener: bool = False
                          ) -> "EtoroDemoHttpTransport":
         require_execution_credentials(env)
         return cls(api_key=env[DEMO_PAIR_NAMES[0]].strip(),
                    user_key=env[DEMO_PAIR_NAMES[1]].strip(), release=release,
-                   ledger_path=ledger_path, opener=opener)
+                   ledger_path=ledger_path, opener=opener,
+                   test_only_opener=test_only_opener)
 
     def __repr__(self) -> str:
         return "EtoroDemoHttpTransport(<credentials hidden>)"

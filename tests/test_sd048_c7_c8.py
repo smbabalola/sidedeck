@@ -232,17 +232,33 @@ def make_transport(keys, tmp_path, fault=None):
     release = release_for(keys, tmp_path)
     return EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
                                   ledger_path=str(tmp_path / f"ledger-{uuid.uuid4()}.sqlite3"),
-                                  opener=opener), opener, release
+                                  opener=opener, test_only_opener=True), opener, release
 
 
 def test_network_is_locked_without_injected_opener(keys, tmp_path):
     assert transport_module.NETWORK_TRANSPORT_ENABLED is False
+    release = release_for(keys, tmp_path)
     with pytest.raises(BrokerExecutionDisabled, match="locked"):
         EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release_for(keys, tmp_path),
                                ledger_path=str(tmp_path / "l.sqlite3"))
+    with pytest.raises(BrokerExecutionDisabled, match="custom openers are restricted"):
+        EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
+                               ledger_path=str(tmp_path / "custom.sqlite3"),
+                               opener=SimOpener(None))
     with pytest.raises(BrokerExecutionDisabled, match="signed pilot release"):
         EtoroDemoHttpTransport(api_key=API, user_key=USER, release=object(),
-                               ledger_path=str(tmp_path / "l.sqlite3"), opener=SimOpener(None))
+                               ledger_path=str(tmp_path / "l.sqlite3"), opener=SimOpener(None), test_only_opener=True)
+
+
+def test_test_only_opener_stays_refused_when_release_digest_is_unlocked(keys, tmp_path, monkeypatch):
+    release = release_for(keys, tmp_path)
+    monkeypatch.setattr(transport_module, "UNLOCKED_PILOT_DIGEST", release.digest)
+    with pytest.raises(BrokerExecutionDisabled, match="custom openers are restricted"):
+        EtoroDemoHttpTransport(
+            api_key=API, user_key=USER, release=release,
+            ledger_path=str(tmp_path / "unlocked-custom.sqlite3"),
+            opener=SimOpener(None), test_only_opener=True,
+        )
 
 
 @pytest.mark.parametrize("method,path", [
@@ -334,7 +350,7 @@ class HttpRig:
         self.release = release_for(keys, tmp_path)
         http = EtoroDemoHttpTransport(api_key=API, user_key=USER, release=self.release,
                                       ledger_path=str(tmp_path / "ledger.sqlite3"),
-                                      opener=self.opener)
+                                      opener=self.opener, test_only_opener=True)
         self.controls = ApprovalKillSwitch(str(tmp_path / "c.sqlite3"),
                                            lambda k, d, s: s == f"{k}:{d}")
         self.lineage = EtoroDemoLineage(str(tmp_path / "l.sqlite3"),
@@ -491,18 +507,18 @@ def test_h1_ledger_is_persistent_per_release_digest(keys, tmp_path):
     sim.baseline_rows = list(SYNTHETIC_BASELINE_ROWS)
     release, ledger = release_for(keys, tmp_path), str(tmp_path / "ledger.sqlite3")
     first = EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
-                                   ledger_path=ledger, opener=SimOpener(sim))
+                                   ledger_path=ledger, opener=SimOpener(sim), test_only_opener=True)
     for _ in range(3):
         first.send("GET", DEMO_PNL_PATH, reference_id="r")
     first.close()
     second = EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
-                                    ledger_path=ledger, opener=SimOpener(sim))
+                                    ledger_path=ledger, opener=SimOpener(sim), test_only_opener=True)
     with pytest.raises(EtoroDemoTransportError, match="SIGNED_REQUEST_CAP"):
         second.send("GET", DEMO_PNL_PATH, reference_id="r")
     second.close()
     with pytest.raises(BrokerExecutionDisabled, match="durable"):
         EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
-                               ledger_path=":memory:", opener=SimOpener(sim))
+                               ledger_path=":memory:", opener=SimOpener(sim), test_only_opener=True)
 
 
 _OPEN = {"action": "open", "transaction": "buy", "instrumentId": INSTRUMENT,
@@ -592,7 +608,7 @@ def test_m3_any_failure_after_write_io_is_outcome_unknown(keys, tmp_path, exc):
     release = release_for(keys, tmp_path)
     opener = _RaisingOpener(exc)
     transport = EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
-                                       ledger_path=str(tmp_path / "l.sqlite3"), opener=opener)
+                                       ledger_path=str(tmp_path / "l.sqlite3"), opener=opener, test_only_opener=True)
     reference = str(uuid.uuid4())
     body = DemoOpenRequest(reference, INSTRUMENT, Decimal("0.4"), Decimal("100.5")).body()
     with pytest.raises(TransportOutcomeUnknown):
@@ -608,7 +624,7 @@ def test_low_real_openers_and_malformed_keys_refused(keys, tmp_path):
                                ledger_path=str(tmp_path / "l.sqlite3"), opener=build_opener())
     with pytest.raises(ValueError, match="malformed"):
         EtoroDemoHttpTransport(api_key="bad\nkey", user_key=USER, release=release,
-                               ledger_path=str(tmp_path / "l.sqlite3"), opener=SimOpener(None))
+                               ledger_path=str(tmp_path / "l.sqlite3"), opener=SimOpener(None), test_only_opener=True)
     transport, _, _ = make_transport(keys, tmp_path)
     with pytest.raises(AttributeError):
         transport.offline_simulation = True
