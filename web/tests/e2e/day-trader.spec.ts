@@ -9,7 +9,7 @@ test("Day Trader desk distinguishes offline research, virtual configuration and 
   await expect(page.getByText("eToro Demo · NOT RELEASED")).toBeVisible();
   await expect(page.getByRole("region", { name: "DAY simulated accounting" })).toBeVisible();
   await expect(page.getByRole("region", { name: "DAY risk configuration" })).toBeVisible();
-  await expect(page.getByText("Research only", { exact: true })).toBeVisible();
+  await expect(page.getByText("Research only", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: /buy|sell|order|close position|submit|execute|allocate/i })).toHaveCount(0);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
   expect(overflow).toBe(false);
