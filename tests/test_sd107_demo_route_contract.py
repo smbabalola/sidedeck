@@ -62,6 +62,45 @@ def test_sd107_gateway_has_no_network_transport_import():
     assert "OfflineDemoSimulator" in source
 
 
+def test_sd138_production_factory_cannot_receive_test_opener():
+    """Keep test-only fake transport construction out of the production factory."""
+    path = Path(transport.__file__)
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    factory = next(node for node in ast.walk(tree)
+                   if isinstance(node, ast.ClassDef)
+                   and node.name == "ProductionTransportFactory")
+    call = next(node for node in ast.walk(factory)
+                if isinstance(node, ast.FunctionDef) and node.name == "__call__")
+    transport_calls = [node for node in ast.walk(call)
+                       if isinstance(node, ast.Call)
+                       and isinstance(node.func, ast.Attribute)
+                       and node.func.attr == "from_environment"]
+    assert len(transport_calls) == 1
+    assert all(keyword.arg not in {"opener", "test_only_opener"}
+               for keyword in transport_calls[0].keywords)
+    assert len(transport_calls[0].args) == 1
+    assert {keyword.arg for keyword in transport_calls[0].keywords} == {
+        "release", "ledger_path",
+    }
+
+
+def test_sd138_operator_is_the_only_application_factory_consumer():
+    """Prevent autonomous application modules from constructing a live transport."""
+    allowed = {"sd054_pilot_operator.py"}
+    for path in SRC.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        imports = {alias.name for node in ast.walk(tree)
+                   if isinstance(node, (ast.Import, ast.ImportFrom))
+                   for alias in node.names}
+        symbols = names | imports
+        if ("production_transport_factory" in symbols
+                or "ProductionTransportFactory" in symbols):
+            assert path.name in allowed, path.name
+        if "EtoroDemoHttpTransport" in symbols:
+            assert path.name in allowed, path.name
+
+
 def test_grant_ceilings_are_the_reviewed_design_values():
     assert MAX_WINDOW["autonomous_policy"].days == 7
     assert MAX_REQUESTS == {"pilot_release": 12, "autonomous_policy": 2000}
