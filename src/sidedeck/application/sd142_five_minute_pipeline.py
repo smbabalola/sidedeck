@@ -11,10 +11,11 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 from sidedeck.application.sd068_track_scheduler import session_for
 from sidedeck.application.sd069_day_trader_methods import IntradayBar
+from sidedeck.application.sd074_trusted_inputs import Envelope, SourceSigner
 
 STEP = timedelta(minutes=5)
 FIELDS = ("open", "high", "low", "close")
@@ -29,6 +30,16 @@ class FiveMinuteDataError(ValueError):
 class FiveMinuteBundle:
     bars: tuple[IntradayBar, ...]
     report: Mapping[str, Any]
+    provenance_envelope: Envelope
+
+
+class FiveMinuteProvider(Protocol):
+    """Local fixture/provider parser contract. Implementations must not acquire data here."""
+
+    source_id: str
+
+    def normalize(self, payload: Any, *, symbol: str,
+                  instrument_id: int) -> Sequence[Mapping[str, Any]]: ...
 
 
 def _decimal(value: Any, label: str) -> Decimal:
@@ -57,7 +68,8 @@ def _stamp(value: Any) -> datetime:
 
 def validate_five_minute_session(
     rows: Sequence[Mapping[str, Any]], *, symbol: str, instrument_id: int,
-    session_day: date, ingested_at: datetime, max_ingestion_lag: timedelta = timedelta(minutes=2),
+    session_day: date, ingested_at: datetime, signer: SourceSigner,
+    max_ingestion_lag: timedelta = timedelta(minutes=2),
 ) -> FiveMinuteBundle:
     """Validate exactly one complete XNYS session of normalized bid/ask bars.
 
@@ -82,6 +94,8 @@ def validate_five_minute_session(
         stamp += STEP
     if not rows:
         raise FiveMinuteDataError("empty session")
+    if signer.role != "research_pipeline":
+        raise FiveMinuteDataError("five-minute provenance requires a research source signer")
 
     parsed: dict[datetime, IntradayBar] = {}
     source_contract: tuple[str, ...] | None = None
@@ -153,6 +167,8 @@ def validate_five_minute_session(
         raise FiveMinuteDataError("session bundle is future-dated or stale")
     if source_contract is None:
         raise FiveMinuteDataError("session has no source provenance")
+    if signer.source_id != source_contract[0]:
+        raise FiveMinuteDataError("provenance signer does not match the declared source")
     canonical = json.dumps({"symbol": symbol, "instrument_id": instrument_id,
                             "session": session_day.isoformat(), "source": source_contract,
                             "rows": canonical_rows}, sort_keys=True, separators=(",", ":"))
@@ -173,7 +189,26 @@ def validate_five_minute_session(
         "price_basis": "BID_ASK_MIDPOINT_RESEARCH_ONLY",
         "strategy_admission_eligible": False, "broker_execution": "DISABLED",
     }
-    return FiveMinuteBundle(ordered, report)
+    envelope = signer.seal(report)
+    return FiveMinuteBundle(ordered, report, envelope)
+
+
+def ingest_provider_fixture(provider: FiveMinuteProvider, payload: Any, *, symbol: str,
+                            instrument_id: int, session_day: date, ingested_at: datetime,
+                            signer: SourceSigner,
+                            max_ingestion_lag: timedelta = timedelta(minutes=2)
+                            ) -> FiveMinuteBundle:
+    """Normalize one local fixture through a provider plug-in, then validate and seal it."""
+    if provider.source_id != signer.source_id:
+        raise FiveMinuteDataError("provider parser and provenance signer identities differ")
+    try:
+        rows = provider.normalize(payload, symbol=symbol, instrument_id=instrument_id)
+    except Exception as exc:
+        raise FiveMinuteDataError("provider fixture parser refused the payload") from exc
+    return validate_five_minute_session(
+        rows, symbol=symbol, instrument_id=instrument_id, session_day=session_day,
+        ingested_at=ingested_at, signer=signer, max_ingestion_lag=max_ingestion_lag,
+    )
 
 
 def coverage_report(bundles: Sequence[FiveMinuteBundle]) -> dict[str, Any]:

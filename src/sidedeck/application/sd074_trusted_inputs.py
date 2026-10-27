@@ -133,6 +133,14 @@ class SourceSigner:
     def __init__(self, source: TrustedSource, clock: Callable[[], datetime] = _utc_now) -> None:
         self._source, self._clock = source, clock
 
+    @property
+    def source_id(self) -> str:
+        return self._source.source_id
+
+    @property
+    def role(self) -> str:
+        return self._source.role
+
     def seal(self, payload: Mapping[str, Any]) -> Envelope:
         issued = self._clock().astimezone(timezone.utc).isoformat()
         nonce = secrets.token_hex(16)

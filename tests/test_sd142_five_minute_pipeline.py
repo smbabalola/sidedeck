@@ -5,8 +5,21 @@ import pytest
 
 from sidedeck.application.sd068_track_scheduler import session_for
 from sidedeck.application.sd142_five_minute_pipeline import (
-    FiveMinuteDataError, coverage_report, validate_five_minute_session,
+    FiveMinuteDataError, coverage_report, ingest_provider_fixture,
+    validate_five_minute_session,
 )
+from sidedeck.application.sd074_trusted_inputs import SourceSigner, TrustedSource
+
+_SOURCE_KEY = b"five-minute-fixture-source-key-32-bytes-long"
+
+
+def validate(rows, *, day, ingested_at):
+    signer = SourceSigner(TrustedSource("fixture:test", "research_pipeline", _SOURCE_KEY),
+                          clock=lambda: ingested_at)
+    return validate_five_minute_session(
+        rows, symbol="MSFT", instrument_id=1004, session_day=day,
+        ingested_at=ingested_at, signer=signer,
+    )
 
 
 def rows_for(day: date):
@@ -36,15 +49,14 @@ def rows_for(day: date):
 ])
 def test_complete_session_uses_exchange_calendar_and_dst(day, expected_count, early):
     rows, session = rows_for(day)
-    bundle = validate_five_minute_session(
-        rows, symbol="MSFT", instrument_id=1004,
-        session_day=day, ingested_at=session.close_utc + timedelta(minutes=1),
-    )
+    bundle = validate(rows, day=day, ingested_at=session.close_utc + timedelta(minutes=1))
     assert len(bundle.bars) == expected_count
     assert bundle.report["early_close"] is early
     assert bundle.report["strategy_admission_eligible"] is False
     assert bundle.bars[0].open == Decimal("100.05")
     assert len(bundle.report["data_version_sha256"]) == 64
+    assert bundle.provenance_envelope.source_id == "fixture:test"
+    assert len(bundle.provenance_envelope.mac) == 64
 
 
 @pytest.mark.parametrize("mutation,match", [
@@ -61,32 +73,52 @@ def test_bundle_rejects_gaps_duplicates_spread_and_unsupported_provenance(mutati
     rows, session = rows_for(day)
     mutation(rows)
     with pytest.raises(FiveMinuteDataError, match=match):
-        validate_five_minute_session(rows, symbol="MSFT", instrument_id=1004,
-                                     session_day=day,
-                                     ingested_at=session.close_utc + timedelta(minutes=1))
+        validate(rows, day=day, ingested_at=session.close_utc + timedelta(minutes=1))
 
 
 def test_bundle_rejects_stale_ingestion_and_naive_bar_time():
     day = date(2026, 10, 26)
     rows, session = rows_for(day)
     with pytest.raises(FiveMinuteDataError, match="stale"):
-        validate_five_minute_session(rows, symbol="MSFT", instrument_id=1004,
-                                     session_day=day,
-                                     ingested_at=session.close_utc + timedelta(minutes=5))
+        validate(rows, day=day, ingested_at=session.close_utc + timedelta(minutes=5))
     rows[0]["start"] = "2026-10-26T09:30:00"
     with pytest.raises(FiveMinuteDataError, match="timezone"):
-        validate_five_minute_session(rows, symbol="MSFT", instrument_id=1004,
-                                     session_day=day,
-                                     ingested_at=session.close_utc + timedelta(minutes=1))
+        validate(rows, day=day, ingested_at=session.close_utc + timedelta(minutes=1))
 
 
 def test_coverage_report_keeps_research_only_status():
     day = date(2026, 10, 26)
     rows, session = rows_for(day)
-    bundle = validate_five_minute_session(
-        rows, symbol="MSFT", instrument_id=1004, session_day=day,
-        ingested_at=session.close_utc + timedelta(minutes=1),
-    )
+    bundle = validate(rows, day=day, ingested_at=session.close_utc + timedelta(minutes=1))
     report = coverage_report([bundle])
     assert report["session_count"] == 1
     assert report["strategy_admission_eligible"] is False
+
+
+def test_provider_fixture_adapter_is_pluggable_and_provenance_sealed():
+    day = date(2026, 10, 26)
+    rows, session = rows_for(day)
+
+    class FixtureProvider:
+        source_id = "fixture:test"
+
+        def normalize(self, payload, *, symbol, instrument_id):
+            assert symbol == "MSFT" and instrument_id == 1004
+            return payload
+
+    ingested_at = session.close_utc + timedelta(minutes=1)
+    signer = SourceSigner(TrustedSource("fixture:test", "research_pipeline", _SOURCE_KEY),
+                          clock=lambda: ingested_at)
+    bundle = ingest_provider_fixture(
+        FixtureProvider(), rows, symbol="MSFT", instrument_id=1004,
+        session_day=day, ingested_at=ingested_at, signer=signer,
+    )
+    assert bundle.provenance_envelope.payload["data_version_sha256"] == \
+        bundle.report["data_version_sha256"]
+
+    with pytest.raises(FiveMinuteDataError, match="identities differ"):
+        ingest_provider_fixture(
+            FixtureProvider(), rows, symbol="MSFT", instrument_id=1004,
+            session_day=day, ingested_at=ingested_at,
+            signer=SourceSigner(TrustedSource("other:source", "research_pipeline", _SOURCE_KEY)),
+        )
