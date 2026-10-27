@@ -449,7 +449,6 @@ def test_from_document_is_strict():
       "expires_at": datetime(2026, 11, 8, 23, 0, tzinfo=UTC)}, "full exchange session"),
     ({"tracks": ()}, "at least one track"),
     ({"tracks": (_budget(), _budget())}, "duplicate track"),
-    ({"tracks": (_budget(track="DAY"),)}, "DAY"),
     ({"tracks": (_budget(virtual_capital=Decimal("1200")),)}, "1000"),
     ({"tracks": (_budget(max_position_notional=Decimal("600")),)}, "position"),
     ({"tracks": (_budget(max_new_entries_per_day=5),)}, "entries"),
@@ -473,6 +472,15 @@ def test_from_document_is_strict():
 def test_policy_scope_violations_are_refused(changes, message):
     with pytest.raises(PolicyRefused, match=message):
         _policy(**changes)
+
+
+def test_day_track_is_supported_but_still_requires_independent_admission():
+    day = _budget(track="DAY")
+    policy = _policy(
+        tracks=(day,),
+        strategies=(StrategyScope("day_orb", "1.0.0", "DAY", "SD022.md", EVIDENCE_SHA),),
+    )
+    assert policy.budget("DAY") == day
 
 
 # --- SD-064 grant binding (F1) ---------------------------------------------------------------

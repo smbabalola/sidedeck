@@ -342,18 +342,18 @@ pilot or change its reviewed execution behaviour. eToro Real is excluded permane
 
 | Requirement | Status |
 |---|---|
-| Signed autonomous policy (Demo only, ≤ 7 days, ≤ USD 1000, SWING/POSITION) | VERIFIED offline (SD-063) |
+| Signed autonomous policy (Demo only, ≤ 7 days, ≤ USD 1000, DAY/SWING/POSITION) | VERIFIED offline (SD-063; execution still unreleased) |
 | Grant re-verified on every call; runtime clock only | VERIFIED offline |
 | Strategy evidence pinned by owner-signed SHA-256; decision engine run internally | VERIFIED offline |
 | Exposure, cash, equity, loss limits from the ledger | VERIFIED offline |
 | Concurrency (`BEGIN IMMEDIATE`), single-use references, kill-switch (entries only) | VERIFIED offline |
 | Tamper-evident ledger; crash/tamper recovery quarantines, never trusts anchored rows | VERIFIED offline |
-| Authenticated signals/quotes/fills (sealed envelopes, roles, replay protection) | IMPLEMENTED offline (SD-074); broker adapters pending |
+| Authenticated signals/quotes/fills (sealed envelopes, roles, replay protection) | VERIFIED offline (SD-074 + SD-108 adapters) |
 | Unknown outcomes settled only by sealed broker reconciliation evidence | IMPLEMENTED offline |
 | Protective-exit authority after expiry/revocation (reduce-only) | IMPLEMENTED offline |
 | Incident report and runbook | IMPLEMENTED (`docs/SD074_OPERATOR_INCIDENT_RUNBOOK.md`) |
 | Off-machine ledger/revocation anchoring | Verification building block IMPLEMENTED offline (`sd074_external_anchor`); real write-once remote store and wiring BLOCKED (owner provisioning) |
-| SD-064 grants wired into the Demo order transport; send-time caps | BLOCKED until the SD-058 pilot completes and the transport is re-locked |
+| SD-064 grants wired into the Demo order transport; send-time caps | VERIFIED in offline SD-107 simulator; production HTTP transport remains locked |
 | Independent review of the full policy-to-transport lifecycle | BLOCKED on the wiring above |
 | Owner release of a bounded autonomous Demo operating period | BLOCKED_OWNER |
 
@@ -376,10 +376,10 @@ capital, permission or schedule controls.
 
 ## 16. Integration-first: one operational trading pipeline (owner directive 2026-10-26)
 
-**Paused engineering workstream (owner directive 2026-10-27):** this integration remains the
-long-term target, but further gateway feature work is paused while the Day Trader module is
-completed on an isolated branch. Keep the existing autonomous execution draft PR open and
-unmerged. Continue to preserve every release, data and admission gate below.
+**Current offline engineering workstream (owner directive 2026-10-27):** the Day Trader module is
+now connected to the policy-bound offline Demo gateway through SD-122/SD-123. Production broker
+release remains separately blocked; keep the autonomous execution draft PR open and unmerged while
+preserving every data, admission, review and owner-release gate below.
 
 The former engineering priority was to integrate the existing components into one pipeline —
 MARKET DATA → SCANNER → STRATEGIES → AI AGENTS → DECISION ENGINE → RISK ENGINE → PORTFOLIO

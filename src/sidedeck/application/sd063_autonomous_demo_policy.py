@@ -15,9 +15,8 @@ Rules (all fail closed):
   still call ``UnlockAuthority.authorize_request(write=True, reference_id=proposal.reference_id)``
   before sending, which enforces the signed request/write caps and single-use references.
 * **Scope:** eToro Demo only (Real permanently excluded), owner principal, window <= 7 days that
-  contains a full XNYS session, SWING/POSITION only (DAY stays BLOCKED_EXTERNAL), total virtual
-  capital <= USD 1000, explicit instrument mappings, non-empty protected baseline set that can
-  never be in scope.
+  contains a full XNYS session, DAY/SWING/POSITION tracks, total virtual capital <= USD 1000,
+  explicit instrument mappings, non-empty protected baseline set that can never be in scope.
 * **Decision:** SD-063 runs the SD-071 decision engine itself; callers cannot hand it a
   decision. A strategy counts only if it is named in the policy **and** its evidence file under
   ``evidence_root`` hashes to the SHA-256 the owner signed **and** an ADMITTED admission cites it.
@@ -68,7 +67,7 @@ from sidedeck.application.sd072_track_risk_limits import (
 SCHEMA = "sidedeck-autonomous-demo-policy/2"
 BROKER = "etoro-demo"
 OWNER_PRINCIPAL = "owner@sidedeck"
-AUTONOMOUS_TRACKS = ("SWING", "POSITION")
+AUTONOMOUS_TRACKS = ("DAY", "SWING", "POSITION")
 MAX_POLICY_WINDOW = timedelta(days=7)
 MAX_TOTAL_CAPITAL = Decimal("1000")
 MAX_LIMIT_PREMIUM = Decimal("0.005")
@@ -233,8 +232,6 @@ class AutonomousDemoPolicy:
             raise PolicyRefused("duplicate track budget")
         total = ZERO
         for b in self.tracks:
-            if b.track == "DAY":
-                raise PolicyRefused("DAY track is BLOCKED_EXTERNAL without approved intraday data")
             if b.track not in AUTONOMOUS_TRACKS:
                 raise PolicyRefused(f"unknown track {b.track}")
             capital = _decimal(b.virtual_capital, "virtual_capital")
