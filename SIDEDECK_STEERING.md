@@ -6,7 +6,7 @@
 ## 0. How to start every Codex session
 
 1. Read `AGENTS.md`, **this file**, `TODO.md`, `README.md`, relevant docs and latest CI. Precedence: explicit current owner instruction > non-negotiable safety rules in `AGENTS.md`/this charter > `TODO.md` > historical docs. Resolve conflicts conservatively, document them; never silently bypass safety.
-2. Check branch, HEAD, working tree, untracked files, local toolchains, pending commits and GitHub Actions. Work only in the **nested** SideDeck checkout on `feat/p5-agent-adapters` or an approved worktree. The outer `feat/p2` worktree is separate. Never discard uncommitted or untracked work.
+2. Check branch, HEAD, working tree, untracked files, local toolchains, pending commits and GitHub Actions. For the current autonomous eToro Demo engineering loop, the explicitly selected isolated worktree is `codex/sd122-etoro-data-autodemo-20261027` (§20); otherwise work only in an approved nested SideDeck checkout (historically `feat/p5-agent-adapters`). The outer `feat/p2` worktree is separate. Never discard uncommitted or untracked work.
 3. Read the top **Current execution board** in `TODO.md`. Select the highest-priority **READY** items with no unmet dependencies. Create a batch of 3–8 compatible tasks rather than a one-issue cycle.
 4. Execute all safe tasks through implementation, deterministic tests, independent checks, docs, commits, push, GitHub CI and remediation. When blocked, record precise evidence and pivot to the next unblocked item. Do **not** stop a batch because one provider, dataset, permission or workstream is unavailable.
 5. Report at meaningful milestones and at the end; do not ask for routine architecture, naming, testing, refactoring or synthetic-data decisions that can be resolved under this charter. Explicit owner approvals defined below are the only deliberate stops.
@@ -132,7 +132,9 @@ Return (1) branch/HEAD/commits and CI link/status, (2) workstream-by-workstream 
 
 ## 10. First Demo Trade Completion and Autonomous Execution Transition (owner directive 2026-10-22)
 
-**Highest-priority current milestone:** SideDeck's first genuine broker-connected eToro **Demo**
+**Historical pilot planning snapshot only:** the owner-authorised 26 October Demo POST, manual owner close and 27 October `/pnl` MATCHED reconciliation are the actual current evidence in §20 and TODO SD-105. Never replay a signed 23 October pilot intent, restart its consumed release or clear HALTED from this historical section.
+
+**Highest-priority milestone at the time of the 22 October directive:** SideDeck's first genuine broker-connected eToro **Demo**
 buy-and-close lifecycle — the reviewed SD-053 MSFT pilot — executed, reconciled and
 independently audited. Tracked as SD-055…SD-063 at the top of `TODO.md`.
 
