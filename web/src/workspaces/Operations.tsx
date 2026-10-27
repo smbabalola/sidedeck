@@ -31,7 +31,7 @@ export function Portfolio() {
     </Panel>
     <div className="grid gap-4 lg:grid-cols-2">
       <Panel title="SideDeck orders, fills and exits" provenance="UNAVAILABLE">
-        <p className="text-sm text-muted">No SideDeck-owned Demo orders exist yet. The first one is the owner-run MSFT pilot; its order, fill, close and reconciliation evidence will appear here with full lineage once recorded.</p>
+        <p className="text-sm text-muted">This read-only panel has no broker order-history feed. The earlier owner-supervised MSFT Demo pilot was manually closed and a separate authorised portfolio check confirmed it was no longer open; this screen does not establish its historical close price or realised P&L. No new position or broker-fill history is inferred from a saved baseline.</p>
       </Panel>
       <Panel title="Simulated track ledgers" provenance={ledgers.state === "ready" && ledgers.data.status === "LOADED" ? "SIMULATION" : "UNAVAILABLE"}
         subtitle="Local simulation only (fills are simulated, not broker fills). Each track keeps separate virtual capital.">
