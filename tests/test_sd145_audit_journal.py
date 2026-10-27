@@ -96,6 +96,18 @@ def test_anchor_outage_rolls_back_local_event_and_fails_closed(tmp_path):
     journal.close()
 
 
+def test_audit_rejects_secret_and_account_fields_before_persistence(tmp_path):
+    journal = AuditJournal(tmp_path / "audit.sqlite", stream_id="privacy",
+                           anchor=WriteOnceDirectoryAnchor(tmp_path / "remote"),
+                           device_key=KEY)
+    journal.initialize(NOW)
+    for payload in ({"api_key": "redacted"}, {"nested": [{"account_id": "redacted"}]}):
+        with pytest.raises(AuditJournalError, match="credential/account"):
+            journal.append("GRANT", entity_id="g1", payload=payload, at=NOW)
+    assert journal.verify() == (0, GENESIS)
+    journal.close()
+
+
 def test_two_writers_serialize_against_sqlite_and_remote_compare_append(tmp_path):
     path = tmp_path / "audit.sqlite"
     remote = WriteOnceDirectoryAnchor(tmp_path / "remote")

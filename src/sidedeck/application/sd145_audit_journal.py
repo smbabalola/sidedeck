@@ -23,6 +23,8 @@ from sidedeck.application.sd074_external_anchor import Checkpoint, ExternalAncho
 _HEX = re.compile(r"[0-9a-f]{64}")
 _EVENTS = frozenset({"POLICY", "GRANT", "GRANT_USE", "ORDER_RESERVATION", "SEND",
                      "RECONCILIATION", "REVOCATION"})
+_FORBIDDEN_KEYS = frozenset({"api_key", "api_secret", "secret_key", "access_token",
+                             "refresh_token", "private_key", "credential", "account_id"})
 
 
 class AuditJournalError(ValueError):
@@ -126,6 +128,8 @@ class AuditJournal:
             raise AuditJournalError("unsupported audit event or entity identity")
         if at.tzinfo is None or at.utcoffset() is None:
             raise AuditJournalError("audit timestamp must be timezone-aware")
+        if self._contains_secret_field(payload):
+            raise AuditJournalError("audit payload contains a forbidden credential/account field")
         try:
             canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"),
                                            ensure_ascii=False, allow_nan=False)
@@ -156,6 +160,15 @@ class AuditJournal:
         except Exception:
             self._db.rollback()
             raise
+
+    @classmethod
+    def _contains_secret_field(cls, value: Any) -> bool:
+        if isinstance(value, dict):
+            return any((isinstance(key, str) and key.lower() in _FORBIDDEN_KEYS)
+                       or cls._contains_secret_field(item) for key, item in value.items())
+        if isinstance(value, (list, tuple)):
+            return any(cls._contains_secret_field(item) for item in value)
+        return False
 
     def verify(self) -> tuple[int, str]:
         """Verify local rows against the authenticated external checkpoint head."""
