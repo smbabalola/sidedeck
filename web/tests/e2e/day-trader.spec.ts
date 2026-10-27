@@ -20,6 +20,24 @@ test("Day Trader desk distinguishes offline research, virtual configuration and 
   expect(overflow).toBe(false);
 });
 
+test("Day Trader desk supports watchlist inspection without claiming broker orders", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/#/day-trader");
+  const watchlist = page.getByRole("region", { name: "Candidate watchlist" });
+  const inspection = page.getByRole("region", { name: "Selected candidate" });
+  await expect(watchlist.getByRole("table", { name: "Day Trader research candidate watchlist" })).toBeVisible();
+  await expect(watchlist.getByText("SYNTH", { exact: true })).toBeVisible();
+  await expect(inspection.getByText("WATCHLIST")).toBeVisible();
+  await expect(inspection.getByText("Price chart unavailable")).toBeVisible();
+  await expect(inspection.getByText("Fixture/research only")).toBeVisible();
+  await page.getByLabel("Filter research candidates").fill("NOT-FOUND");
+  await expect(inspection.getByText(/No candidates match your filter/)).toBeVisible();
+  await expect(watchlist.getByRole("row")).toHaveCount(2); // header and no-matches row
+  await page.getByLabel("Filter research candidates").fill("SYNTH");
+  await expect(inspection.getByText("Price chart unavailable")).toBeVisible();
+  await expect(page.getByRole("button", { name: /buy|sell|order|close position|submit|execute|allocate/i })).toHaveCount(0);
+});
+
 test("Day Trader symbol filter keeps plan decisions research-only", async ({ page }) => {
   await mockApi(page);
   await page.goto("/#/day-trader");
