@@ -546,6 +546,19 @@ class EtoroDemoDesk:
         self._outbox.record_fill(intent_id, live.units)
         return live
 
+    def accepted_open_snapshot_identity(self, reference_id: str) -> sqlite3.Row:
+        """Return durable accepted-open identity for signed `/pnl` authorization.
+
+        This read-only preflight lets the signed portfolio-read service reject
+        unknown, already-filled, or unaccepted references before consuming a
+        broker read. Recovery still goes through `recover_open_from_snapshot`.
+        """
+        row = self._lineage.order(reference_id)
+        if (row["kind"] != "OPEN" or row["state"] != "ACCEPTED"
+                or row["order_id"] is None or Decimal(row["filled_units"]) != ZERO):
+            raise EtoroDemoOrderError("snapshot recovery requires a durably accepted open")
+        return row
+
     def recover(self) -> dict[str, str]:
         """After restart: look up every unresolved open by referenceId. Never resubmits."""
         results = {}

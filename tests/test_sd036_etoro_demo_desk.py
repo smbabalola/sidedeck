@@ -16,6 +16,7 @@ from sidedeck.application.sd036_etoro_demo_desk import (
     EtoroDemoLineage, OfflineEtoroDemoSimulator, RateBudgetExceeded, bucket_for, close_scope,
     open_scope, rehearse,
 )
+from sidedeck.application.sd137_pnl_recovery import recover_from_pnl
 from sidedeck.domain import etoro_demo_orders as orders_module
 from sidedeck.domain.etoro_demo import EtoroDemoDataError, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import BaselinePosition, EtoroDemoBookError
@@ -309,6 +310,33 @@ def test_recovery_survives_restart(h):
     h.open_stores()
     assert h.controls.is_halted()
     assert h.desk.recover() == {request.reference_id: "FILLED"}
+
+
+def test_sd137_signed_pnl_recovery_persists_position_and_outbox_fill(h):
+    request, state = h.open()
+    assert state == "ACCEPTED"
+
+    class ReadAuthority:
+        def authorize_request(self, **kwargs):
+            assert kwargs["write"] is False
+            return type("Grant", (), {"grant_id": "test-grant"})()
+
+    class PnlRoute:
+        def send(self, method, path, **kwargs):
+            assert method == "GET" and path == orders_module.DEMO_PNL_PATH
+            return h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+
+    result = recover_from_pnl(
+        route=PnlRoute(), authority=ReadAuthority(), document={}, signature="signed",
+        subject_digest="a" * 64, reference_id="read-once-1",
+        open_reference_id=request.reference_id, desk=h.desk, now=h.now,
+    )
+    row = h.lineage.order(request.reference_id)
+    owned = h.lineage.owned(result.position_id)
+    assert result.classification == "OWNED_POSITION"
+    assert row["state"] == "RECONCILED_FILLED_BY_SNAPSHOT"
+    assert owned is not None and owned["order_id"] == row["order_id"]
+    assert h.outbox.get(row["intent_id"])["state"] == "FILLED_SIMULATED"
 
 
 def test_rejected_and_partial_outcomes(h):
