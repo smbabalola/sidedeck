@@ -295,11 +295,78 @@ def test_reference_reuse_only_with_identical_body(keys, tmp_path):
     reference = str(uuid.uuid4())
     body = DemoOpenRequest(reference, INSTRUMENT, Decimal("0.4"), Decimal("100.5")).body()
     transport.send("POST", DEMO_OPEN_PATH, reference_id=reference, body=body)
-    with pytest.raises(EtoroDemoTransportError, match="SIGNED_REQUEST_CAP"):   # 1 signed open
+    with pytest.raises(EtoroDemoTransportError, match="DURABLE_WRITE_REFERENCE_ALREADY_RESERVED"):
         transport.send("POST", DEMO_OPEN_PATH, reference_id=reference, body=body)
     with pytest.raises(EtoroDemoTransportError, match="SIGNED_INTENT"):
         transport.send("POST", DEMO_OPEN_PATH, reference_id=reference, body={**body, "units": 0.3})
     assert len(opener.requests) == 1
+
+
+def test_sd138_write_reference_survives_restart_with_no_second_post(keys, tmp_path):
+    sim = OfflineEtoroDemoSimulator(fill_price=Decimal("100.25"))
+    sim.baseline_rows = list(SYNTHETIC_BASELINE_ROWS)
+    release = release_for(keys, tmp_path)
+    ledger = str(tmp_path / "write-refs.sqlite3")
+    reference = str(uuid.uuid4())
+    body = DemoOpenRequest(reference, INSTRUMENT, Decimal("0.4"), Decimal("100.5")).body()
+    first_opener = SimOpener(sim)
+    first = EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
+                                   ledger_path=ledger, opener=first_opener,
+                                   test_only_opener=True)
+    first.send("POST", DEMO_OPEN_PATH, reference_id=reference, body=body)
+    assert len(first_opener.requests) == 1
+    first.close()
+
+    second_opener = SimOpener(sim)
+    second = EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
+                                    ledger_path=ledger, opener=second_opener,
+                                    test_only_opener=True)
+    with pytest.raises(EtoroDemoTransportError, match="DURABLE_WRITE_REFERENCE_ALREADY_RESERVED"):
+        second.send("POST", DEMO_OPEN_PATH, reference_id=reference, body=body)
+    assert second_opener.requests == []
+    second.close()
+
+
+def test_sd138_lost_post_response_cannot_be_replayed_after_restart(keys, tmp_path):
+    sim = OfflineEtoroDemoSimulator(fill_price=Decimal("100.25"))
+    sim.baseline_rows = list(SYNTHETIC_BASELINE_ROWS)
+    release = release_for(keys, tmp_path)
+    ledger = str(tmp_path / "lost-post-refs.sqlite3")
+    reference = str(uuid.uuid4())
+    body = DemoOpenRequest(reference, INSTRUMENT, Decimal("0.4"), Decimal("100.5")).body()
+    first_opener = SimOpener(sim, fault="timeout_after")
+    first = EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
+                                   ledger_path=ledger, opener=first_opener,
+                                   test_only_opener=True)
+    with pytest.raises(TransportOutcomeUnknown):
+        first.send("POST", DEMO_OPEN_PATH, reference_id=reference, body=body)
+    assert len(first_opener.requests) == 1
+    first.close()
+
+    second_opener = SimOpener(sim)
+    second = EtoroDemoHttpTransport(api_key=API, user_key=USER, release=release,
+                                    ledger_path=ledger, opener=second_opener,
+                                    test_only_opener=True)
+    with pytest.raises(EtoroDemoTransportError, match="DURABLE_WRITE_REFERENCE_ALREADY_RESERVED"):
+        second.send("POST", DEMO_OPEN_PATH, reference_id=reference, body=body)
+    assert second_opener.requests == []
+    second.close()
+
+
+def test_sd138_write_reservations_are_atomic_across_two_sqlite_handles(keys, tmp_path):
+    # The private quota/ref ledger is tested directly; no transport or broker calls.
+    release = release_for(keys, tmp_path)
+    path = str(tmp_path / "parallel-write-refs.sqlite3")
+    first = transport_module._ReleaseLedger(path, release)
+    second = transport_module._ReleaseLedger(path, release)
+    ref = str(uuid.uuid4())
+    first.reserve("open", reference_id=ref, body_sha256="a" * 64)
+    with pytest.raises(EtoroDemoTransportError, match="DURABLE_WRITE_REFERENCE_ALREADY_RESERVED"):
+        second.reserve("open", reference_id=ref, body_sha256="a" * 64)
+    with pytest.raises(EtoroDemoTransportError, match="SIGNED_REQUEST_CAP"):
+        second.reserve("open", reference_id=str(uuid.uuid4()), body_sha256="b" * 64)
+    first.close()
+    second.close()
 
 
 @pytest.mark.parametrize("fault,method,expected", [
