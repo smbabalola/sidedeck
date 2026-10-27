@@ -77,3 +77,70 @@ def recover_from_pnl(*, route: PnlReadRoute, authority: UnlockAuthority,
         return PnlRecoveryResult("UNRESOLVED", snapshot, None, order_id, grant.grant_id)
     return PnlRecoveryResult("OWNED_POSITION", snapshot, position.position_id,
                              order_id, grant.grant_id)
+
+@dataclass(frozen=True)
+class PnlCloseRecoveryResult:
+    """Observed account state after unknown CLOSE, never close-execution proof."""
+
+    classification: str
+    snapshot: DemoPortfolioSnapshot
+    position_id: int
+    close_order_id: int | None
+    grant_id: str
+    realised_pnl_status: str = "UNVERIFIED_BROKER_CLOSE_EXECUTION_AND_PRICE"
+
+
+def recover_close_from_pnl(*, route: PnlReadRoute, authority: UnlockAuthority,
+                           document: Any, signature: str, subject_digest: str,
+                           reference_id: str, close_reference_id: str,
+                           desk: EtoroDemoDesk,
+                           now: datetime | None = None) -> PnlCloseRecoveryResult:
+    """One independently signed, capped GET to examine an UNKNOWN close outcome.
+
+    Checks durable SideDeck-owned CLOSE lineage *before* consuming the grant.
+    A missing position shows only that it is absent now; /pnl cannot establish
+    whether our CLOSE was executed or someone else closed it. Never unblocks
+    another POST or claims realised P&L. Existing desk reconciles the entire
+    protected portfolio and HALTs on discrepancies before changing lineage.
+    """
+    if not reference_id or not close_reference_id:
+        raise PnlRecoveryRefused("close recovery identity is invalid")
+    try:
+        row = desk.unknown_close_snapshot_identity(close_reference_id)
+    except (EtoroDemoOrderError, EtoroDemoBookError) as exc:
+        raise PnlRecoveryRefused(
+            "close recovery requires an unresolved SideDeck-owned CLOSE"
+        ) from exc
+    position_id = int(row["position_id"])
+    close_order_id = None if row["order_id"] is None else int(row["order_id"])
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise PnlRecoveryRefused("recovery time must be timezone-aware")
+    grant: UnlockGrant = authority.authorize_request(
+        document=document, signature=signature, subject_digest=subject_digest,
+        write=False, reference_id=reference_id, now=moment,
+    )
+    require_demo_route("GET", DEMO_PNL_PATH)
+    payload = route.send("GET", DEMO_PNL_PATH, reference_id=reference_id)
+    snapshot = parse_demo_portfolio(payload, observed_at=moment)
+    snapshot.require_fresh(moment)
+    try:
+        state = desk.recover_close_from_snapshot(
+            close_reference_id, snapshot=snapshot, now=moment,
+        )
+    except (EtoroDemoOrderError, EtoroDemoBookError):
+        return PnlCloseRecoveryResult(
+            "UNRESOLVED", snapshot, position_id, close_order_id, grant.grant_id,
+        )
+    mapping = {
+        "RECONCILED_NOT_EXECUTED": "NO_REDUCTION_OBSERVED",
+        "RECONCILED_PARTIAL_BY_SNAPSHOT": "POSITION_REDUCED_EXECUTOR_UNVERIFIED",
+        "RECONCILED_CLOSED_BY_SNAPSHOT": "POSITION_ABSENT_EXECUTOR_UNVERIFIED",
+    }
+    if state not in mapping:
+        return PnlCloseRecoveryResult(
+            "UNRESOLVED", snapshot, position_id, close_order_id, grant.grant_id,
+        )
+    return PnlCloseRecoveryResult(
+        mapping[state], snapshot, position_id, close_order_id, grant.grant_id,
+    )
