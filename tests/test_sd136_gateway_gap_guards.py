@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from decimal import Decimal
 
 import pytest
 
@@ -11,7 +12,7 @@ from sidedeck.application.sd103_trading_pipeline import (
     ExecutionNotReleased, require_route,
 )
 from sidedeck.application.sd107_demo_gateway import (
-    BROKER_ROUTES, GatewayRefused, OfflineDemoGateway,
+    BROKER_ROUTES, GatewayRefused, OfflineDemoGateway, OfflineDemoSimulator,
 )
 from sidedeck.domain.etoro_demo_orders import (
     DEMO_OPEN_PATH, RealExecutionExcluded, require_demo_route,
@@ -31,6 +32,12 @@ def test_only_offline_simulator_is_admissible_to_the_existing_policy_gateway() -
         OfflineDemoGateway(
             policy=None, runtime=None, authority=None,
             grant_document={}, grant_signature="", simulator=object(),
+            reconciliation_signer=None, anchor_keeper=None,
+        )
+    with pytest.raises(GatewayRefused, match="externally anchored audit journal is required"):
+        OfflineDemoGateway(
+            policy=None, runtime=None, authority=None, grant_document={}, grant_signature="",
+            simulator=OfflineDemoSimulator(fill_price=Decimal("1")),
             reconciliation_signer=None, anchor_keeper=None,
         )
 

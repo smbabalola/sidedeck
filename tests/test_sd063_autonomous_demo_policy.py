@@ -38,6 +38,7 @@ from sidedeck.application.sd074_external_anchor import (
 from sidedeck.application.sd107_demo_gateway import (
     BROKER_ROUTES, GatewayRefused, OfflineDemoGateway, OfflineDemoSimulator,
 )
+from sidedeck.application.sd145_audit_journal import AuditJournal
 from sidedeck.application.sd070_research_signal import EvidenceRef, ResearchSignal
 from sidedeck.application.sd071_decision_engine import MarketContext, StrategyAdmission
 
@@ -200,7 +201,7 @@ def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | N
                      bid: str = "499.9", ask: str = "500",
                      protective_grant: tuple[dict[str, object], str] | None = None,
                      storage_path: Path | None = None, crash_after_open: bool = False,
-                     crash_after_close: bool = False):
+                     crash_after_close: bool = False, audit_outage: bool = False):
     quote_source = TrustedSource("gateway-quotes", "broker_quotes", b"q" * 40)
     recon_source = TrustedSource("gateway-recon", "broker_reconciliation", b"r" * 40)
     verifier = InputVerifier(SourceRegistry([quote_source, recon_source]),
@@ -216,6 +217,29 @@ def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | N
     anchor = AnchorKeeper(WriteOnceDirectoryAnchor(anchor_dir), b"a" * 40)
     if not list(anchor_dir.glob("*.json")):
         anchor.initialize(env.ledger, env.clock.now)
+    audit_backend = WriteOnceDirectoryAnchor(env.tmp / "gateway-audit-anchor")
+
+    class AuditAnchor:
+        unavailable = False
+
+        def history(self, ledger_id):
+            if self.unavailable:
+                raise OSError("offline fixture anchor outage")
+            return audit_backend.history(ledger_id)
+
+        def append(self, checkpoint):
+            if self.unavailable:
+                raise OSError("offline fixture anchor outage")
+            audit_backend.append(checkpoint)
+
+    audit_anchor = AuditAnchor()
+    audit_journal = AuditJournal(
+        env.tmp / f"gateway-audit-{uuid.uuid4().hex}.sqlite3",
+        stream_id=f"gateway-test-{uuid.uuid4().hex}", anchor=audit_anchor,
+        device_key=b"g" * 40,
+    )
+    audit_journal.initialize(env.clock.now)
+    audit_anchor.unavailable = audit_outage
     quote_signer = SourceSigner(quote_source, env.clock)
     gateway = OfflineDemoGateway(
         policy=env.policy, runtime=runtime, authority=env.authority,
@@ -226,6 +250,7 @@ def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | N
                                        crash_after_open=crash_after_open,
                                        crash_after_close=crash_after_close),
         reconciliation_signer=SourceSigner(recon_source, env.clock), anchor_keeper=anchor,
+        audit_journal=audit_journal,
         protective_grant=protective_grant, clock=env.clock,
     )
     quote = quote_signer.seal({
@@ -248,6 +273,12 @@ def test_sd107_offline_gateway_revalidates_grant_and_reconciles_sealed_fill(env)
     assert envelope.kind == "fill"
     assert len(env.authority._ledger.events()) >= 3  # runtime check + send + lookup
     assert BROKER_ROUTES["ETORO_DEMO"] == "NOT_RELEASED"
+    records = gateway._audit_journal.records()
+    lifecycle = [record.event_type for record in records
+                 if record.event_type in {"ORDER_RESERVATION", "SEND", "RECONCILIATION"}]
+    assert lifecycle == ["ORDER_RESERVATION", "SEND", "RECONCILIATION"]
+    assert {"POLICY", "GRANT", "GRANT_USE"}.issubset(
+        {record.event_type for record in records})
     replay_quote = quote_signer.seal({
         "canonical_id": MSFT, "bid": "499.9", "ask": "500",
         "quote_time": env.clock.now.isoformat(),
@@ -266,6 +297,21 @@ def test_sd107_offline_gateway_revalidates_grant_and_reconciles_sealed_fill(env)
     assert exit_envelope.kind == "fill"
     assert not env.ledger.open_positions()
     assert env.ledger.state().exits[plan.exits[0].reference_id].outcome == "FILLED"
+    records = gateway._audit_journal.records()
+    lifecycle = [record.event_type for record in records
+                 if record.event_type in {"ORDER_RESERVATION", "SEND", "RECONCILIATION"}]
+    assert lifecycle == ["ORDER_RESERVATION", "SEND", "RECONCILIATION",
+                         "ORDER_RESERVATION", "SEND", "RECONCILIATION"]
+
+
+def test_sd145_autonomous_gateway_requires_and_uses_available_audit_anchor(env):
+    gateway, quote, _ = _offline_gateway(env, audit_outage=True)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    with pytest.raises(GatewayRefused, match="audit evidence unavailable"):
+        gateway.submit_entry(proposal, quote=quote)
+    assert gateway._simulator.submitted_orders == 0
+    assert env.ledger.kill_switch_engaged()
 
 
 def test_sd107_revoked_grant_refuses_before_simulated_write(env):

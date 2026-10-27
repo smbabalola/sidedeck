@@ -7,6 +7,7 @@ off-machine anchoring, independent review and owner release are complete.
 """
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from sidedeck.application.sd074_trusted_inputs import (
     AuthenticatedRuntime, BrokerQuote, Envelope, SourceSigner,
 )
 from sidedeck.application.sd074_external_anchor import AnchorKeeper
+from sidedeck.application.sd145_audit_journal import AuditJournal
 from sidedeck.application.sd108_broker_adapters import (
     EtoroDemoReconciliationAdapter,
 )
@@ -286,18 +288,35 @@ class OfflineDemoGateway:
                  grant_document: dict[str, object], grant_signature: str,
                  simulator: OfflineDemoSimulator, reconciliation_signer: SourceSigner,
                  anchor_keeper: AnchorKeeper,
+                 audit_journal: AuditJournal | None = None,
                  protective_grant: tuple[dict[str, object], str] | None = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
         if type(simulator) is not OfflineDemoSimulator:
             raise GatewayRefused("only the offline simulator is accepted by this gateway")
+        if audit_journal is None:
+            raise GatewayRefused("externally anchored audit journal is required")
         if runtime.ledger.policy_digest != policy.digest():
             raise GatewayRefused("runtime ledger is bound to a different policy")
         self._policy, self._runtime, self._authority = policy, runtime, authority
         self._document, self._signature = grant_document, grant_signature
         self._protective_grant = protective_grant
         self._anchor_keeper = anchor_keeper
+        self._audit_journal = audit_journal
         self._simulator, self._clock = simulator, clock
         self._adapter = EtoroDemoReconciliationAdapter(reconciliation_signer)
+
+    def _audit(self, event_type: str, reference_id: str, *, payload: dict[str, object]) -> None:
+        try:
+            self._audit_journal.append(event_type, entity_id=reference_id,
+                                       payload=payload, at=self._clock())
+        except Exception as exc:
+            try:
+                self._runtime.ledger.trip_kill_switch(
+                    "AUDIT_ANCHOR_UNAVAILABLE", self._clock())
+            except Exception:
+                # The audit failure remains the primary refusal; no send follows it.
+                pass
+            raise GatewayRefused("external audit evidence unavailable; operation refused") from exc
 
     def _publish_before_send(self, now: datetime) -> None:
         """Publish every policy-ledger tail before a simulated broker request."""
@@ -334,6 +353,16 @@ class OfflineDemoGateway:
                 check_grant_binding(self._policy, grant, now.astimezone(timezone.utc))
         except (GrantRefused, PolicyRefused) as exc:
             raise GatewayRefused("signed grant refused") from exc
+        self._audit("POLICY", self._policy.policy_id,
+                    payload={"policy_digest": self._policy.digest(),
+                             "broker": self._policy.broker})
+        self._audit("GRANT", grant.grant_id,
+                    payload={"grant_digest": grant.digest(),
+                             "subject_digest": grant.subject_digest,
+                             "expires_at": grant.expires_at.isoformat()})
+        self._audit("GRANT_USE", reference_id,
+                    payload={"grant_id": grant.grant_id, "write": write,
+                             "protective": protective})
 
     def _validate_entry_at_send(self, proposal: EntryProposal, now: datetime,
                                 quotes: dict[str, BrokerQuote]) -> None:
@@ -405,11 +434,17 @@ class OfflineDemoGateway:
             raise GatewayRefused("duplicate send-time quote for an instrument")
         self._validate_entry_at_send(
             proposal, now, {item.canonical_id: item for item in verified_quotes})
+        self._audit("ORDER_RESERVATION", proposal.reference_id,
+                    payload={"action": "OPEN", "policy_digest": self._policy.digest(),
+                             "units": str(proposal.units),
+                             "instrument_id": proposal.etoro_instrument_id})
         request_id = str(uuid.UUID(hex=proposal.reference_id))
         request = DemoOpenRequest(request_id, proposal.etoro_instrument_id, proposal.units,
                                   proposal.limit_price)
         self._authorize(write=True, reference_id=proposal.reference_id)
         try:
+            self._audit("SEND", proposal.reference_id,
+                        payload={"action": "OPEN", "policy_digest": self._policy.digest()})
             accepted = self._simulator.open(request)
             try:
                 acceptance = self._adapter.parse_open_acceptance(accepted, request=request)
@@ -422,6 +457,9 @@ class OfflineDemoGateway:
                 raw, request=request, observed_at=self._clock(),
                 accepted_order_id=acceptance.order_id)
             self._runtime.resolve(envelope)
+            self._audit("RECONCILIATION", proposal.reference_id,
+                        payload={"action": "OPEN", "outcome": str(envelope.payload.get("outcome")),
+                                 "evidence_sha256": hashlib.sha256(envelope.canonical()).hexdigest()})
             self._publish_before_send(self._clock())
             return envelope
         except Exception:
@@ -456,6 +494,10 @@ class OfflineDemoGateway:
                 self._runtime.reconcile_unknown(envelope)
         else:
             self._runtime.resolve(envelope)
+        self._audit("RECONCILIATION", proposal.reference_id,
+                    payload={"action": "OPEN_RECOVERY", "outcome": str(outcome),
+                             "evidence_sha256": hashlib.sha256(
+                                 envelope.canonical()).hexdigest()})
         self._publish_before_send(self._clock())
         return envelope
 
@@ -518,6 +560,12 @@ class OfflineDemoGateway:
                                     proposal.etoro_instrument_id, proposal.units)
         self._authorize(write=True, reference_id=proposal.reference_id, protective=protective)
         try:
+            self._audit("ORDER_RESERVATION", proposal.reference_id,
+                        payload={"action": "CLOSE", "policy_digest": self._policy.digest(),
+                                 "units": str(proposal.units),
+                                 "instrument_id": proposal.etoro_instrument_id})
+            self._audit("SEND", proposal.reference_id,
+                        payload={"action": "CLOSE", "policy_digest": self._policy.digest()})
             accepted_payload, close_payload, fill_price = self._simulator.close(request)
             try:
                 acceptance: CloseAcceptance = parse_close_acceptance(
@@ -531,6 +579,9 @@ class OfflineDemoGateway:
                 close_payload, request=request, acceptance=acceptance,
                 observed_at=self._clock(), fill_price=fill_price)
             self._runtime.resolve(envelope)
+            self._audit("RECONCILIATION", proposal.reference_id,
+                        payload={"action": "CLOSE", "outcome": str(envelope.payload.get("outcome")),
+                                 "evidence_sha256": hashlib.sha256(envelope.canonical()).hexdigest()})
             self._publish_before_send(self._clock())
             return envelope
         except Exception:
@@ -568,6 +619,11 @@ class OfflineDemoGateway:
             self._runtime.reconcile_unknown(envelope)
         else:
             self._runtime.resolve(envelope)
+        self._audit("RECONCILIATION", proposal.reference_id,
+                    payload={"action": "CLOSE_RECOVERY",
+                             "outcome": str(envelope.payload.get("outcome")),
+                             "evidence_sha256": hashlib.sha256(
+                                 envelope.canonical()).hexdigest()})
         self._publish_before_send(self._clock())
         return envelope
 

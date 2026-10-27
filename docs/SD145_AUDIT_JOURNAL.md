@@ -11,13 +11,17 @@ must perform atomic compare-and-append.
 Construction has no remote side effects. `initialize()` explicitly publishes
 genesis. `append()` refuses if the local/external heads differ or the anchor is
 unavailable, and only returns after local commit and external checkpoint
-acknowledgement. The broker desk writes reservation and send events before its
-transport boundary and reconciliation evidence before local state mutation when a
-journal is configured. The still-locked autonomous route must require this journal
-before it can be released; the legacy supervised pilot path remains intact. The
-unlock authority can also be configured with the journal to anchor grant checks,
-grant-use, and revocation; the legacy local grant ledger remains for compatibility
-and does not itself satisfy SD-145 external anchoring.
+acknowledgement. The autonomous offline gateway now refuses construction without
+an initialized journal. It anchors policy/grant identity and grant-use, then order
+reservation and send before calling its simulator; it anchors resulting fill or
+reconciliation evidence before returning. Restart recovery records reconciliation
+without resending. Any journal failure trips the durable policy kill switch and
+prevents a simulator send. This remains a simulation integration and provides no
+broker transport capability. The legacy supervised pilot path remains intact.
+`UnlockAuthority` can also be configured with the journal to anchor grant issue,
+use and revocation events; that revocation wiring remains optional until the
+autonomous deployment composes it with the same externally provisioned journal.
+The legacy local grant ledger alone does not satisfy SD-145 external anchoring.
 
 ## Failure and recovery
 
