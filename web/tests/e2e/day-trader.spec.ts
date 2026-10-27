@@ -27,7 +27,7 @@ test("Day Trader desk supports watchlist inspection without claiming broker orde
   const inspection = page.getByRole("region", { name: "Selected candidate" });
   await expect(watchlist.getByRole("table", { name: "Day Trader research candidate watchlist" })).toBeVisible();
   await expect(watchlist.getByText("SYNTH", { exact: true })).toBeVisible();
-  await expect(inspection.getByText("WATCHLIST")).toBeVisible();
+  await expect(inspection.getByText("WATCHLIST", { exact: true }).first()).toBeVisible();
   await expect(inspection.getByText("Price chart unavailable")).toBeVisible();
   await expect(inspection.getByText("Fixture/research only")).toBeVisible();
   await page.getByLabel("Filter research candidates").fill("NOT-FOUND");
