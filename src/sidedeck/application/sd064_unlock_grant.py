@@ -316,6 +316,12 @@ class UnlockAuthority:
         self._verify, self._principal, self._ledger = verifier, principal, ledger
         self._audit_journal = audit_journal
 
+    def bind_audit_journal(self, audit_journal: AuditJournal) -> None:
+        """Bind the route's mandatory anchored journal for future grant use/revocation."""
+        if self._audit_journal is not None and self._audit_journal is not audit_journal:
+            raise GrantRefused("unlock authority is already bound to another audit journal")
+        self._audit_journal = audit_journal
+
     def _validate(self, document: Any, signature: str, subject_digest: str,
                   moment: datetime) -> UnlockGrant:
         grant = UnlockGrant.from_document(document)

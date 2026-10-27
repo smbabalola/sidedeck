@@ -217,28 +217,33 @@ def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | N
     anchor = AnchorKeeper(WriteOnceDirectoryAnchor(anchor_dir), b"a" * 40)
     if not list(anchor_dir.glob("*.json")):
         anchor.initialize(env.ledger, env.clock.now)
-    audit_backend = WriteOnceDirectoryAnchor(env.tmp / "gateway-audit-anchor")
+    if not hasattr(env, "gateway_audit_journal"):
+        audit_backend = WriteOnceDirectoryAnchor(env.tmp / "gateway-audit-anchor")
 
-    class AuditAnchor:
-        unavailable = False
+        class AuditAnchor:
+            unavailable = False
 
-        def history(self, ledger_id):
-            if self.unavailable:
-                raise OSError("offline fixture anchor outage")
-            return audit_backend.history(ledger_id)
+            def history(self, ledger_id):
+                if self.unavailable:
+                    raise OSError("offline fixture anchor outage")
+                return audit_backend.history(ledger_id)
 
-        def append(self, checkpoint):
-            if self.unavailable:
-                raise OSError("offline fixture anchor outage")
-            audit_backend.append(checkpoint)
+            def append(self, checkpoint):
+                if self.unavailable:
+                    raise OSError("offline fixture anchor outage")
+                audit_backend.append(checkpoint)
 
-    audit_anchor = AuditAnchor()
-    audit_journal = AuditJournal(
-        env.tmp / f"gateway-audit-{uuid.uuid4().hex}.sqlite3",
-        stream_id=f"gateway-test-{uuid.uuid4().hex}", anchor=audit_anchor,
-        device_key=b"g" * 40,
-    )
-    audit_journal.initialize(env.clock.now)
+        audit_anchor = AuditAnchor()
+        audit_journal = AuditJournal(
+            env.tmp / f"gateway-audit-{uuid.uuid4().hex}.sqlite3",
+            stream_id=f"gateway-test-{uuid.uuid4().hex}", anchor=audit_anchor,
+            device_key=b"g" * 40,
+        )
+        audit_journal.initialize(env.clock.now)
+        env.gateway_audit_anchor = audit_anchor
+        env.gateway_audit_journal = audit_journal
+    audit_anchor = env.gateway_audit_anchor
+    audit_journal = env.gateway_audit_journal
     audit_anchor.unavailable = audit_outage
     quote_signer = SourceSigner(quote_source, env.clock)
     gateway = OfflineDemoGateway(
@@ -305,9 +310,10 @@ def test_sd107_offline_gateway_revalidates_grant_and_reconciles_sealed_fill(env)
 
 
 def test_sd145_autonomous_gateway_requires_and_uses_available_audit_anchor(env):
-    gateway, quote, _ = _offline_gateway(env, audit_outage=True)
+    gateway, quote, _ = _offline_gateway(env)
     proposal = env.entry()
     assert isinstance(proposal, EntryProposal)
+    env.gateway_audit_anchor.unavailable = True
     with pytest.raises(GatewayRefused, match="audit evidence unavailable"):
         gateway.submit_entry(proposal, quote=quote)
     assert gateway._simulator.submitted_orders == 0
@@ -325,6 +331,8 @@ def test_sd107_revoked_grant_refuses_before_simulated_write(env):
 
     assert env.ledger.state().entries[proposal.reference_id].outcome is None
     assert env.ledger.kill_switch_engaged() is False
+    assert any(record.event_type == "REVOCATION"
+               for record in gateway._audit_journal.records())
 
 
 def test_sd107_fresh_quote_above_limit_is_refused_before_simulated_write(env):

@@ -297,6 +297,10 @@ class OfflineDemoGateway:
             raise GatewayRefused("externally anchored audit journal is required")
         if runtime.ledger.policy_digest != policy.digest():
             raise GatewayRefused("runtime ledger is bound to a different policy")
+        try:
+            authority.bind_audit_journal(audit_journal)
+        except GrantRefused as exc:
+            raise GatewayRefused("unlock authority audit journal binding failed") from exc
         self._policy, self._runtime, self._authority = policy, runtime, authority
         self._document, self._signature = grant_document, grant_signature
         self._protective_grant = protective_grant
@@ -360,9 +364,6 @@ class OfflineDemoGateway:
                     payload={"grant_digest": grant.digest(),
                              "subject_digest": grant.subject_digest,
                              "expires_at": grant.expires_at.isoformat()})
-        self._audit("GRANT_USE", reference_id,
-                    payload={"grant_id": grant.grant_id, "write": write,
-                             "protective": protective})
 
     def _validate_entry_at_send(self, proposal: EntryProposal, now: datetime,
                                 quotes: dict[str, BrokerQuote]) -> None:
