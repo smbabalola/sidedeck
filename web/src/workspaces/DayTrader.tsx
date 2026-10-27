@@ -1,4 +1,5 @@
 import { useState } from "react";
+import DayTraderWorkflow from "./DayTraderWorkflow";
 import { useResource } from "../lib/api";
 import {
   isDayTraderReadiness, isDayTraderSummary, isMarketTracks, isTrackLedgers,
@@ -123,6 +124,7 @@ function Desk({ d }: { d: DayTraderSummary }) {
         ]}/>
       </Panel>
     </div>
+    <DayTraderWorkflow/>
     <SimulatedBook/>
     <Panel title="Path to Demo autonomy" provenance={null}
       subtitle="Each gate is independent. Passing offline tests never unlocks broker trading.">
