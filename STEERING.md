@@ -12,7 +12,7 @@ Deliver one integrated, reliable path from genuine licensed data and an independ
 
 ## Active development loop
 
-1. Read \`AGENTS.md\`, \`SIDEDECK_STEERING.md\` §20 and the active \`TODO.md\` loop board; reconcile actual HEAD, worktree and CI.
+1. Read `AGENTS.md`, `SIDEDECK_STEERING.md` §20 and the active `TODO.md` loop board; reconcile actual HEAD, worktree and CI.
 2. Choose the **highest-priority unblocked** TODO task with all dependencies verified; group related tasks and tests.
 3. Implement against **offline fake broker transports / disposable stores**. Write failure-injection, replay, entitlement, market-session and protection tests. Reuse SideDeck's existing code; do not invent another trade engine.
 4. Run focused and full suites, Ruff, mypy, disposable DB migrations, frontend unit/type/build, browser E2E and security/negative tests. Address red CI; accept only a green run on the exact pushed HEAD.
@@ -30,11 +30,11 @@ Deliver one integrated, reliable path from genuine licensed data and an independ
 
 ## Non-negotiable status
 
-- \`ETORO_DEMO=NOT_RELEASED\` / \`broker_execution=DISABLED\` until independent G0–G4 evidence and an explicit bounded owner release.
+- `ETORO_DEMO=NOT_RELEASED` / `broker_execution=DISABLED` until independent G0–G4 evidence and an explicit bounded owner release.
 - **eToro Real NEVER**. No live, leveraged, unmanaged, paid, or unapproved account/network actions.
 - Existing four Demo baseline positions protected; owner kill switch from the MSFT incident remains **HALTED** until a separately authorised reset.
 - The two earlier AAPL signed diagnostic permissions are consumed; do not replay them or fabricate HTTP/price evidence.
 - No duplicate writes, no simulated closing prices presented as broker P&L, no synthetic data silently promoted to strategy qualification, no grants signed by Codex.
 - Do not merge default branches, touch other worktrees, or run destructive changes on personal/broker account databases.
 
-**Start now with the first \`NEXT_READY\` work items in TODO.** See the authoritative charter §20 for the precise lifecycle contract, dependency DAG, test requirements and stop conditions.
+**Start now with the first `NEXT_READY` work items in TODO.** See the authoritative charter §20 for the precise lifecycle contract, dependency DAG, test requirements and stop conditions.
