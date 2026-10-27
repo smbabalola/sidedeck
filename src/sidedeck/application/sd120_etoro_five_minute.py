@@ -48,6 +48,16 @@ SAMPLE_TO = "2026-10-23T15:00:00Z"
 MAX_REQUESTS = 9
 DIAGNOSTIC_MAX_REQUESTS = 1
 DIAGNOSTIC_SYMBOL = "AAPL"
+# Only the reviewed eToro Demo key names; no arbitrary inherited secret sources.
+_ALLOWED_CREDENTIAL_PAIRS = frozenset({
+    ("ETORO_API_KEY", "ETORO_USER_KEY"),
+    ("ETORO_DEMO_TRADE_API_KEY", "ETORO_DEMO_TRADE_USER_KEY"),
+})
+
+
+def _require_credential_pair(api_key_env: str, user_key_env: str) -> None:
+    if (api_key_env, user_key_env) not in _ALLOWED_CREDENTIAL_PAIRS:
+        raise EtoroDiscoveryError("credential environment-name pair is not approved")
 
 
 class EtoroDiscoveryError(ValueError):
@@ -81,6 +91,7 @@ def draft_authorization(issued_at: datetime, *, hours: int = 48,
                         owner_terms_reviewed: bool = False,
                         api_key_env: str = "ETORO_API_KEY",
                         user_key_env: str = "ETORO_USER_KEY") -> DataAuthorization:
+    _require_credential_pair(api_key_env, user_key_env)
     if issued_at.tzinfo is None:
         raise EtoroDiscoveryError("issued_at must be timezone-aware")
     return DataAuthorization(
@@ -113,6 +124,7 @@ def draft_authorization(issued_at: datetime, *, hours: int = 48,
 
 
 def check_scope(auth: DataAuthorization, *, api_key_env: str, user_key_env: str) -> None:
+    _require_credential_pair(api_key_env, user_key_env)
     if auth.provider != PROVIDER or auth.max_requests != MAX_REQUESTS or auth.max_retries != 0:
         raise AuthorizationRefused("authorization is not the fixed SD-120 scope")
     expected_urls = {f"{HOST}{SEARCH_PATH}", f"{HOST}{COVERAGE_PATH}", f"{HOST}{CANDLES_PATH}"}
@@ -133,6 +145,7 @@ def draft_diagnostic_authorization(
     api_key_env: str = "ETORO_API_KEY", user_key_env: str = "ETORO_USER_KEY",
 ) -> DataAuthorization:
     """Create the deliberately separate, single-AAPL diagnostic scope."""
+    _require_credential_pair(api_key_env, user_key_env)
     if issued_at.tzinfo is None:
         raise EtoroDiscoveryError("issued_at must be timezone-aware")
     return DataAuthorization(
@@ -158,6 +171,7 @@ def draft_diagnostic_authorization(
 def check_diagnostic_scope(
     auth: DataAuthorization, *, api_key_env: str, user_key_env: str,
 ) -> None:
+    _require_credential_pair(api_key_env, user_key_env)
     expected = {
         "method": "GET", "symbol": DIAGNOSTIC_SYMBOL, "endpoint": SEARCH_PATH,
         "credential_source": {"api_key_env": api_key_env, "user_key_env": user_key_env},
