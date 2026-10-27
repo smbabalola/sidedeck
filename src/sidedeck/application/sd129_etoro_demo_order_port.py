@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Callable, Protocol
 
-from sidedeck.application.sd036_etoro_demo_desk import TransportNotFound
+from sidedeck.application.sd036_etoro_demo_desk import EtoroDemoLineage, TransportNotFound
 
 from sidedeck.domain.etoro_demo_orders import (
     DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
@@ -83,8 +83,11 @@ class EtoroDemoOrderPort:
     Never wire an arbitrary transport into a production service by itself.
     """
 
-    def __init__(self, route: DemoRoute) -> None:
+    def __init__(self, route: DemoRoute, *, lineage: EtoroDemoLineage | None = None) -> None:
         self._route = route
+        # Opt-in reuse of SD-036's supervised durable SQLite lineage. The route itself
+        # must still independently enforce owner-signed grants and the network lock.
+        self._lineage = lineage
         # Session-local extra check, NOT a substitute for SD-063 durable lineage.
         self._verified_positions: dict[int, ConfirmedOpen] = {}
         self._open_attempts: set[str] = set()
@@ -93,12 +96,23 @@ class EtoroDemoOrderPort:
         self._closing_positions: set[int] = set()
         self._accepted_closes: dict[str, CloseAcceptance] = {}
 
-    def submit_open(self, request: DemoOpenRequest) -> OpenAcceptance:
-        # Memory-only secondary guard; the caller MUST also use durable SD-063
-        # write-ahead intent and grant counters. Reserve before potentially sent I/O.
+    def submit_open(self, request: DemoOpenRequest, *,
+                    intent_id: str | None = None,
+                    book_id: str | None = None) -> OpenAcceptance:
+        # A bound durable lineage reserves the x-request-id before attempting a
+        # potentially delivered POST. A prior reservation always refuses replay,
+        # even if process death occurred before the acceptance was recorded.
         if request.reference_id in self._open_attempts:
             raise DemoLineageRefused("open POST already attempted; recover by GET, never resubmit")
         require_demo_route("POST", DEMO_OPEN_PATH)
+        if self._lineage is not None:
+            if not intent_id or not book_id:
+                raise DemoLineageRefused("durable open requires intent and strategy book identity")
+            self._lineage.record_pending(
+                reference_id=request.reference_id, kind="OPEN", intent_id=intent_id,
+                book_id=book_id, instrument_id=request.instrument_id,
+                units=request.units, limit_rate=request.limit_rate, position_id=None,
+            )
         self._open_attempts.add(request.reference_id)
         payload = self._route.send(
             "POST", DEMO_OPEN_PATH, reference_id=request.reference_id,
@@ -106,9 +120,22 @@ class EtoroDemoOrderPort:
         )
         # A 200/echo is ACCEPTANCE, never a fill.
         acceptance = parse_open_acceptance(payload, reference_id=request.reference_id)
+        if self._lineage is not None:
+            self._lineage.set_state(request.reference_id, "ACCEPTED",
+                                    order_id=acceptance.order_id)
         self._accepted_orders[request.reference_id] = acceptance
         self._accepted_requests[request.reference_id] = request
         return acceptance
+
+    def _durable_open(self, request: DemoOpenRequest) -> Any:
+        if self._lineage is None:
+            return None
+        row = self._lineage.order(request.reference_id)
+        if (row["kind"] != "OPEN" or row["instrument_id"] != request.instrument_id
+                or row["units"] != str(request.units)
+                or row["limit_rate"] != str(request.limit_rate)):
+            raise DemoLineageRefused("durable open identity differs from the original intent")
+        return row
 
     def lookup_open(
         self, request: DemoOpenRequest, *, order_id: int | None = None,
@@ -116,6 +143,10 @@ class EtoroDemoOrderPort:
         if (request.reference_id in self._accepted_requests and
                 self._accepted_requests[request.reference_id] != request):
             raise DemoLineageRefused("lookup request differs from original signed open")
+        row = self._durable_open(request)
+        durable_order_id = row["order_id"] if row is not None else None
+        if durable_order_id is not None and order_id is not None and order_id != durable_order_id:
+            raise DemoLineageRefused("order lookup differs from durable accepted order")
         query = ({"orderId": str(order_id)} if order_id is not None else
                  {"referenceId": request.reference_id})
         require_demo_route("GET", DEMO_ORDER_LOOKUP_PATH)
@@ -129,8 +160,14 @@ class EtoroDemoOrderPort:
             raise DemoLineageRefused("order lookup differs from accepted broker order")
         outcome = parse_order_lookup(
             payload, request=request,
-            order_id=accepted.order_id if accepted is not None else order_id,
+            order_id=(accepted.order_id if accepted is not None else
+                      durable_order_id if durable_order_id is not None else order_id),
         )
+        if row is not None and durable_order_id is None:
+            # A lost POST acknowledgement can be recovered from a genuine,
+            # independently authorised read; never issue another open POST.
+            self._lineage.set_state(request.reference_id, "ACCEPTED",
+                                    order_id=outcome.order_id)
         # Any later authoritative lookup replaces earlier session-local evidence.
         # A manually closed/vanished position must not retain close authority
         # just because an old ConfirmedOpen object still exists in memory.
@@ -155,6 +192,13 @@ class EtoroDemoOrderPort:
             position_id=opened.position_id, units=opened.units,
             remaining_units=opened.remaining_units, avg_price=opened.avg_price,
         )
+        if row is not None:
+            self._lineage.register_position(
+                reference_id=request.reference_id, order_id=outcome.order_id,
+                book_id=row["book_id"], instrument_id=request.instrument_id,
+                position_id=confirmed.position_id, units=confirmed.units,
+                remaining=confirmed.remaining_units,
+            )
         self._verified_positions[confirmed.position_id] = confirmed
         return outcome, confirmed
 
@@ -172,8 +216,14 @@ class EtoroDemoOrderPort:
         separate, signed /pnl recovery is outside this port's authority.
         """
         trusted = self._accepted_orders.get(request.reference_id)
-        if (trusted is not acceptance or trusted.order_id != acceptance.order_id or
-                self._accepted_requests.get(request.reference_id) != request):
+        if self._lineage is not None:
+            row = self._durable_open(request)
+            if (row["order_id"] is None or row["state"] != "ACCEPTED"
+                    or row["order_id"] != acceptance.order_id
+                    or acceptance.reference_id != request.reference_id):
+                raise DemoLineageRefused("recovery requires durable validated acceptance")
+        elif (trusted is not acceptance or trusted.order_id != acceptance.order_id or
+              self._accepted_requests.get(request.reference_id) != request):
             raise DemoLineageRefused("recovery requires this session's validated acceptance")
         if not callable(wait_before_first_lookup) or not callable(wait_before_order_id_fallback):
             raise DemoLineageRefused("both audited read-schedule hooks are required")
