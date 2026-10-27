@@ -106,23 +106,44 @@ class OfflineDemoSimulator:
             raise GatewayRefused("simulated IOC is not marketable within its limit")
         self._db.execute("BEGIN IMMEDIATE")
         try:
-            row = self._db.execute("SELECT order_id, instrument_id, units, limit_rate FROM sim_orders "
-                                   "WHERE reference_id=? AND action='open'",
-                                   (request.reference_id,)).fetchone()
+            row = self._db.execute(
+                "SELECT order_id, instrument_id, units, limit_rate FROM sim_orders "
+                "WHERE reference_id=? AND action='open'",
+                (request.reference_id,),
+            ).fetchone()
             if row is not None:
                 if (row[1], Decimal(row[2]), Decimal(row[3])) != (
-                        request.instrument_id, request.units, request.limit_rate):
+                    request.instrument_id, request.units, request.limit_rate
+                ):
                     raise GatewayRefused("simulated idempotency reference reused with different order")
                 order_id = int(row[0])
             else:
-                cursor = self._db.execute("INSERT INTO sim_orders "
+                cursor = self._db.execute(
+                    "INSERT INTO sim_orders "
                     "(reference_id, action, instrument_id, units, limit_rate, fill_price) "
                     "VALUES (?, 'open', ?, ?, ?, ?)",
                     (request.reference_id, request.instrument_id, str(request.units),
-                     str(request.limit_rate), str(self._fill_price)))
+                     str(request.limit_rate), str(self._fill_price)),
+                )
                 if cursor.lastrowid is None:
                     raise GatewayRefused("simulated open did not receive a durable order id")
-                order_id = cursor.lastrowid
+                order_id = int(cursor.lastrowid)
+
+            # The accepted order and its simulated position must be committed
+            # atomically. A later order lookup is read-only, including after a
+            # process restart; lookup may not manufacture or reopen a position.
+            position_id = order_id + 100_000
+            self._db.execute(
+                "INSERT OR IGNORE INTO sim_positions "
+                "(position_id, open_order_id, instrument_id, units) VALUES (?, ?, ?, ?)",
+                (position_id, order_id, request.instrument_id, str(request.units)),
+            )
+            stored = self._db.execute(
+                "SELECT open_order_id, instrument_id, units FROM sim_positions "
+                "WHERE position_id=?", (position_id,),
+            ).fetchone()
+            if stored != (order_id, request.instrument_id, str(request.units)):
+                raise GatewayRefused("simulated position lineage conflicts with durable order")
             self._db.execute("COMMIT")
         except BaseException:
             if self._db.in_transaction:
@@ -131,36 +152,39 @@ class OfflineDemoSimulator:
         if self._crash_after_open:
             self._crash_after_open = False
             raise GatewayRefused("simulated process interruption after durable acceptance")
-        acceptance: dict[str, object] = {"orderId": order_id,
-                                         "referenceId": request.reference_id}
-        return acceptance
+        return {"orderId": order_id, "referenceId": request.reference_id}
 
     def lookup(self, order_id: int) -> dict[str, object]:
-        order = self._db.execute("SELECT reference_id, instrument_id, units, limit_rate, fill_price "
-                                 "FROM sim_orders WHERE order_id=? AND action='open'",
-                                 (order_id,)).fetchone()
+        order = self._db.execute(
+            "SELECT reference_id, instrument_id, units, limit_rate, fill_price "
+            "FROM sim_orders WHERE order_id=? AND action='open'",
+            (order_id,),
+        ).fetchone()
         if order is None:
             raise GatewayRefused("simulated order does not exist")
         if self._malformed_lookup:
             return {"orderId": order_id, "status": "unexpected"}
-        request = DemoOpenRequest(str(order[0]), int(order[1]), Decimal(order[2]),
-                                  Decimal(order[3]))
+        request = DemoOpenRequest(
+            str(order[0]), int(order[1]), Decimal(order[2]), Decimal(order[3]),
+        )
         position_id = order_id + 100_000
-        self._db.execute("INSERT OR IGNORE INTO sim_positions "
-                         "(position_id, open_order_id, instrument_id, units) VALUES (?, ?, ?, ?)",
-                         (position_id, order_id, request.instrument_id, str(request.units)))
-        position = self._db.execute("SELECT instrument_id, units FROM sim_positions "
-                                    "WHERE position_id=?", (position_id,)).fetchone()
-        if position != (request.instrument_id, str(request.units)):
-            raise GatewayRefused("simulated position lineage conflicts with durable order")
+        position = self._db.execute(
+            "SELECT open_order_id, instrument_id, units, closed FROM sim_positions "
+            "WHERE position_id=?", (position_id,),
+        ).fetchone()
+        if position is None or position[:3] != (
+            order_id, request.instrument_id, str(request.units)
+        ):
+            raise GatewayRefused("durable simulated position lineage is missing or mismatched")
+        closed = bool(position[3])
         return {
             "orderId": order_id, "action": "open", "transaction": "buy",
             "status": {"id": 3, "errorCode": 0},
             "asset": {"instrumentId": request.instrument_id, "leverage": 1,
                       "side": "long"},
             "positionExecutions": [{
-                "positionId": position_id, "state": "open",
-                "remainingUnits": float(request.units),
+                "positionId": position_id, "state": "closed" if closed else "open",
+                "remainingUnits": 0.0 if closed else float(request.units),
                 "openingData": {"orderId": order_id, "units": float(request.units),
                                 "avgPrice": float(Decimal(order[4])), "fees": 0.0},
             }],
