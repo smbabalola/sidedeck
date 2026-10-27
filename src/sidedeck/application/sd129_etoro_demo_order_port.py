@@ -73,6 +73,8 @@ class EtoroDemoOrderPort:
 
     def __init__(self, route: DemoRoute) -> None:
         self._route = route
+        # Session-local extra check, NOT a substitute for SD-063 durable lineage.
+        self._verified_positions: dict[int, ConfirmedOpen] = {}
 
     def submit_open(self, request: DemoOpenRequest) -> OpenAcceptance:
         require_demo_route("POST", DEMO_OPEN_PATH)
@@ -108,16 +110,19 @@ class EtoroDemoOrderPort:
             # A previously opened position may have been manually closed.
             # Do not assert ownership of a flat broker position.
             return outcome, None
-        return outcome, ConfirmedOpen(
+        confirmed = ConfirmedOpen(
             request=request, order_id=outcome.order_id,
             position_id=opened.position_id, units=opened.units,
             remaining_units=opened.remaining_units, avg_price=opened.avg_price,
         )
+        self._verified_positions[confirmed.position_id] = confirmed
+        return outcome, confirmed
 
     def submit_owned_close(
         self, request: DemoCloseRequest, *, owner: ConfirmedOpen,
     ) -> CloseAcceptance:
-        if (request.position_id != owner.position_id or
+        if (self._verified_positions.get(owner.position_id) is not owner or
+                request.position_id != owner.position_id or
                 request.instrument_id != owner.request.instrument_id or
                 request.units_to_deduct is not None or
                 owner.remaining_units <= 0):
