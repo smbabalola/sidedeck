@@ -1,5 +1,6 @@
 import { useState } from "react";
 import DayTraderWorkflow from "./DayTraderWorkflow";
+import DayTraderCandidateDesk from "./DayTraderCandidateDesk";
 import { useResource } from "../lib/api";
 import {
   isDayTraderReadiness, isDayTraderSummary, isMarketTracks, isTrackLedgers,
@@ -124,6 +125,7 @@ function Desk({ d }: { d: DayTraderSummary }) {
         ]}/>
       </Panel>
     </div>
+    <DayTraderCandidateDesk summary={d}/>
     <DayTraderWorkflow/>
     <SimulatedBook/>
     <Panel title="Path to Demo autonomy" provenance={null}
