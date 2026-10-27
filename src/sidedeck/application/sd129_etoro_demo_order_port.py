@@ -126,6 +126,12 @@ class EtoroDemoOrderPort:
             payload, request=request,
             order_id=accepted.order_id if accepted is not None else order_id,
         )
+        # Any later authoritative lookup replaces earlier session-local evidence.
+        # A manually closed/vanished position must not retain close authority
+        # just because an old ConfirmedOpen object still exists in memory.
+        for position_id, prior in tuple(self._verified_positions.items()):
+            if prior.request.reference_id == request.reference_id:
+                del self._verified_positions[position_id]
         # Even a terminal FILLED lookup cannot modify arbitrary/baseline positions.
         # Each positionId must be from the actual order's openingData.orderId.
         if not outcome.terminal:
