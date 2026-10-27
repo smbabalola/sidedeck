@@ -82,6 +82,8 @@ MIN_ORDER_NOTIONAL = Decimal("10")
 MAX_ENTRY_FILL_DELAY = timedelta(minutes=15)   # an IOC fills immediately or not at all
 MAX_EXIT_FILL_DEVIATION = Decimal("0.10")      # exit fill within 10 % of the planned bid
 FLATTEN_LEAD = timedelta(minutes=60)
+DAY_ENTRY_CLOSE_BUFFER = timedelta(minutes=30)  # leave exit/reconciliation time
+DAY_FLATTEN_LEAD = timedelta(minutes=10)       # close each trading day, including early closes
 MAX_EVIDENCE_BYTES = 50_000_000
 SUBMISSION = "OFFLINE_PROPOSAL_NOT_SUBMITTED"
 OUTCOMES = ("FILLED", "PARTIALLY_FILLED", "NOT_FILLED", "UNRESOLVED")
@@ -1094,6 +1096,14 @@ class AutonomousDemoRuntime:
             return Refusal(("MARKET_CALENDAR_UNCOVERED",))
         if not market_open:
             return Refusal(("MARKET_CLOSED",))
+        if track == "DAY":
+            # A weekly signed policy does not grant entries close to the end
+            # of *each* session. Give the Demo close and reconciliation a buffer.
+            session = session_for(now.astimezone(NEW_YORK).date())
+            if session is None:
+                return Refusal(("MARKET_CLOSED",))
+            if now >= session.close_utc - DAY_ENTRY_CLOSE_BUFFER:
+                return Refusal(("DAY_ENTRY_WINDOW_CLOSED",))
 
         # Equity from the ledger + marks. The session's first mark is the daily-loss baseline;
         # further marks are written only on a new high, so polling cannot grow the ledger.
@@ -1281,11 +1291,34 @@ class AutonomousDemoRuntime:
                 alerts.append(f"CALENDAR_UNCOVERED:{ref}")
                 continue
             if not market_open:
-                continue                                    # wait for the session
+                if p.track == "DAY":
+                    # A missed DAY close is an operator incident; never
+                    # fabricate an exit outside the exchange session.
+                    alerts.append(f"DAY_POSITION_OUTSIDE_SESSION:{ref}")
+                continue
             if quote.bid <= p.stop_price:                   # stop first: needs no calendar math
                 reason = "STOP_BREACHED"
             elif authority == "protective":
                 reason = "PROTECTIVE_FLATTEN"
+            elif p.track == "DAY":
+                # Zero-day horizon is *not* an immediate exit. DAY positions
+                # must instead flatten in their own session, not just on the
+                # final day of a multi-day policy.
+                session = session_for(day)
+                if session is None:
+                    alerts.append(f"DAY_SESSION_UNAVAILABLE:{ref}")
+                    continue
+                opened_day = p.opened_at.astimezone(NEW_YORK).date()
+                if opened_day < day:
+                    reason = "DAY_OVERDUE_FLATTEN"
+                    alerts.append(f"DAY_OVERNIGHT_POSITION:{ref}")
+                elif opened_day > day:
+                    alerts.append(f"DAY_POSITION_TIMESTAMP_INVALID:{ref}")
+                    continue
+                elif now >= session.close_utc - DAY_FLATTEN_LEAD:
+                    reason = "DAY_SESSION_FLATTEN"
+                else:
+                    continue
             elif now >= flatten_at:
                 reason = "POLICY_EXPIRY_FLATTEN"
             else:
