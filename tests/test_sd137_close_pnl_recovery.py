@@ -73,7 +73,7 @@ def recover(route=None, authority=None, desk=None, **changes):
         document={"signed": True}, signature="owner-sig",
         subject_digest="a" * 64,
         reference_id="unique-read-once", close_reference_id="unknown-close",
-        now=NOW, **changes,
+        now=changes.pop("now", NOW), **changes,
     )
 
 
