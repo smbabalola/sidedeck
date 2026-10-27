@@ -71,3 +71,17 @@ SideDeck lineage: open `ACCEPTED`, no owned position, kill switch `HALTED`. The 
 position is **owner-observed only**; SideDeck has not read it. Reconciling it needs either
 (a) one owner-approved read-only `/pnl` GET, or (b) the owner's manual close in the eToro UI
 plus its confirmation. Neither is assumed. The kill switch stays halted until then.
+
+## Owner manual close (2026-10-27, owner-attested)
+
+The owner reports closing the MSFT 0.09-unit Demo position manually in the eToro UI. This
+close was made **outside SideDeck** (no SideDeck close request, approval or write). Close
+time, price, units and realised P/L have **not** been provided yet and are not assumed.
+
+SideDeck state is unchanged: open lineage `ACCEPTED`, no owned position, kill switch `HALTED`.
+Pilot status: **open filled at broker (owner-observed); closed manually by owner (attested);
+SideDeck reconciliation PENDING**. Not COMPLETE.
+
+To finish: (1) owner supplies the close confirmation (time, price, units, P/L); (2) one
+owner-approved read-only `/pnl` GET shows the four protected positions MATCHED, no MSFT and
+no pending orders; (3) only then is the kill switch cleared, as a separate recorded action.
