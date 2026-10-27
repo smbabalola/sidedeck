@@ -250,6 +250,7 @@ class EtoroDemoOrderPort:
 
     def submit_owned_close(
         self, request: DemoCloseRequest, *, owner: ConfirmedOpen,
+        intent_id: str | None = None, book_id: str | None = None,
     ) -> CloseAcceptance:
         if (owner.position_id in self._closing_positions or
                 self._verified_positions.get(owner.position_id) is not owner or
@@ -260,6 +261,25 @@ class EtoroDemoOrderPort:
             raise DemoLineageRefused(
                 "close is not a full reduce-only close of a confirmed SideDeck position")
         require_demo_route("POST", request.path)
+        if self._lineage is not None:
+            if not intent_id or not book_id:
+                raise DemoLineageRefused("durable close requires intent and strategy book identity")
+            owned = self._lineage.owned(owner.position_id)
+            if (owned is None or owned["reference_id"] != owner.request.reference_id
+                    or owned["order_id"] != owner.order_id
+                    or owned["instrument_id"] != request.instrument_id
+                    or owned["book_id"] != book_id
+                    or owned["remaining_units"] != str(owner.remaining_units)
+                    or owned["state"] != "OPEN"):
+                raise DemoLineageRefused("durable close lacks exact SideDeck open lineage")
+            # SQLite's unique unresolved-close index fences competing workers even
+            # if both had separately verified the same broker position by GET.
+            self._lineage.record_pending(
+                reference_id=request.reference_id, kind="CLOSE", intent_id=intent_id,
+                book_id=book_id, instrument_id=request.instrument_id,
+                units=owner.remaining_units, limit_rate=None,
+                position_id=owner.position_id,
+            )
         # Reserve before I/O: an unknown close outcome must not produce a
         # second sell. Read-only reconciliation and explicit owner recovery only.
         self._closing_positions.add(owner.position_id)
@@ -268,6 +288,9 @@ class EtoroDemoOrderPort:
             body=request.body(),
         )
         acceptance = parse_close_acceptance(payload, request=request)
+        if self._lineage is not None:
+            self._lineage.set_state(request.reference_id, "ACCEPTED",
+                                    order_id=acceptance.order_id)
         self._accepted_closes[request.reference_id] = acceptance
         return acceptance
 
@@ -292,6 +315,46 @@ class EtoroDemoOrderPort:
         if outcome.status == "FILLED" and outcome.closed_units == owner.remaining_units:
             # Broker close-info has no execution price and does not prove the
             # /pnl snapshot is flat; a separately authorized read is required.
+            state = "BROKER_REPORTS_FULL_CLOSE_PENDING_PORTFOLIO_RECONCILIATION"
+        elif outcome.terminal and outcome.closed_units == 0:
+            state = "BROKER_REPORTS_NO_CLOSE"
+        else:
+            state = "UNRESOLVED_PARTIAL_OR_PENDING"
+        return CloseRead(acceptance, outcome, position_status=state)
+
+    def recover_close_info(
+        self, acceptance: CloseAcceptance, *, request: DemoCloseRequest,
+    ) -> CloseRead:
+        """GET-only restart recovery for a durably accepted close; never proves flat/P&L.
+
+        Requires existing protected-baseline-aware SD-036 lineage and a transport
+        that independently authorizes/counters the broker GET. A lost close
+        acceptance (no stored orderId) must use separately authorized /pnl
+        reconciliation, never a second POST.
+        """
+        if self._lineage is None:
+            raise DemoLineageRefused("durable close recovery requires persisted lineage")
+        row = self._lineage.order(request.reference_id)
+        owned = self._lineage.owned(request.position_id)
+        if (row["kind"] != "CLOSE" or row["state"] != "ACCEPTED"
+                or row["position_id"] != request.position_id
+                or row["instrument_id"] != request.instrument_id
+                or row["order_id"] != acceptance.order_id
+                or acceptance.position_id != request.position_id
+                or request.units_to_deduct is not None
+                or owned is None or owned["book_id"] != row["book_id"]
+                or owned["instrument_id"] != request.instrument_id
+                or owned["position_id"] != request.position_id):
+            raise DemoLineageRefused("durable close acceptance or ownership is inconsistent")
+        path = DEMO_CLOSE_INFO_PATH.format(order_id=acceptance.order_id)
+        require_demo_route("GET", path)
+        payload = self._route.send(
+            "GET", path, reference_id=f"close-recovery:{request.reference_id}",
+        )
+        outcome = parse_close_info(payload, acceptance=acceptance)
+        if outcome.closed_units > Decimal(row["units"]):
+            raise EtoroDemoOrderError("close reported more units than the reserved full close")
+        if outcome.status == "FILLED" and outcome.closed_units == Decimal(row["units"]):
             state = "BROKER_REPORTS_FULL_CLOSE_PENDING_PORTFOLIO_RECONCILIATION"
         elif outcome.terminal and outcome.closed_units == 0:
             state = "BROKER_REPORTS_NO_CLOSE"
