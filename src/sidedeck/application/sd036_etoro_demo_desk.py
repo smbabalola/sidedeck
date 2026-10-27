@@ -199,6 +199,17 @@ CREATE TABLE IF NOT EXISTS etoro_demo_owned_positions (
   remaining_units TEXT NOT NULL, state TEXT NOT NULL, recorded_at TEXT NOT NULL,
   FOREIGN KEY(reference_id) REFERENCES etoro_demo_lineage_orders(reference_id)
 );
+-- Protect multiple processes against sending two concurrent closes for one position.
+-- Settled attempts can only be retried after independently verified reconciliation;
+-- unresolved/unknown outcomes remain reserved across every process restart.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_etoro_one_pending_close_per_position
+ON etoro_demo_lineage_orders(position_id)
+WHERE kind='CLOSE' AND state NOT IN (
+  'FILLED', 'REJECTED', 'CANCELED', 'EXPIRED',
+  'CANCELED_PARTIALLY_FILLED', 'REJECTED_PARTIALLY_FILLED',
+  'RECONCILED_NOT_EXECUTED', 'RECONCILED_CLOSED_BY_SNAPSHOT',
+  'RECONCILED_PARTIAL_BY_SNAPSHOT'
+);
 """
 
 
