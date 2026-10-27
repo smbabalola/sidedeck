@@ -93,8 +93,10 @@ def research_day_sample(
     # or silently manufacture the absent first three completed bars.
     day = cutoff.astimezone(NEW_YORK).date()
     session = session_for(day)
+    if session is None:
+        return DayResearchResult(None, admission, metadata, "INSUFFICIENT_OPENING_RANGE")
     session_bars = [b for b in bars
-                    if session is not None and session.open_utc <= b.start < session.close_utc]
+                    if session.open_utc <= b.start < session.close_utc]
     if not session_bars or session_bars[0].start != session.open_utc:
         return DayResearchResult(None, admission, metadata, "INSUFFICIENT_OPENING_RANGE")
 
