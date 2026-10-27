@@ -5,7 +5,7 @@ import pytest
 
 from sidedeck.application.sd068_track_scheduler import session_for
 from sidedeck.application.sd142_five_minute_pipeline import (
-    FiveMinuteDataError, coverage_report, ingest_provider_fixture,
+    EtoroFiveMinuteFixtureProvider, FiveMinuteDataError, coverage_report, ingest_provider_fixture,
     validate_five_minute_session,
 )
 from sidedeck.application.sd074_trusted_inputs import SourceSigner, TrustedSource
@@ -121,4 +121,29 @@ def test_provider_fixture_adapter_is_pluggable_and_provenance_sealed():
             FixtureProvider(), rows, symbol="MSFT", instrument_id=1004,
             session_day=day, ingested_at=ingested_at,
             signer=SourceSigner(TrustedSource("other:source", "research_pipeline", _SOURCE_KEY)),
+        )
+
+
+def test_etoro_fixture_parser_preserves_bid_ask_and_quarantines_unverified_rights():
+    day = date(2026, 10, 26)
+    session = session_for(day)
+    assert session is not None
+    stamp = session.open_utc.isoformat()
+    payload = {
+        "instrumentId": 1004, "symbol": "MSFT/USD", "interval": "5m", "side": "both",
+        "results": [{"time": stamp,
+                     "bid": {"open": "100", "high": "101", "low": "99", "close": "100", "volume": "7"},
+                     "ask": {"open": "101", "high": "102", "low": "100", "close": "101", "volume": "7"}}],
+    }
+    provider = EtoroFiveMinuteFixtureProvider()
+    rows = provider.normalize(payload, symbol="MSFT", instrument_id=1004)
+    assert provider.source_id == "etoro"
+    assert rows[0]["bid_open"] == "100"
+    assert rows[0]["ask_open"] == "101"
+    assert len(rows[0]["source_hash"]) == 64
+    with pytest.raises(FiveMinuteDataError, match="mapping and data entitlement must be verified"):
+        validate_five_minute_session(
+            rows, symbol="MSFT", instrument_id=1004, session_day=day,
+            ingested_at=session.close_utc + timedelta(minutes=1),
+            signer=SourceSigner(TrustedSource("etoro", "research_pipeline", _SOURCE_KEY)),
         )

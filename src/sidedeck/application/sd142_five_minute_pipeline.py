@@ -15,6 +15,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from sidedeck.application.sd068_track_scheduler import session_for
 from sidedeck.application.sd069_day_trader_methods import IntradayBar
+from sidedeck.application.sd119_etoro_market_data import EtoroMarketDataError, parse_candles, provenance
 from sidedeck.application.sd074_trusted_inputs import Envelope, SourceSigner
 
 STEP = timedelta(minutes=5)
@@ -40,6 +41,51 @@ class FiveMinuteProvider(Protocol):
 
     def normalize(self, payload: Any, *, symbol: str,
                   instrument_id: int) -> Sequence[Mapping[str, Any]]: ...
+
+
+class EtoroFiveMinuteFixtureProvider:
+    """Normalize local eToro candle fixtures without asserting entitlement or adjustments.
+
+    The SD-119 parser verifies response identity and bid/ask structure. Since its
+    evidence is explicitly unverified, downstream SD-142 admission rejects these
+    rows until independently verified licensing, mapping and action metadata exist.
+    """
+
+    source_id = "etoro"
+
+    def normalize(self, payload: Any, *, symbol: str,
+                  instrument_id: int) -> Sequence[Mapping[str, Any]]:
+        if not isinstance(payload, Mapping) or payload.get("side") != "both":
+            raise FiveMinuteDataError("eToro fixture requires an explicit bid/ask candle page")
+        try:
+            candles = parse_candles(payload, instrument_id=instrument_id, symbol=symbol)
+            source_hash = provenance(payload)["payload_sha256"]
+        except EtoroMarketDataError as exc:
+            raise FiveMinuteDataError("eToro fixture identity or candle validation failed") from exc
+        by_time: dict[datetime, dict[str, Any]] = {}
+        for candle in candles:
+            sides = by_time.setdefault(candle.timestamp, {})
+            sides[candle.side] = candle
+        normalized: list[Mapping[str, Any]] = []
+        for stamp, sides in sorted(by_time.items()):
+            bid, ask = sides.get("bid"), sides.get("ask")
+            if bid is None or ask is None or bid.volume is None or ask.volume is None \
+                    or bid.volume != ask.volume:
+                raise FiveMinuteDataError("eToro fixture requires matching bid/ask volume")
+            row: dict[str, Any] = {"start": stamp.isoformat(), "volume": str(bid.volume)}
+            for name in FIELDS:
+                row[f"bid_{name}"] = str(getattr(bid, name))
+                row[f"ask_{name}"] = str(getattr(ask, name))
+            row.update({
+                "source_id": self.source_id, "source_hash": source_hash,
+                "adjustment_basis": "UNVERIFIED",
+                "corporate_actions_asof": "UNVERIFIED",
+                "mapping_status": "UNVERIFIED", "mapping_asof": "UNVERIFIED",
+                "entitlement_status": "UNVERIFIED", "mapped_symbol": symbol,
+                "mapped_instrument_id": str(instrument_id),
+            })
+            normalized.append(row)
+        return normalized
 
 
 def _decimal(value: Any, label: str) -> Decimal:

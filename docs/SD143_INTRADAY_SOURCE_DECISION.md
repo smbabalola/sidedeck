@@ -17,9 +17,12 @@ decisions subsequently executed through eToro Demo is not established here.
 ## Consequence for SD-142/144
 
 SD-142 accepts normalized local rows through the provider-neutral
-`FiveMinuteProvider` fixture parser contract, with immutable source, entitlement,
-instrument mapping, corporate-action and adjustment provenance. It seals the
-validated manifest through SideDeck's research `SourceSigner`. The fixture
+`FiveMinuteProvider` contract. Its eToro fixture adapter reuses the SD-119
+identity and bid/ask parser and hashes the exact payload; it marks entitlement,
+instrument mapping, corporate-action and adjustment status unverified, which
+the session validator quarantines. A separately supported verified local parser
+may supply independently established provenance. Accepted manifests are sealed
+through SideDeck's research `SourceSigner`. All outputs remain
 pipeline marks all outputs `strategy_admission_eligible: false` and
 `broker_execution: DISABLED`. SD-144 cannot use these fixtures as market evidence.
 Before acquisition, the owner must resolve provider terms and account-specific
