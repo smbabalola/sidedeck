@@ -130,16 +130,44 @@ class _ReleaseLedger:
         self._db.execute("CREATE TABLE IF NOT EXISTS sd048_transport_ledger (digest TEXT NOT "
                          "NULL, route TEXT NOT NULL, used INTEGER NOT NULL, "
                          "PRIMARY KEY (digest, route))")
+        # Durable last-line fence: an uncertain POST may have reached the broker.
+        # Persist the reference before network I/O so a process restart cannot
+        # send it again, even when the signed route count has remaining capacity.
+        self._db.execute("CREATE TABLE IF NOT EXISTS sd048_transport_write_refs ("
+                         "digest TEXT NOT NULL, reference_id TEXT NOT NULL, "
+                         "route TEXT NOT NULL, body_sha256 TEXT NOT NULL, "
+                         "PRIMARY KEY (digest, reference_id))")
         self._digest = release.digest
         self._caps = dict(release.intent.request_caps)
 
-    def reserve(self, route: str) -> None:
+    def reserve(self, route: str, *, reference_id: str | None = None,
+                body_sha256: str | None = None) -> None:
+        """Atomically reserve a capped route use and one-shot POST identity.
+
+        A reference must never be replayed after crash/timeout/unknown outcome.
+        Even a failed opener attempt spends its route count and write reference.
+        """
+        if (reference_id is None) != (body_sha256 is None):
+            raise EtoroDemoTransportError("WRITE_RESERVATION_IDENTITY_INCOMPLETE")
         self._db.execute("BEGIN IMMEDIATE")
         try:
+            if reference_id is not None:
+                previous = self._db.execute(
+                    "SELECT route, body_sha256 FROM sd048_transport_write_refs "
+                    "WHERE digest=? AND reference_id=?", (self._digest, reference_id)
+                ).fetchone()
+                if previous is not None:
+                    raise EtoroDemoTransportError("DURABLE_WRITE_REFERENCE_ALREADY_RESERVED")
             row = self._db.execute("SELECT used FROM sd048_transport_ledger WHERE digest=? AND "
                                    "route=?", (self._digest, route)).fetchone()
             if (0 if row is None else int(row[0])) >= self._caps.get(route, 0):
                 raise EtoroDemoTransportError("SIGNED_REQUEST_CAP_EXHAUSTED")
+            if reference_id is not None:
+                self._db.execute(
+                    "INSERT INTO sd048_transport_write_refs "
+                    "(digest, reference_id, route, body_sha256) VALUES (?, ?, ?, ?)",
+                    (self._digest, reference_id, route, body_sha256),
+                )
             self._db.execute("INSERT INTO sd048_transport_ledger VALUES (?, ?, 1) ON CONFLICT"
                              "(digest, route) DO UPDATE SET used = used + 1",
                              (self._digest, route))
@@ -235,6 +263,7 @@ class EtoroDemoHttpTransport:
             url += "?" + urlencode(query)
         headers = {**self.__headers, "User-Agent": USER_AGENT, "Accept": "application/json"}
         data: bytes | None = None
+        digest: str | None = None
         write = method == "POST"
         if write:
             if body is None:
@@ -252,7 +281,11 @@ class EtoroDemoHttpTransport:
             request_id = str(uuid.uuid4())
         headers["x-request-id"] = request_id
         request = Request(url, data=data, method=method, headers=headers)
-        self._ledger.reserve(route)            # counted before any I/O, never refunded
+        self._ledger.reserve(
+            route,
+            reference_id=reference_id if write else None,
+            body_sha256=digest if write else None,
+        )  # atomically counted and fenced before I/O, never refunded
         response: Any = None
         try:
             response = self._opener.open(request, timeout=TIMEOUT_SECONDS)
