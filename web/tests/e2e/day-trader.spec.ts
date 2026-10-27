@@ -16,6 +16,8 @@ test("Day Trader desk distinguishes offline research, virtual configuration and 
   await expect(page.getByRole("heading", { level: 1, name: "Day Trader" })).toBeVisible();
   await expect(page.getByText("Execution locked")).toBeVisible();
   await expect(page.getByText("eToro Demo · NOT RELEASED")).toBeVisible();
+  await page.waitForTimeout(500);
+  console.log("SD127_DESK_SNAPSHOT", (await page.locator("main").innerText()).slice(0, 2200));
   await expect(page.getByRole("region", { name: "DAY simulated accounting" })).toBeVisible();
   await expect(page.getByRole("region", { name: "DAY risk configuration" })).toBeVisible();
   await expect(page.getByText("Research only", { exact: true })).toBeVisible();
@@ -65,6 +67,8 @@ test("Day Trader fails closed on forged readiness and never shows success", asyn
   await mockApi(page, { "/api/day-trader/readiness": forged });
   await page.goto("/#/day-trader");
   await page.getByRole("tab", { name: "Execution readiness" }).click();
+  await page.waitForTimeout(500);
+  console.log("SD127_READINESS_SNAPSHOT", (await page.locator("main").innerText()).slice(0, 2200));
   await expect(page.getByRole("alert").filter({ hasText: /did not match the expected contract/ })).toBeVisible();
   await expect(page.getByText("Autonomous eToro Demo execution")).toHaveCount(0);
 });
