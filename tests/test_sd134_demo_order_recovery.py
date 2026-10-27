@@ -285,3 +285,18 @@ def test_offline_full_demo_order_cycle_404_fallback_then_close_not_flat_claim() 
     assert close_read.realised_pnl_status == "UNAVAILABLE_WITHOUT_BROKER_CLOSE_PRICE"
     assert [c[0] for c in fake.calls] == ["POST", "GET", "GET", "POST", "GET"]
     assert all("/real/" not in c[1] for c in fake.calls)
+
+
+def test_cannot_rebind_accepted_reference_to_different_open_parameters() -> None:
+    fake = FakeDemoRoute([accepted()])
+    port = EtoroDemoOrderPort(fake)
+    approval = port.submit_open(request())
+    altered = DemoOpenRequest(OPEN_REFERENCE, 1004, Decimal("0.08"), Decimal("110"))
+    with pytest.raises(DemoLineageRefused, match="original signed open"):
+        port.lookup_open(altered, order_id=approval.order_id)
+    with pytest.raises(DemoLineageRefused, match="validated acceptance"):
+        port.recover_accepted_open(
+            altered, approval, wait_before_first_lookup=lambda: None,
+            wait_before_order_id_fallback=lambda: None,
+        )
+    assert len(fake.calls) == 1
