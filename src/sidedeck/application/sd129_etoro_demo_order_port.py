@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
+
+from sidedeck.application.sd036_etoro_demo_desk import TransportNotFound
 
 from sidedeck.domain.etoro_demo_orders import (
     DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
@@ -55,6 +57,16 @@ class ConfirmedOpen:
 
 
 @dataclass(frozen=True)
+class RecoveredOpen:
+    """Bounded GET-only recovery; acceptance alone is not an execution."""
+
+    classification: str
+    requests_used: int
+    outcome: DemoOrderOutcome | None
+    position: ConfirmedOpen | None
+
+
+@dataclass(frozen=True)
 class CloseRead:
     """Close status, NOT broker-confirmed realised P&L (price is absent)."""
 
@@ -74,15 +86,26 @@ class EtoroDemoOrderPort:
         self._route = route
         # Session-local extra check, NOT a substitute for SD-063 durable lineage.
         self._verified_positions: dict[int, ConfirmedOpen] = {}
+        self._open_attempts: set[str] = set()
+        self._accepted_orders: dict[str, OpenAcceptance] = {}
+        self._closing_positions: set[int] = set()
+        self._accepted_closes: dict[str, CloseAcceptance] = {}
 
     def submit_open(self, request: DemoOpenRequest) -> OpenAcceptance:
+        # Memory-only secondary guard; the caller MUST also use durable SD-063
+        # write-ahead intent and grant counters. Reserve before potentially sent I/O.
+        if request.reference_id in self._open_attempts:
+            raise DemoLineageRefused("open POST already attempted; recover by GET, never resubmit")
         require_demo_route("POST", DEMO_OPEN_PATH)
+        self._open_attempts.add(request.reference_id)
         payload = self._route.send(
             "POST", DEMO_OPEN_PATH, reference_id=request.reference_id,
             body=request.body(),
         )
         # A 200/echo is ACCEPTANCE, never a fill.
-        return parse_open_acceptance(payload, reference_id=request.reference_id)
+        acceptance = parse_open_acceptance(payload, reference_id=request.reference_id)
+        self._accepted_orders[request.reference_id] = acceptance
+        return acceptance
 
     def lookup_open(
         self, request: DemoOpenRequest, *, order_id: int | None = None,
@@ -95,7 +118,13 @@ class EtoroDemoOrderPort:
             reference_id=f"lookup:{request.reference_id}",
             query=query,
         )
-        outcome = parse_order_lookup(payload, request=request, order_id=order_id)
+        accepted = self._accepted_orders.get(request.reference_id)
+        if accepted is not None and order_id is not None and order_id != accepted.order_id:
+            raise DemoLineageRefused("order lookup differs from accepted broker order")
+        outcome = parse_order_lookup(
+            payload, request=request,
+            order_id=accepted.order_id if accepted is not None else order_id,
+        )
         # Even a terminal FILLED lookup cannot modify arbitrary/baseline positions.
         # Each positionId must be from the actual order's openingData.orderId.
         if not outcome.terminal:
@@ -117,10 +146,48 @@ class EtoroDemoOrderPort:
         self._verified_positions[confirmed.position_id] = confirmed
         return outcome, confirmed
 
+    def recover_accepted_open(
+        self, request: DemoOpenRequest, acceptance: OpenAcceptance, *,
+        wait_before_first_lookup: Callable[[], None],
+        wait_before_order_id_fallback: Callable[[], None],
+    ) -> RecoveredOpen:
+        """Two bounded GETs, never a second POST, after an accepted order.
+
+        First GET uses referenceId. Only a broker 404 triggers orderId fallback.
+        Both wait hooks are mandatory; in production they must use an audited
+        schedule (not the default 0.8s follow-up that failed the MSFT pilot).
+        Missing/nonterminal/previously closed outcomes stay UNRESOLVED; a
+        separate, signed /pnl recovery is outside this port's authority.
+        """
+        trusted = self._accepted_orders.get(request.reference_id)
+        if trusted is not acceptance or trusted.order_id != acceptance.order_id:
+            raise DemoLineageRefused("recovery requires this session's validated acceptance")
+        if not callable(wait_before_first_lookup) or not callable(wait_before_order_id_fallback):
+            raise DemoLineageRefused("both audited read-schedule hooks are required")
+        wait_before_first_lookup()
+        used = 1
+        try:
+            outcome, position = self.lookup_open(request)
+        except TransportNotFound:
+            wait_before_order_id_fallback()
+            used += 1
+            try:
+                outcome, position = self.lookup_open(request, order_id=acceptance.order_id)
+            except TransportNotFound:
+                return RecoveredOpen("UNRESOLVED_NOT_VISIBLE", used, None, None)
+        if position is not None:
+            return RecoveredOpen("BROKER_CONFIRMED_OPEN", used, outcome, position)
+        if outcome.terminal and not outcome.executions:
+            return RecoveredOpen("TERMINAL_NO_FILL", used, outcome, None)
+        # Order may still fill, or the position may already have been closed.
+        # Neither is a safe instruction to submit a new open/close.
+        return RecoveredOpen("UNRESOLVED", used, outcome, None)
+
     def submit_owned_close(
         self, request: DemoCloseRequest, *, owner: ConfirmedOpen,
     ) -> CloseAcceptance:
-        if (self._verified_positions.get(owner.position_id) is not owner or
+        if (owner.position_id in self._closing_positions or
+                self._verified_positions.get(owner.position_id) is not owner or
                 request.position_id != owner.position_id or
                 request.instrument_id != owner.request.instrument_id or
                 request.units_to_deduct is not None or
@@ -128,17 +195,24 @@ class EtoroDemoOrderPort:
             raise DemoLineageRefused(
                 "close is not a full reduce-only close of a confirmed SideDeck position")
         require_demo_route("POST", request.path)
+        # Reserve before I/O: an unknown close outcome must not produce a
+        # second sell. Read-only reconciliation and explicit owner recovery only.
+        self._closing_positions.add(owner.position_id)
         payload = self._route.send(
             "POST", request.path, reference_id=request.reference_id,
             body=request.body(),
         )
-        return parse_close_acceptance(payload, request=request)
+        acceptance = parse_close_acceptance(payload, request=request)
+        self._accepted_closes[request.reference_id] = acceptance
+        return acceptance
 
     def lookup_close(
         self, acceptance: CloseAcceptance, *, request: DemoCloseRequest,
         owner: ConfirmedOpen,
     ) -> CloseRead:
-        if (request.position_id != owner.position_id or
+        if (self._verified_positions.get(owner.position_id) is not owner or
+                self._accepted_closes.get(request.reference_id) is not acceptance or
+                request.position_id != owner.position_id or
                 acceptance.position_id != owner.position_id or
                 request.instrument_id != owner.request.instrument_id):
             raise DemoLineageRefused("close lookup is for a different position")
