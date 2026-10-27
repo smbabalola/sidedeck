@@ -87,6 +87,32 @@ export function isReleaseGate(d: unknown): d is ReleaseGate {
     && d.broker_execution === "DISABLED" && isArr(d.blocking_controls) && d.blocking_controls.every(isStr) && isObj(d.rehearsal);
 }
 
+export type DayReadinessGate = {
+  id: "research" | "market_data" | "strategy" | "offline_cycle" | "broker";
+  label: string;
+  status: "IMPLEMENTED_OFFLINE" | "BLOCKED_EXTERNAL" | "NOT_RELEASED";
+  detail: string;
+  next_action: string;
+};
+export type DayTraderReadiness = {
+  schema_version: 1; module: "DAY_TRADER"; source: "CODE_DERIVED_OFFLINE";
+  execution_enabled: false; broker_execution: "DISABLED"; real_execution: "PERMANENTLY_EXCLUDED";
+  data_status: "BLOCKED_EXTERNAL"; strategy_status: "BLOCKED_EXTERNAL";
+  demo_release: "NOT_RELEASED"; gates: DayReadinessGate[]; limitations: string[];
+};
+const DAY_GATE_IDS: DayReadinessGate["id"][] = ["research", "market_data", "strategy", "offline_cycle", "broker"];
+export function isDayTraderReadiness(d: unknown): d is DayTraderReadiness {
+  if (!(isObj(d) && d.schema_version === 1 && d.module === "DAY_TRADER"
+    && d.source === "CODE_DERIVED_OFFLINE" && d.execution_enabled === false
+    && d.broker_execution === "DISABLED" && d.real_execution === "PERMANENTLY_EXCLUDED"
+    && d.data_status === "BLOCKED_EXTERNAL" && d.strategy_status === "BLOCKED_EXTERNAL"
+    && d.demo_release === "NOT_RELEASED" && isArr(d.limitations) && d.limitations.every(isStr)
+    && isArr(d.gates) && d.gates.length === DAY_GATE_IDS.length)) return false;
+  return d.gates.every((g: unknown, i: number) => isObj(g) && g.id === DAY_GATE_IDS[i]
+    && isStr(g.label) && isStr(g.detail) && isStr(g.next_action)
+    && g.status === (i === 0 || i === 3 ? "IMPLEMENTED_OFFLINE" : i === 4 ? "NOT_RELEASED" : "BLOCKED_EXTERNAL"));
+}
+
 // --- /api/market/tracks --------------------------------------------------------------
 export type TrackId = "DAY" | "SWING" | "POSITION";
 export const TRACKS: TrackId[] = ["DAY", "SWING", "POSITION"];
