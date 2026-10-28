@@ -187,6 +187,7 @@ def run_pilot(
 def collect_signed_spy_five_minute(
     auth: DataAuthorization, ledger: DataRequestLedger, *, key_id: str,
     secret: str, now: Callable[[], datetime], opener: Opener = _safe_urlopen,
+    checkpoint_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Offline-testable historical collection; caller must verify owner signature.
 
@@ -215,6 +216,8 @@ def collect_signed_spy_five_minute(
     excluded_extended_hours = 0
     pages = 0
     page_counts: list[dict[str, int]] = []
+    if checkpoint_dir is not None:
+        checkpoint_dir.mkdir(parents=True, exist_ok=False)
     while pages < auth.max_requests:
         params = dict(auth.scope)
         if token is not None:
@@ -281,6 +284,13 @@ def collect_signed_spy_five_minute(
                          **{key: str(value) for key, value in numeric.items()}})
         page_counts.append({"page": pages, "raw_bars": len(payload["bars"]),
                             "accepted_regular_bars": len(bars)})
+        if checkpoint_dir is not None:
+            checkpoint = {"pages": pages, "raw_count": len(payload["bars"]),
+                          "accepted_count": len(bars), "complete": False,
+                          "strategy_admission_eligible": False}
+            pending = checkpoint_dir / "progress.tmp"
+            pending.write_text(json.dumps(checkpoint), encoding="utf-8")
+            pending.replace(checkpoint_dir / "progress.json")
         nxt = payload.get("next_page_token")
         if nxt is None:
             break
@@ -400,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         summary = collect_signed_spy_five_minute(
             auth, DataRequestLedger(DEFAULT_LEDGER, auth),
             key_id=key_id, secret=secret, now=lambda: datetime.now(UTC),
+            checkpoint_dir=out / f"checkpoint-{auth.authorization_id}",
         )
         target.write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
         print(json.dumps({"bars": len(summary["bars"]), "pages": summary["pages"],
