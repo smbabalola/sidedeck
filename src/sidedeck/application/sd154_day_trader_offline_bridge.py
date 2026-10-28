@@ -81,6 +81,16 @@ def run_day_trader_offline_cycle(
         reasons = ("UNTRUSTED_DAY_TRADER_RESEARCH",)
     elif not native_signals or not admissions:
         reasons = ("INDEPENDENT_NATIVE_STRATEGY_ADMISSION_REQUIRED",)
+    elif any(
+        signal.kind != "signal"
+        or signal.payload.get("canonical_id") != research_result.signal.canonical_id
+        or signal.payload.get("track") != "DAY"
+        or signal.payload.get("direction") != research_result.signal.direction
+        for signal in native_signals
+    ):
+        # The independent native runner must describe the *same* opportunity;
+        # its authenticity and strategy admission are still checked by SD-074.
+        reasons = ("DAY_TRADER_NATIVE_SIGNAL_MISMATCH",)
     elif sealed_research is None or planning_quote is None:
         reasons = ("TRUSTED_ENTRY_INPUTS_REQUIRED",)
     else:
