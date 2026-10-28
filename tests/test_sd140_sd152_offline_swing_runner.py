@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -619,3 +621,103 @@ def test_sd140_protective_grant_expiry_alert_is_unverified_and_read_only(setup):
     assert "PROTECTIVE_GRANT_EXPIRY_DOCUMENT_UNREADABLE" in malformed["alerts"]
     assert "PROTECTIVE_GRANT_SIGNATURE_AND_REVOCATION_CHECK_REQUIRED" in malformed["alerts"]
     assert tuple(route.calls) == before
+
+
+def test_sd152_actual_child_process_exit_leaves_durable_run_fenced(setup):
+    """A genuine OS child exit (not an exception) cannot release a RUNNING fence."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    slot = slots_for(scheduler.jobs["swing_review"], NOW.date())[0]
+    child_code = """
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from sidedeck.application.sd152_offline_swing_runner import OfflineSwingRunFence
+path, slot, at = sys.argv[1:]
+fence = OfflineSwingRunFence(Path(path))
+token = fence.acquire(datetime.fromisoformat(slot), owner="hard-exit-worker",
+                      at=datetime.fromisoformat(at))
+if not token:
+    raise SystemExit(3)
+os._exit(77)
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", child_code,
+         str(env.tmp / "single-writer.sqlite3"), slot.isoformat(), NOW.isoformat()],
+        check=False, capture_output=True, text=True, timeout=15,
+    )
+    assert crashed.returncode == 77, crashed.stderr
+    restarted_fence = OfflineSwingRunFence(env.tmp / "single-writer.sqlite3")
+    assert restarted_fence.state() == "RUNNING"
+    stale = restarted_fence.health(now=NOW + timedelta(minutes=5))
+    assert "STALE_RUNNING_HEARTBEAT_RECONCILIATION_REQUIRED" in stale.alerts
+    restarted = OfflineSwingScheduledService(
+        SchedulerStore(env.tmp / "schedule.sqlite3"),
+        restarted_fence, controller, clock=env.clock,
+    )
+    assert restarted.run_due(owner="replacement").status == "RECOVERY_REQUIRED"
+    assert restarted_fence.acquire(slot, owner="replacement", at=NOW) is None
+    assert scheduler.history("swing_review") == ()
+    assert route.calls == []
+
+
+def test_sd141_actual_child_process_exits_after_open_lineage_without_policy_result(setup):
+    """Durable accepted broker-shaped fixture persists across an abrupt OS exit.
+
+    No broker POST is sent in this test: a child writes the same durable
+    SD-036 state that a broker-shaped accepted-open/lookup would have recorded,
+    then dies without touching SD-063 policy outcome.
+    """
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    request = controller.adapter._open_request(proposal)
+    child_code = """
+import os
+import sys
+from decimal import Decimal
+from sidedeck.application.sd036_etoro_demo_desk import EtoroDemoLineage
+db, ref, intent, instrument, units, limit = sys.argv[1:]
+lineage = EtoroDemoLineage(
+    db, baseline_position_ids=(11, 12, 13, 14),
+    baseline_order_ids=(9011, 9012, 9013, 9014),
+)
+lineage.record_pending(
+    reference_id=ref, kind="OPEN", intent_id=intent,
+    book_id="etoro-demo:tradingagents", instrument_id=int(instrument),
+    units=Decimal(units), limit_rate=Decimal(limit), position_id=None,
+)
+lineage.set_state(ref, "ACCEPTED", order_id=770001)
+lineage.register_position(
+    reference_id=ref, order_id=770001,
+    book_id="etoro-demo:tradingagents", instrument_id=int(instrument),
+    position_id=880001, units=Decimal(units), remaining=Decimal(units),
+)
+os._exit(78)
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", child_code,
+         str(env.tmp / "lineage.sqlite3"), request.reference_id,
+         proposal.reference_id, str(request.instrument_id),
+         str(request.units), str(request.limit_rate)],
+        check=False, capture_output=True, text=True, timeout=15,
+    )
+    assert crashed.returncode == 78, crashed.stderr
+    assert lineage.order(request.reference_id)["state"] == "ACCEPTED"
+    assert lineage.owned(880001)["state"] == "OPEN"
+    assert env.ledger.state().entries[proposal.reference_id].outcome is None
+    restarted = OfflineSwingScheduledService(
+        SchedulerStore(env.tmp / "schedule.sqlite3"),
+        OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+        controller, clock=env.clock,
+    )
+    dossier = restarted.recovery_dossier(now=NOW)
+    assert any(
+        row["review_action"] == "DURABLE_OPEN_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+        for row in dossier["uncertain_orders"]
+    )
+    assert restarted.run_due(owner="replacement").status == "RECOVERY_REQUIRED"
+    assert restarted.fence.state() == "IDLE"
+    assert route.calls == []
+    assert scheduler.history("swing_review") == ()
