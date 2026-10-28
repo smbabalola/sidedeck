@@ -353,7 +353,7 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
             raise MarketDataUnavailable("invalid saved five-minute bar")
         day = stamp.astimezone(NEW_YORK).date()
         by_day.setdefault(day, []).append(IntradayBar(stamp, *vals))
-    findings = []
+    findings: list[dict[str, Any]] = []
     for day, day_bars in sorted(by_day.items()):
         session = session_for(day)
         if session is None:
