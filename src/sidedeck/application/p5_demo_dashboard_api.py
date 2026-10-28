@@ -323,6 +323,24 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = day_trader_summary(day_trader_runs)
                 elif route == "/api/day-trader/readiness":
                     data = day_trader_readiness()
+                elif route == "/api/ops/offline-operator-status":
+                    # Until a separately qualified read-only SD-152 service handle
+                    # is configured, never fabricate a healthy durable state.
+                    data = {
+                        "schema": "sidedeck.sd152.operator-status/1",
+                        "source": "LOCAL_OFFLINE_DIAGNOSTICS_ONLY",
+                        "status": "ACTION_REQUIRED",
+                        "incidents": ["OPERATOR_EVIDENCE_UNAVAILABLE"],
+                        "incident_digest_sha256": None,
+                        "delivery_status": "NOT_CONFIGURED",
+                        "recovery": "SEPARATELY_AUTHORISED_MANUAL_REVIEW_ONLY",
+                        "broker_account_verified": False,
+                        "safe_to_trade": False,
+                        "automatic_get_allowed": False,
+                        "automatic_post_allowed": False,
+                        "clear_halt_allowed": False,
+                        "execution_release": "ETORO_DEMO_NOT_RELEASED",
+                    }
                 else:
                     self.send_error(404)
                     return
