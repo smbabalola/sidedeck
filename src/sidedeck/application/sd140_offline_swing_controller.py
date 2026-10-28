@@ -134,8 +134,13 @@ class OfflineSwingCycleController:
             return self._result("HALTED", None, exits,
                                 alerts + ["KILL_SWITCH_ENGAGED"])
         if alerts:
-            # Never open while a quote, ownership, pending exit or other risk
-            # condition needs review, even when another candidate looks good.
+            # An already-owned position needs functioning protective monitoring:
+            # audit/quote/ownership/pending-exit failures cannot be a soft
+            # "attention" status that permits an unattended later tick.
+            if self.runtime.ledger.open_positions():
+                self._halt("SWING_POSITION_PROTECTION_UNVERIFIED")
+                return self._result("HALTED", None, exits,
+                                    alerts + ["POSITION_PROTECTION_UNVERIFIED"])
             return self._result("ATTENTION_REQUIRED", None, exits, alerts)
         if self.runtime.ledger.open_positions():
             # First vertical slice: one owned SWING position at a time.
