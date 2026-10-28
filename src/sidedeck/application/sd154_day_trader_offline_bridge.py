@@ -70,6 +70,9 @@ def run_day_trader_offline_cycle(
     elif (research_result.status != "RESEARCH_ONLY"
           or research_result.signal.track != "DAY"
           or research_result.signal.source_kind != "DAY_TRADER_METHOD"
+          or research_result.admission.track != research_result.signal.track
+          or research_result.admission.strategy_id != research_result.signal.source_id
+          or research_result.admission.version != research_result.signal.source_version
           or research_result.admission.status != "RESEARCH_ONLY"):
         reasons = ("UNTRUSTED_DAY_TRADER_RESEARCH",)
     elif not native_signals or not admissions:
