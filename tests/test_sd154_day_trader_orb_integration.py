@@ -116,3 +116,41 @@ def test_orb_fixture_and_separately_admitted_native_offline_round_trip(tmp_path:
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_inconsistent_research_result_status_cannot_open_day_position(tmp_path: Path):
+    """A caller cannot upgrade Day Trader research by relabelling the result."""
+    now = datetime(2026, 11, 27, 15, 0, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env, fill_price="500")
+    try:
+        bars = tuple(
+            IntradayBar(
+                start=now - timedelta(minutes=30 - 5 * i),
+                open=Decimal("500"), high=Decimal("502") if i < 3 else Decimal("505"),
+                low=Decimal("499"), close=Decimal("501") if i < 3 else Decimal("504"),
+                volume=Decimal("10000"),
+            ) for i in range(4)
+        )
+        signal = orb_signal(MSFT, bars, now)
+        assert signal is not None
+        research = DayResearchResult(
+            signal=signal,
+            admission=StrategyAdmission(
+                signal.source_id, METHOD_VERSION, "DAY", "RESEARCH_ONLY",
+                "fixture-chart-not-oos", 0, False,
+            ),
+            metadata={"data_basis": "SYNTHETIC_FIXTURE"},
+            status="ADMITTED",
+        )
+        result = run_day_trader_offline_cycle(
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            research_result=research,
+        )
+        assert result.proposal_reasons == ("UNTRUSTED_DAY_TRADER_RESEARCH",)
+        assert result.cycle.status == "NO_TRADE"
+        assert gateway._simulator.submitted_orders == 0
+        assert not env.ledger.open_positions()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
