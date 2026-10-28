@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from sidedeck.application.sd152_digest_integrity import validate_offline_digest
 from sidedeck.application.sd152_ack_replay_fence import OfflineAcknowledgementReplayFence, _NONCE
 from sidedeck.application.sd152_operator_acknowledgement import OfflineOperatorAcknowledgements, _ACTOR, _DIGEST
 
@@ -26,7 +27,8 @@ class AtomicOfflineAcknowledgement:
         digest = digest_report.get("dedup_sha256")
         actor = authorization.get("subject")
         if (
-            digest_report.get("schema") != "sidedeck.sd152.offline-alert-digest/1"
+            not validate_offline_digest(digest_report)
+            or digest_report.get("schema") != "sidedeck.sd152.offline-alert-digest/1"
             or digest_report.get("severity") != "ACTION_REQUIRED"
             or digest_report.get("delivery_status") != "NOT_CONFIGURED"
             or digest_report.get("execution_release") != "ETORO_DEMO_NOT_RELEASED"
