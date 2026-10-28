@@ -25,7 +25,7 @@ def test_day_trader_research_without_independent_admission_cannot_order(tmp_path
         )
         result = run_day_trader_offline_cycle(controller, research_result=research)
         assert result.cycle.status == "NO_TRADE"
-        assert result.proposal_reasons == ("DAY_TRADER_NO_ENTRY_SIGNAL",)
+        assert result.proposal_reasons == ("EXISTING_POSITION_EXIT_PRIORITY",)
         assert result.report()["broker_execution"] == "DISABLED"
         assert gateway._simulator.submitted_orders == 0
     finally:
