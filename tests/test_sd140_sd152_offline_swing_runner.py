@@ -700,7 +700,7 @@ os._exit(78)
 """
     crashed = subprocess.run(
         [sys.executable, "-c", child_code, str(Path(__file__).resolve().parents[1] / "src"),
-         str(env.tmp / "lineage.sqlite3"), request.reference_id,
+         str(env.tmp / "sd138-lineage.sqlite3"), request.reference_id,
          proposal.reference_id, str(request.instrument_id),
          str(request.units), str(request.limit_rate)],
         check=False, capture_output=True, text=True, timeout=15,
