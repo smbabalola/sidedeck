@@ -19,6 +19,19 @@ Deliver one integrated, reliable path from genuine licensed data and an independ
 5. Commit/push isolated branch, log exact evidence and remaining blockers in TODO; update PR. Generate the next READY dependency-clearing batch and **repeat without waiting for a routine "proceed"** while the Codex session is active.
 6. If blocked by data, entitlement, external audit infrastructure or owner signatures, stop only that action. Continue other safe offline tasks. Preserve a resumable handoff. A steering file **does not itself run in the background**.
 
+## Current work allocation — multi-task bundles (28 October 2026)
+
+**Execute larger coordinated batches, not one SD item per owner "proceed".** The authoritative full definitions, acceptance tests, dependencies, and stop rules are in [docs/SD153_BUNDLED_ENGINEERING_QUEUE.md](docs/SD153_BUNDLED_ENGINEERING_QUEUE.md). `TODO.md` remains the live status/evidence ledger. Use a **single writing owner per checkout/branch**, and verify the exact pushed commit after each testable integrated slice.
+
+| Order | Bundle | Grouped work | Exit from offline engineering |
+|---|---|---|---|
+| **R — current** | Broker reliability + controlled recovery | **SD-138/139/141** with SD-145/152 checks | Fault/retry budgets, signed read-only operator recovery protocol, baseline + multi-ledger proof, no replay; independent security signoff **not self-claimed** |
+| **O — next** | Autonomous operations + operator interface | **SD-140/152/147/148** | Multi-track session/DST/protective logic, single-writer offline service, read-only dashboard, multi-session chaos soak |
+| **D — independent research** | Alpaca historical data + swing admission | **SD-143/144** with SD-142/014–022/071 | Reproducible lawful-data and out-of-sample `PASS/FAIL/BLOCKED`; never promote synthetic or insufficient research data |
+| **G — independent gate** | Security review + unsigned release package | **SD-146/149** | Independent signed-off findings where actually verified, otherwise `NO_GO`; consolidate owner decisions |
+
+**SD-150/151 are not bundled into autonomous engineering.** Demo release, external provider reads/deployment/spend, owner grant signature, historical HALT reset and any actual broker requests require **separate** scoped owner action. This work allocation grants none of them. Proceed to another unblocked offline bundle rather than asking for routine instruction when an external gate is pending. Each batch still requires green exact-head CI and an honest TODO update before claiming its verified code status.
+
 ## Five-lane GO-LIVE delivery sequence
 
 Codex must progress **all dependency-ready offline lanes in parallel** (without asking for routine `proceed`), using the exact SD task IDs and evidence rules in [TODO.md](TODO.md):
@@ -52,4 +65,4 @@ Codex must progress **all dependency-ready offline lanes in parallel** (without 
 - No duplicate writes, no simulated closing prices presented as broker P&L, no synthetic data silently promoted to strategy qualification, no grants signed by Codex.
 - Do not merge default branches, touch other worktrees, or run destructive changes on personal/broker account databases.
 
-**Start now with SD-138:** implement a real offline-only SD-063/064/074/145-to-SD-129/036 autonomous adapter plus one end-to-end, broker-shaped **fake** entry → identified position → reduce-only exit → final /pnl reconciliation, with exact grant/quote/audit checks and negative tests. **Then SD-139/140/141/152** as dependencies clear; progress SD-143/144, SD-146/147/148 in parallel. See [critical-path plan](docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md), which does not authorize data access or broker execution. Follow charter §§20–21, commit/test/verify CI/update TODO, and continue implementation without routine prompts while the Codex session is active.
+**Start with Bundle R's unclosed work, not another SD-138 rebuild.** The basic fake broker round trip and SD-140/152 offline SWING first slice have already passed tests. Next complete the *remaining* SD-141 recovery budgets, operator-only dry-run evidence and independent-review finding register; then advance Bundle O's missing multi-track operations and Bundle D's lawful evidence in parallel as interfaces permit. [Bundled engineering queue](docs/SD153_BUNDLED_ENGINEERING_QUEUE.md) and [critical-path plan](docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md) govern scope, with current truth in TODO. No outside I/O, owner release, signed recovery action or HALT reset is authorised. Follow charter §§20–21, run exact-head CI, document evidence and continue through unblocked grouped slices during an active Codex session.
