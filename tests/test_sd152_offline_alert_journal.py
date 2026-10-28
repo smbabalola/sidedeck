@@ -35,3 +35,23 @@ def test_clock_regression_and_forged_release_refused(tmp_path):
         journal.record(alert(), at=now - timedelta(seconds=1))
     with pytest.raises(ValueError):
         journal.record({**alert(), "execution_release": "RELEASED"}, at=now)
+
+
+def test_informational_journal_rejects_forged_empty_digest(tmp_path):
+    journal = OfflineAlertJournal(tmp_path / "informational.sqlite3")
+    now = datetime.now(UTC)
+    informational = build_offline_alert_digest({
+        "schema": "sidedeck.sd152.offline-operator-alerts/1",
+        "status": "OBSERVATION_ONLY", "incidents": [],
+        "safe_to_trade": False, "automatic_recovery_allowed": False,
+        "clear_halt_allowed": False, "execution_release": "ETORO_DEMO_NOT_RELEASED",
+    })
+    assert journal.record(informational, at=now)["first_observation"] is True
+    for altered in (
+        {"dedup_sha256": "a" * 64},
+        {"incidents": ["FENCE_UNRESOLVED"]},
+        {"operator_action": "MANUAL_REVIEW_ONLY"},
+        {"severity": "ACTION_REQUIRED"},
+    ):
+        with pytest.raises(ValueError, match="integrity"):
+            journal.record({**informational, **altered}, at=now)
