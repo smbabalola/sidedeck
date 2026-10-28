@@ -349,3 +349,20 @@ def test_sd152_inspection_surfaces_ambiguous_close_without_broker_calls(setup):
     assert "MANUAL_RECONCILIATION_REQUIRED_NO_AUTOMATIC_TAKEOVER" in observed["alerts"]
     assert "POLICY_KILL_SWITCH_ENGAGED" in observed["alerts"]
     assert len(route.calls) == call_count
+
+
+def test_sd152_tampered_idle_fence_cannot_allow_a_new_tick(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    # Contradictory local fence metadata is an incident, not a free slot.
+    with sqlite3.connect(env.tmp / "single-writer.sqlite3") as conn:
+        conn.execute(
+            "UPDATE offline_swing_single_writer SET token='unexpected' WHERE id=1"
+        )
+    with pytest.raises(OfflineRunnerRefused, match="identity conflict"):
+        fence.state()
+    with pytest.raises(OfflineRunnerRefused, match="identity conflict"):
+        service.health(now=NOW)
+    with pytest.raises(OfflineRunnerRefused, match="identity conflict"):
+        service.run_due(owner="worker-a", entry=env.entry(), entry_quote=quote)
+    assert route.calls == []
