@@ -77,7 +77,7 @@ test("Day Trader readiness has five explicit gates and no broker unlock buttons"
   const operator = page.getByRole("region", { name: "Offline operator diagnostics" });
   await expect(operator).toBeVisible();
   await expect(operator.getByText("Evidence unavailable")).toBeVisible();
-  await expect(operator.getByText("NOT CONFIGURED")).toBeVisible();
+  await expect(operator.getByText("Alert delivery")).toBeVisible();
   await expect(operator.getByText("Not available")).toBeVisible();
   await expect(page.getByRole("button", { name: /unlock|approve|buy|sell|order|close position|submit|execute/i })).toHaveCount(0);
 });
