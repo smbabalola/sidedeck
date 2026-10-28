@@ -30,23 +30,50 @@ const details = (label: string, data: unknown) =>
     <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-muted">{JSON.stringify(data, null, 2)}</pre>
   </details>;
 
+type OperatorStatus = {
+  schema: "sidedeck.sd152.operator-status/1";
+  source: "LOCAL_OFFLINE_DIAGNOSTICS_ONLY";
+  status: "ACTION_REQUIRED" | "INFORMATIONAL";
+  incidents: string[];
+  delivery_status: "NOT_CONFIGURED";
+  execution_release: "ETORO_DEMO_NOT_RELEASED";
+};
+const isOperatorStatus = (v: unknown): v is OperatorStatus => {
+  const x = object(v);
+  return x.schema === "sidedeck.sd152.operator-status/1"
+    && x.source === "LOCAL_OFFLINE_DIAGNOSTICS_ONLY"
+    && x.status === "ACTION_REQUIRED"
+    && Array.isArray(x.incidents) && x.incidents.length > 0
+    && x.incidents.every(i => typeof i === "string" && /^[A-Z0-9_]+$/.test(i))
+    && x.delivery_status === "NOT_CONFIGURED"
+    && x.execution_release === "ETORO_DEMO_NOT_RELEASED"
+    && x.safe_to_trade === false
+    && x.automatic_get_allowed === false
+    && x.automatic_post_allowed === false
+    && x.clear_halt_allowed === false
+    && x.broker_account_verified === false
+    && x.recovery === "SEPARATELY_AUTHORISED_MANUAL_REVIEW_ONLY";
+};
+
 function OfflineOperatorDiagnostics() {
+  const status = useResource("/api/ops/offline-operator-status", isOperatorStatus);
   return <Panel title="Offline operator diagnostics" provenance={null}
-    subtitle="Engineering-only visibility. No deployed worker-health or recovery-alert feed is connected to this screen.">
-    <div role="status" aria-label="Offline operator alerts unavailable"
+    subtitle="Local read-only diagnostics; no independently authenticated broker status.">
+    <StateBlock resource={status}>{d => <div role="status" aria-label="Offline operator alerts unavailable"
       className="rounded border border-rule bg-raised/40 p-3">
       <Badge tone="blocked">Evidence unavailable</Badge>
       <p className="mt-2 text-xs text-muted">
-        The offline runner has read-only health, recovery and alert-digest code, but this dashboard
-        cannot inspect its local SQLite evidence. Do not infer that any worker, order or account is healthy.
+        The offline worker's persisted recovery evidence is not connected. Manual review is required;
+        this is not proof that an account or worker is healthy.
       </p>
       <KeyValues rows={[
         ["Broker execution", "NOT RELEASED"],
-        ["Alert delivery", "NOT CONFIGURED"],
+        ["Alert delivery", d.delivery_status],
         ["Recovery", "Manual, separately authorised"],
         ["HALT reset", "Not available"],
+        ["Incident", d.incidents.join(", ")],
       ]}/>
-    </div>
+    </div>}</StateBlock>
   </Panel>;
 }
 
