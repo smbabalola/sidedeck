@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal, Refusal
@@ -91,6 +91,12 @@ def run_day_trader_offline_cycle(
           or research_result.admission.version != research_result.signal.source_version
           or research_result.admission.status != "RESEARCH_ONLY"):
         reasons = ("UNTRUSTED_DAY_TRADER_RESEARCH",)
+    elif (
+        research_result.signal.generated_at > controller.clock()
+        or controller.clock() - research_result.signal.generated_at > timedelta(minutes=15)
+        or research_result.signal.data_cutoff > controller.clock()
+    ):
+        reasons = ("STALE_OR_FUTURE_DAY_TRADER_RESEARCH",)
     elif not native_signals or not admissions:
         reasons = ("INDEPENDENT_NATIVE_STRATEGY_ADMISSION_REQUIRED",)
     elif any(
