@@ -17,7 +17,7 @@ from sidedeck.application.sd068_track_scheduler import NEW_YORK, SchedulerError,
 from sidedeck.application.sd074_trusted_inputs import AuthenticatedRuntime, Envelope
 from sidedeck.application.sd107_demo_gateway import BROKER_ROUTES
 from sidedeck.application.sd138_autonomous_order_adapter import (
-    AutonomousEtoroDemoOrderAdapter, SD138Refused,
+    AutonomousEtoroDemoOrderAdapter,
 )
 
 
