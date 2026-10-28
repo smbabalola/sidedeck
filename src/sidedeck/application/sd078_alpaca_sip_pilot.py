@@ -217,17 +217,24 @@ def collect_signed_spy_five_minute(
             headers={"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret,
                      "Accept": "application/json"},
         )
-        ledger.reserve(request.full_url, now())
+        request_id = ledger.reserve(request.full_url, now())
         pages += 1
         try:
             with opener(request, timeout=20) as response:
-                if getattr(response, "status", 200) != 200:
+                status = getattr(response, "status", 200)
+                ledger.record(request_id, f"SENT_HTTP_{status}_BODY_UNCHECKED")
+                if status != 200:
                     raise MarketDataUnavailable("Alpaca intraday HTTP status not OK")
                 raw = response.read(8_000_001)
                 if len(raw) > 8_000_000:
                     raise MarketDataUnavailable("Alpaca intraday response exceeds limit")
                 payload = json.loads(raw)
-        except Exception:
+        except Exception as exc:
+            if not isinstance(exc, MarketDataUnavailable):
+                try:
+                    ledger.record(request_id, f"FAILED:{type(exc).__name__}")
+                except AuthorizationRefused:
+                    pass  # HTTP status already durably recorded.
             raise MarketDataUnavailable("Alpaca intraday request failed") from None
         if not isinstance(payload, dict) or not isinstance(payload.get("bars"), list):
             raise MarketDataUnavailable("invalid Alpaca intraday response")
