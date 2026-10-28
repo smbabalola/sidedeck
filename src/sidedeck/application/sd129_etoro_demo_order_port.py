@@ -20,6 +20,7 @@ from sidedeck.application.sd036_etoro_demo_desk import (
     EtoroDemoLineage, OfflineEtoroDemoSimulator, TransportNotFound,
 )
 
+from sidedeck.domain.etoro_demo_books import BaselinePosition
 from sidedeck.domain.etoro_demo_orders import (
     DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, DEMO_PNL_PATH,
     DemoCloseRequest, DemoOpenRequest, DemoOrderOutcome, CloseOutcome,
@@ -125,6 +126,12 @@ class EtoroDemoOrderPort:
         if not self.is_offline_fake_route:
             raise DemoLineageRefused("baseline fixture is available only on the offline simulator")
         return cast(OfflineEtoroDemoSimulator, self._route).offline_baseline_payload()
+
+    def bind_offline_original_baseline(self, baseline: tuple[BaselinePosition, ...]) -> None:
+        """Verify original fixture holdings against one durable SD-036 binding."""
+        if not self.is_offline_fake_route or self._lineage is None:
+            raise DemoLineageRefused("offline protected baseline needs fake route and durable lineage")
+        self._lineage.bind_offline_original_baseline(baseline)
 
     def reconcile_full_close(self, *, reference_id: str, order_id: int,
                              position_id: int, closed_units: Decimal) -> None:
