@@ -29,11 +29,11 @@ Implementation: `OfflineSwingScheduledService.recovery_read_preflight(now, max_g
 
 ## Bundle R milestone 3 — bounded transient GET retries and local signed review
 
-**Implementation under verification:** `sd138_autonomous_order_adapter.py` retries only fake recovery GET statuses 429/500/502/503/504, with a numeric `Retry-After` in `(0,30]`, at most three attempts, and a 120-second stage deadline. Every retry obtains a fresh SD-064 grant use, appends audit evidence, reserves its unique durable stage attempt before transport, and rechecks the grant after waiting. A callback that does not advance the injected clock fails closed. POST is never retried; 404 fallback remains separately bounded by accepted order ID. SD-036 persists retry reservations across handles and restart.
+**Verified offline implementation:** `sd138_autonomous_order_adapter.py` retries only fake recovery GET statuses 429/500/502/503/504, with a numeric `Retry-After` in `(0,30]`, at most three attempts, and a 120-second stage deadline. Every retry obtains a fresh SD-064 grant use, appends audit evidence, reserves its unique durable stage attempt before transport, and rechecks the grant after waiting. A callback that does not advance the injected clock fails closed. POST is never retried; 404 fallback remains separately bounded by accepted order ID. SD-036 persists retry reservations across handles and restart.
 
 Added `sd153_recovery_review.py`, a pure read-only verifier for a human-signed, short-lived review of the local recovery manifest and planned GET ceiling. It uses a separate signing namespace from the SD-064 network grant and explicitly returns no broker verification, GET/POST permission, database mutation, HALT clear, or release. This proves local dossier/read-plan integrity only; it is not an owner signature or independent reviewer approval.
 
-**Tests:** SD-138 adapter, SD-153 preflight and signed-review suites cover transient retry success, attempt/audit/grant accounting, bad status/delay, no clock progress, revocation during pacing, manifest tamper, expiry, ceiling mismatch, signature forgery, namespace separation, and local error preservation. Full-suite and exact-head CI results will be recorded once complete.
+**Tests:** SD-138 adapter, SD-153 preflight and signed-review suites cover transient retry success, attempt/audit/grant accounting, bad status/delay, no clock progress, revocation during pacing, manifest tamper, expiry, ceiling mismatch, signature forgery, namespace separation, and local error preservation. Full suite **2,070 passed / 2 skipped**; Ruff, mypy (225 files), SQLite Alembic upgrade passed. Code commit `71b7394241a40ce9869246f612a6daae1266bd73` exact-head CI [40699044582](https://github.com/smbabalola/sidedeck/actions/runs/40699044582) passed Python, quality, migration, dashboard and browser jobs.
 
 **Still open:** production transport retry policy/quota approval, remote immutable anchor, authentic broker evidence, named independent reviewer, actual owner authorization and SD-150/151 release. Simulated retry tests do not qualify a real provider or enable transport.
 
@@ -54,6 +54,6 @@ Added `sd153_recovery_review.py`, a pure read-only verifier for a human-signed, 
 
 ## Next Batch R work — grouped
 
-**Milestone 3 offline implementation:** bounded fake-only transient retries and a distinct-namespace signed local review verifier are added; full verification and exact-head CI are pending. **Next**: independent transport/security review, remote anchor and real broker evidence remain external; continue Bundle O operations/dashboard/soak and Bundle D only from already-authorized offline evidence. Do not call live-provider retry behavior verified.
+**Milestone 3 offline complete:** bounded fake-only transient retries and a distinct-namespace signed local review verifier passed local and exact-head CI. **Next**: independent transport/security review, remote anchor and real broker evidence remain external; continue Bundle O operations/dashboard/soak and Bundle D only from already-authorized offline evidence. Do not call live-provider retry behavior verified.
 
 **Owner-only matters (do not infer approval):** any authenticated Alpaca/eToro requests, remote anchor provisioning, spend, new owner grants/signatures, HALT reset and SD-150/151 Demo activation.
