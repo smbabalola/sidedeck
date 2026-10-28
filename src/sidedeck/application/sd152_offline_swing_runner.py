@@ -533,6 +533,99 @@ class OfflineSwingScheduledService:
             "execution_release": "ETORO_DEMO_NOT_RELEASED",
         }
 
+    def recovery_read_preflight(
+        self, *, now: datetime, max_gets: int = 2,
+    ) -> dict[str, Any]:
+        """SD-153/R: offline *proposal* for strictly bounded recovery reads.
+
+        This is not a broker GET, a signed owner approval, or a durable request
+        reservation. Each later GET requires fresh SD-064 signed authority,
+        SD-145 pre-send audit anchoring, quote/policy checks and a separate
+        owner-reviewed release. This preflight can never reset HALT/fences.
+        """
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise OfflineRunnerRefused("recovery preflight requires timezone-aware time")
+        if type(max_gets) is not int or not 1 <= max_gets <= 2:
+            raise OfflineRunnerRefused("offline recovery plan may budget only 1 or 2 GETs")
+        dossier = self.recovery_dossier(now=now)
+        gate = self.controller.adapter._gate
+        failures: list[str] = []
+        try:
+            gate._audit_journal.verify()
+        except Exception:
+            failures.append("EXTERNAL_AUDIT_CHECKPOINT_UNVERIFIED")
+        try:
+            gate._anchor_keeper.require_published(self.controller.runtime.ledger)
+        except Exception:
+            failures.append("POLICY_ANCHOR_CHECKPOINT_UNVERIFIED")
+        try:
+            if not gate._authority._ledger.verify_chain():
+                failures.append("GRANT_LEDGER_CHECKPOINT_UNVERIFIED")
+        except Exception:
+            failures.append("GRANT_LEDGER_CHECKPOINT_UNVERIFIED")
+        if dossier["protected_original_positions"] != 4:
+            failures.append("ORIGINAL_BASELINE_COUNT_NOT_VERIFIED")
+        steps: list[dict[str, Any]] = []
+        for item in dossier["uncertain_orders"]:
+            ref = str(item["reference_id"])
+            action = str(item["review_action"])
+            kind = str(item["kind"])
+            def add_step(operation: str, lookup: str) -> None:
+                steps.append({
+                    "reference_id": ref, "order_kind": kind,
+                    "operation": operation, "lookup": lookup,
+                    "authorization": "SEPARATE_OWNER_SIGNATURE_REQUIRED",
+                    "pre_send_audit": "REQUIRED",
+                    "automatic_execution": False,
+                })
+            if action == "ORDER_REFERENCE_LOOKUP_GET_ONLY":
+                add_step("OPEN_ORDER_LOOKUP_GET", "ORIGINAL_REFERENCE_ID")
+                if item["accepted_order_id"] is not None:
+                    add_step("OPEN_ORDER_LOOKUP_FALLBACK_GET", "DURABLE_ACCEPTED_ORDER_ID")
+            elif action == "VERIFY_ACCEPTED_OPEN_GET_ONLY":
+                if item["accepted_order_id"] is None:
+                    failures.append("ACCEPTED_OPEN_WITHOUT_ORDER_ID")
+                else:
+                    add_step("OPEN_ORDER_LOOKUP_GET", "DURABLE_ACCEPTED_ORDER_ID")
+            elif action == "SIGNED_CLOSE_INFO_THEN_ACCOUNT_GET_ONLY":
+                if item["accepted_order_id"] is None:
+                    failures.append("ACCEPTED_CLOSE_WITHOUT_ORDER_ID")
+                else:
+                    add_step("CLOSE_INFO_GET", "DURABLE_ACCEPTED_ORDER_ID")
+                    add_step("WHOLE_ACCOUNT_PNL_GET", "PROTECTED_BASELINE_RECONCILIATION")
+            elif action == "SIGNED_WHOLE_ACCOUNT_RECONCILIATION_ONLY":
+                # The result must never be treated as proof this application
+                # submitted a CLOSE, or as permission to place another.
+                add_step("WHOLE_ACCOUNT_PNL_GET", "PROTECTED_BASELINE_RECONCILIATION")
+            else:
+                failures.append("INDEPENDENT_MANUAL_RECONCILIATION_REQUIRED")
+        if dossier["fence"]["state"] != "IDLE":
+            failures.append("WORKER_FENCE_NOT_IDLE_RECONCILIATION_REQUIRED")
+        if len(steps) > max_gets:
+            failures.append("PLANNED_GET_BUDGET_EXCEEDED")
+        # A budget or integrity failure means NO actionable read plan; retain
+        # the non-executable requested steps only as a review description.
+        status = (
+            "BLOCKED_MANUAL_REVIEW" if failures else
+            "AWAITING_SEPARATE_OWNER_SIGNED_READ_AUTHORIZATION" if steps else
+            "NO_RECOVERY_READS_NEEDED"
+        )
+        return {
+            "schema": "sidedeck.sd153.offline-recovery-read-preflight/1",
+            "status": status,
+            "failure_reasons": sorted(set(failures)),
+            "max_gets": max_gets,
+            "planned_get_count": len(steps),
+            "planned_gets": steps,
+            "safe_to_send": False,
+            "broker_account_verified": False,
+            "automatic_get_allowed": False,
+            "automatic_post_allowed": False,
+            "clear_halt_allowed": False,
+            "broker_route": "SIMULATED_LOCAL",
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+
     def run_due(
         self, *, owner: str,
         planning_bids: Sequence[Envelope] = (),
