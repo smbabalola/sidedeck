@@ -212,6 +212,7 @@ def collect_signed_spy_five_minute(
     token: str | None = None
     seen: set[str] = set()
     bars: list[dict[str, str]] = []
+    excluded_extended_hours = 0
     pages = 0
     while pages < auth.max_requests:
         params = dict(auth.scope)
@@ -256,11 +257,13 @@ def collect_signed_spy_five_minute(
             dt = dt.astimezone(UTC)
             if dt.second or dt.microsecond or dt.minute % 5:
                 raise MarketDataUnavailable("off-grid five-minute timestamp")
-            session = session_for(dt.astimezone(NEW_YORK).date())
-            if session is None or not session.open_utc <= dt or dt + timedelta(minutes=5) > session.close_utc:
-                raise MarketDataUnavailable("intraday bar outside regular session")
             if not begin <= dt < end:
                 raise MarketDataUnavailable("intraday bar outside signed date window")
+            session = session_for(dt.astimezone(NEW_YORK).date())
+            if (session is None or dt < session.open_utc
+                    or dt + timedelta(minutes=5) > session.close_utc):
+                excluded_extended_hours += 1
+                continue  # Pre/post-market bars are not part of the ORB session.
             numeric = {}
             for key in ("o", "h", "l", "c", "v"):
                 try:
@@ -290,7 +293,8 @@ def collect_signed_spy_five_minute(
     return {"schema": "sidedeck-alpaca-five-minute-raw/1",
             "symbol": "SPY", "feed": "sip", "timeframe": "5Min",
             "authorization_digest": auth.digest, "pages": pages,
-            "bars": bars, "data_rights": "UNVERIFIED",
+            "bars": bars, "excluded_extended_hours": excluded_extended_hours,
+            "data_rights": "UNVERIFIED",
             "strategy_admission_eligible": False, "broker_execution": "DISABLED"}
 
 
