@@ -429,7 +429,7 @@ class OfflineSwingScheduledService:
                     if positions:
                         policy_entry = state.entries.get(str(row["intent_id"]))
                         if (len(positions) != 1 or policy_entry is None
-                                or policy_entry.outcome != "FILLED"
+                                or policy_entry.outcome not in {"FILLED", "PARTIALLY_FILLED"}
                                 or policy_entry.broker_order_id != str(order_id)
                                 or policy_entry.broker_position_id !=
                                     str(positions[0]["position_id"])
