@@ -4,6 +4,14 @@
 
 **Authoritative policy:** [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md), in particular **§20 — Continuous engineering loop** and **§21 — Demo GO-LIVE delivery contract**, together with [AGENTS.md](AGENTS.md). **Critical-path implementation plan:** [docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md](docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md) — deliver one complete offline broker-shaped SWING round trip before feature expansion. **Live task assignments:** the top **Autonomous eToro Demo delivery loop** block of [TODO.md](TODO.md). This entry point does not replace those documents or dilute their security rules.
 
+## Current priority: prove autonomous lifecycle without claiming profitable ORB
+
+Owner goal: demonstrate a complete unattended entry-to-exit cycle first, even if ORB eventually fails research qualification. This is a **test-only offline acceptance**, not permission to relax production admission, reset historical HALT, or contact eToro.
+
+Use only the existing SD-155/154/074/063/126/107/152 pipeline and mock broker. As ONE engineering batch: prove automatic native ORB research -> separately flagged fixture-native admission -> risk-generated entry -> durable simulated fill -> owned position -> independently protected timed/stop exit -> simulated broker close -> flat and protected-baseline reconciliation. Include lack-of-admission/no-signal, duplicate/replay, restart, ambiguous fill/close, stale quote, missing exit authority, calendar/early-close and baseline-mutation negative scenarios. Gather exact-head CI and one consolidated status report. **Do not represent test fixture admission as independently qualified strategy evidence.**
+
+External eToro Demo remains NOT_RELEASED and the existing HALTED pilot state remains unchanged. Later actual Demo autonomy still requires independently reviewed risk/recovery/anchor controls, genuine strategy admission, a separate owner-signed narrow Demo release and a specifically authorized HALT reset. No recurring owner micro-prompts for routine offline development.
+
 ## Current owner-priority bundle — finish the ORIGINAL Day Trader, no extensions (28 October)
 
 This section sets execution priority within the existing rules; AGENTS.md and SIDEDECK_STEERING.md retain safety precedence. **Do not add modules, extensions, UI features, other trading strategies or separate brokers.** Do not interrupt the owner after every individual commit. Finish a coherent, verifiable batch before reporting. An active chat/agent session is not a background worker.
