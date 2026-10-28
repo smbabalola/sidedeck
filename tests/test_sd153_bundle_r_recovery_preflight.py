@@ -10,8 +10,27 @@ from sidedeck.application.sd152_offline_swing_runner import OfflineRunnerRefused
 from sidedeck.domain.etoro_demo_orders import DEMO_CLOSE_INFO_PATH
 from sidedeck.application.sd036_etoro_demo_desk import TransportNotFound
 
-from test_sd063_autonomous_demo_policy import NOW, MSFT
-from test_sd140_sd152_offline_swing_runner import setup, seal_bid
+from test_sd063_autonomous_demo_policy import NOW, _Env
+from test_sd140_sd152_offline_swing_runner import seal_bid
+from test_sd138_autonomous_order_adapter import _composed
+from sidedeck.application.sd068_track_scheduler import SchedulerStore
+from sidedeck.application.sd140_offline_swing_controller import OfflineSwingCycleController
+from sidedeck.application.sd152_offline_swing_runner import (
+    OfflineSwingRunFence, OfflineSwingScheduledService,
+)
+
+
+@pytest.fixture
+def recovery_env(tmp_path):
+    env = _Env(tmp_path)
+    gateway, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    controller = OfflineSwingCycleController(gateway._runtime, adapter, clock=env.clock)
+    scheduler = SchedulerStore(tmp_path / "schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "single-writer.sqlite3")
+    service = OfflineSwingScheduledService(scheduler, fence, controller, clock=env.clock)
+    yield env, quote, signer, route, lineage, controller, scheduler, fence, service
+    lineage.close()
+    env.ledger.close()
 
 
 def _pending(lineage, *, reference_id: str | None = None) -> str:
@@ -24,8 +43,8 @@ def _pending(lineage, *, reference_id: str | None = None) -> str:
     return ref
 
 
-def test_sd153_no_uncertain_orders_has_zero_recovery_requests(setup):
-    _env, _quote, _signer, route, _lineage, _controller, _scheduler, _fence, service = setup
+def test_sd153_no_uncertain_orders_has_zero_recovery_requests(recovery_env):
+    _env, _quote, _signer, route, _lineage, _controller, _scheduler, _fence, service = recovery_env
     before = tuple(route.calls)
     report = service.recovery_read_preflight(now=NOW)
     assert report["status"] == "NO_RECOVERY_READS_NEEDED"
@@ -37,8 +56,8 @@ def test_sd153_no_uncertain_orders_has_zero_recovery_requests(setup):
     assert tuple(route.calls) == before
 
 
-def test_sd153_pending_open_proposes_one_separately_signed_reference_get(setup):
-    _env, _quote, _signer, route, lineage, _controller, _scheduler, _fence, service = setup
+def test_sd153_pending_open_proposes_one_separately_signed_reference_get(recovery_env):
+    _env, _quote, _signer, route, lineage, _controller, _scheduler, _fence, service = recovery_env
     ref = _pending(lineage)
     before = tuple(route.calls)
     report = service.recovery_read_preflight(now=NOW, max_gets=1)
@@ -54,8 +73,8 @@ def test_sd153_pending_open_proposes_one_separately_signed_reference_get(setup):
     assert tuple(route.calls) == before
 
 
-def test_sd153_accepted_close_requires_two_distinct_gets_and_signed_audit(setup):
-    env, quote, signer, route, _lineage, controller, _scheduler, _fence, service = setup
+def test_sd153_accepted_close_requires_two_distinct_gets_and_signed_audit(recovery_env):
+    env, quote, signer, route, _lineage, controller, _scheduler, _fence, service = recovery_env
     entry = env.entry()
     controller.adapter.submit_entry(entry, quote=quote)
     plan = controller.runtime.plan_exits(bids=(seal_bid(signer, env, "455"),))
@@ -91,8 +110,8 @@ def test_sd153_accepted_close_requires_two_distinct_gets_and_signed_audit(setup)
     assert tuple(route.calls) == before
 
 
-def test_sd153_two_pending_intents_exceed_operator_get_cap(setup):
-    _env, _quote, _signer, route, lineage, _controller, _scheduler, _fence, service = setup
+def test_sd153_two_pending_intents_exceed_operator_get_cap(recovery_env):
+    _env, _quote, _signer, route, lineage, _controller, _scheduler, _fence, service = recovery_env
     _pending(lineage)
     _pending(lineage)
     report = service.recovery_read_preflight(now=NOW, max_gets=1)
@@ -103,8 +122,8 @@ def test_sd153_two_pending_intents_exceed_operator_get_cap(setup):
     assert route.calls == []
 
 
-def test_sd153_anchor_outage_blocks_unsigned_recovery_plan(setup):
-    env, _quote, _signer, route, lineage, _controller, _scheduler, _fence, service = setup
+def test_sd153_anchor_outage_blocks_unsigned_recovery_plan(recovery_env):
+    env, _quote, _signer, route, lineage, _controller, _scheduler, _fence, service = recovery_env
     _pending(lineage)
     env.gateway_audit_anchor.unavailable = True
     before = tuple(route.calls)
@@ -116,15 +135,15 @@ def test_sd153_anchor_outage_blocks_unsigned_recovery_plan(setup):
 
 
 @pytest.mark.parametrize("budget", [0, 3, True, 1.5, "2"])
-def test_sd153_recovery_budget_refuses_invalid_or_ambiguous_ceiling(setup, budget):
-    _env, _quote, _signer, route, _lineage, _controller, _scheduler, _fence, service = setup
+def test_sd153_recovery_budget_refuses_invalid_or_ambiguous_ceiling(recovery_env, budget):
+    _env, _quote, _signer, route, _lineage, _controller, _scheduler, _fence, service = recovery_env
     with pytest.raises(OfflineRunnerRefused, match="budget"):
         service.recovery_read_preflight(now=NOW, max_gets=budget)
     assert route.calls == []
 
 
-def test_sd153_recovery_preflight_does_not_accept_naive_time(setup):
-    _env, _quote, _signer, route, _lineage, _controller, _scheduler, _fence, service = setup
+def test_sd153_recovery_preflight_does_not_accept_naive_time(recovery_env):
+    _env, _quote, _signer, route, _lineage, _controller, _scheduler, _fence, service = recovery_env
     with pytest.raises(OfflineRunnerRefused, match="timezone-aware"):
         service.recovery_read_preflight(now=(NOW + timedelta(hours=1)).replace(tzinfo=None))
     assert route.calls == []
