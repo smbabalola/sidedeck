@@ -1015,3 +1015,37 @@ def test_sd152_close_ledger_mismatch_blocks_twelve_restarts_without_replay(setup
         assert result.execution_release == "ETORO_DEMO_NOT_RELEASED"
         assert tuple(route.calls) == original_calls
     assert env.ledger.kill_switch_engaged()
+
+
+def test_sd152_tampered_final_close_units_blocks_ten_clean_slot_restarts(setup):
+    """A completed synthetic close with changed durable units is not reconciled."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    entry = env.entry()
+    controller.adapter.submit_entry(entry, quote=quote)
+    plan = controller.runtime.plan_exits(bids=(seal_bid(signer, env, "455"),))
+    assert len(plan.exits) == 1
+    controller.adapter.submit_exit(plan.exits[0], quote=seal_bid(signer, env, "455"))
+    assert service.recovery_dossier(now=NOW)["uncertain_orders"] == []
+    with sqlite3.connect(env.tmp / "sd138-lineage.sqlite3") as conn:
+        conn.execute(
+            "UPDATE etoro_demo_lineage_orders SET filled_units=? "
+            "WHERE kind='CLOSE' AND state='FILLED'", ("999",),
+        )
+    original_calls = tuple(route.calls)
+    assert [method for method, _ in original_calls].count("POST") == 2
+    for attempt in range(10):
+        env.clock.now = NOW + timedelta(minutes=attempt)
+        restarted = OfflineSwingScheduledService(
+            SchedulerStore(env.tmp / "schedule.sqlite3"),
+            OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+            controller, clock=env.clock,
+        )
+        dossier = restarted.recovery_dossier(now=env.clock.now)
+        assert any(
+            item["review_action"] == "DURABLE_CLOSE_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+            for item in dossier["uncertain_orders"]
+        )
+        assert restarted.run_due(owner=f"tamper-restart-{attempt}").status == "RECOVERY_REQUIRED"
+        assert tuple(route.calls) == original_calls
+    assert not env.ledger.kill_switch_engaged()  # No automatic HALT reset was attempted.
