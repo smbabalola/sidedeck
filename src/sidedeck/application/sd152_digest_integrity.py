@@ -40,3 +40,23 @@ def validate_offline_digest(report: Mapping[str, Any]) -> bool:
         and report.get("clear_halt_allowed") is False
         and hmac.compare_digest(expected, claimed)
     )
+
+
+def validate_informational_digest(report: Mapping[str, Any]) -> bool:
+    """Validate an empty informational alert without mistaking it for a critical incident."""
+    incidents = report.get("incidents")
+    claimed = report.get("dedup_sha256")
+    expected = hashlib.sha256(b"[]").hexdigest()
+    return (
+        report.get("schema") == "sidedeck.sd152.offline-alert-digest/1"
+        and incidents == []
+        and report.get("severity") == "INFORMATIONAL"
+        and report.get("operator_action") == "NONE"
+        and isinstance(claimed, str)
+        and _HASH.fullmatch(claimed) is not None
+        and hmac.compare_digest(expected, claimed)
+        and report.get("delivery_status") == "NOT_CONFIGURED"
+        and report.get("execution_release") == "ETORO_DEMO_NOT_RELEASED"
+        and report.get("safe_to_trade") is False
+        and report.get("clear_halt_allowed") is False
+    )
