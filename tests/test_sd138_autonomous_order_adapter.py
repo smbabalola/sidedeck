@@ -13,6 +13,7 @@ import pytest
 
 from sidedeck.application.sd036_etoro_demo_desk import (
     EtoroDemoLineage, OfflineEtoroDemoSimulator, SYNTHETIC_BASELINE_ROWS,
+    TransportNotFound,
 )
 from sidedeck.application.sd107_demo_gateway import GatewayRefused
 from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal
@@ -167,6 +168,29 @@ def test_sd138_expired_grant_refuses_fresh_quote_before_any_fake_request(tmp_pat
     env.ledger.close()
 
 
+def test_sd139_partial_close_never_claims_flat_or_sends_final_pnl(env, tmp_path):
+    gateway, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    route.close_mode = "PARTIAL"
+    with pytest.raises(SD138Refused, match="close stopped for reconciliation") as refused:
+        adapter.submit_exit(plan.exits[0], quote=close_quote)
+    assert isinstance(refused.value.__cause__, SD138Refused)
+    assert "full owned position closed" in str(refused.value.__cause__)
+    close_reference = str(UUID(hex=plan.exits[0].reference_id))
+    assert lineage.order(close_reference)["state"] == "ACCEPTED"
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    assert env.ledger.kill_switch_engaged()
+    assert route.calls[-1][1] == DEMO_CLOSE_INFO_PATH.format(order_id=770_002)
+    assert all(path != DEMO_PNL_PATH for _, path in route.calls)
+    assert [method for method, _ in route.calls].count("POST") == 2
+
+
 def test_sd138_lost_post_ack_recovers_by_get_after_port_restart(env, tmp_path):
     gateway, quote, _signer, route, lineage, path, adapter = _composed(
         env, tmp_path, loses_post=True)
@@ -286,6 +310,103 @@ def test_sd138_lost_close_ack_persists_fence_and_restart_cannot_repost(env, tmp_
         )
     assert [method for method, _ in route.calls].count("POST") == 2
     assert restarted_lineage.order(close_reference)["state"] == "OUTCOME_UNKNOWN"
+    restarted_lineage.close()
+
+
+def test_sd139_restart_recovers_accepted_close_and_settles_both_ledgers(env, tmp_path):
+    gateway, quote, signer, route, lineage, path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    original_send = route.send
+    fail_once = True
+
+    def delayed_close_lookup(method, request_path, **kwargs):
+        nonlocal fail_once
+        if request_path == DEMO_CLOSE_INFO_PATH.format(order_id=770_002) and fail_once:
+            fail_once = False
+            route.calls.append((method, request_path))
+            route.call_references.append(kwargs["reference_id"])
+            raise TransportNotFound("simulated close-info visibility delay")
+        return original_send(method, request_path, **kwargs)
+
+    route.send = delayed_close_lookup
+    with pytest.raises(SD138Refused, match="close stopped for reconciliation"):
+        adapter.submit_exit(plan.exits[0], quote=close_quote)
+    close_reference = str(UUID(hex=plan.exits[0].reference_id))
+    assert lineage.order(close_reference)["state"] == "ACCEPTED"
+    assert env.ledger.kill_switch_engaged()
+    lineage.close()
+
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    restarted_port = EtoroDemoOrderPort(route, lineage=restarted_lineage)
+    restarted = AutonomousEtoroDemoOrderAdapter(
+        policy_gateway=gateway, order_port=restarted_port)
+    route.send = original_send
+    result = restarted.recover_exit(plan.exits[0])
+
+    assert result.classification == "SIMULATED_ROUND_TRIP_CLOSED"
+    assert result.realised_pnl_status == "SIMULATED_ONLY_NOT_BROKER_PNL"
+    assert env.ledger.state().exits[plan.exits[0].reference_id].outcome == "FILLED"
+    assert env.ledger.open_positions() == ()
+    assert restarted_lineage.order(close_reference)["state"] == "FILLED"
+    assert restarted_lineage.owned(880_001)["state"] == "CLOSED"
+    assert [method for method, _ in route.calls].count("POST") == 2
+    assert env.ledger.kill_switch_engaged()  # Recovery never clears HALT.
+    assert route.call_references[-2:] == [
+        f"close-recovery-info:{close_reference}",
+        f"close-recovery-pnl:{close_reference}",
+    ]
+    restarted_lineage.close()
+
+
+def test_sd139_replays_anchored_close_evidence_after_lineage_ledger_crash(env, tmp_path):
+    gateway, quote, signer, route, lineage, path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    original_resolve = gateway._runtime.resolve
+
+    def crash_after_lineage_reconcile(_evidence):
+        raise RuntimeError("simulated process stop between durable ledgers")
+
+    gateway._runtime.resolve = crash_after_lineage_reconcile
+    with pytest.raises(SD138Refused, match="close stopped for reconciliation"):
+        adapter.submit_exit(plan.exits[0], quote=close_quote)
+    close_reference = str(UUID(hex=plan.exits[0].reference_id))
+    assert lineage.order(close_reference)["state"] == "FILLED"
+    assert lineage.owned(880_001)["state"] == "CLOSED"
+    assert env.ledger.state().exits[plan.exits[0].reference_id].outcome is None
+    assert env.ledger.kill_switch_engaged()
+    lineage.close()
+
+    gateway._runtime.resolve = original_resolve
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    restarted = AutonomousEtoroDemoOrderAdapter(
+        policy_gateway=gateway,
+        order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage),
+    )
+    result = restarted.recover_exit(plan.exits[0])
+    assert result.classification == "SIMULATED_ROUND_TRIP_CLOSED"
+    assert env.ledger.state().exits[plan.exits[0].reference_id].outcome == "FILLED"
+    assert env.ledger.open_positions() == ()
+    assert [method for method, _ in route.calls].count("POST") == 2
+    assert restarted_lineage.order(close_reference)["state"] == "FILLED"
+    assert env.ledger.kill_switch_engaged()
     restarted_lineage.close()
 
 

@@ -19,7 +19,7 @@ from sidedeck.application.sd107_demo_gateway import (
 from sidedeck.application.sd129_etoro_demo_order_port import (
     CloseRead, ConfirmedOpen, EtoroDemoOrderPort,
 )
-from sidedeck.domain.etoro_demo_orders import CloseOutcome, DemoOpenRequest
+from sidedeck.domain.etoro_demo_orders import CloseOutcome, DemoCloseRequest, DemoOpenRequest
 from sidedeck.application.sd074_trusted_inputs import Envelope
 from sidedeck.domain.etoro_demo import parse_demo_portfolio
 
@@ -292,6 +292,91 @@ class AutonomousEtoroDemoOrderAdapter:
         except Exception as exc:
             self._halt_ambiguous("AUTONOMOUS_CLOSE_UNRESOLVED")
             raise SD138Refused("autonomous close stopped for reconciliation") from exc
+
+    def recover_exit(self, proposal: ExitProposal) -> AutonomousCloseResult:
+        """GET-only restart recovery for an accepted durable close; never repeats POST."""
+        state = self._gate._runtime.ledger.state()
+        exit_row = state.exits.get(proposal.reference_id)
+        entry = state.entries.get(proposal.entry_reference)
+        if (exit_row is None or entry is None or proposal.policy_digest != self._gate._policy.digest()
+                or exit_row.entry != proposal.entry_reference or exit_row.units != proposal.units
+                or entry.broker_position_id != str(proposal.broker_position_id)
+                or entry.instrument != proposal.etoro_instrument_id
+                or entry.canonical_id != proposal.canonical_id
+                or entry.track != proposal.track
+                or entry.filled - entry.exited != proposal.units
+                or (exit_row.outcome is not None and exit_row.outcome not in _UNKNOWN_OUTCOMES)):
+            raise SD138Refused("recovery proposal differs from the durable policy exit")
+        if not proposal.broker_position_id or not proposal.broker_position_id.isdecimal():
+            raise SD138Refused("recovery proposal has no durable broker position identity")
+        try:
+            close_reference = str(uuid.UUID(hex=proposal.reference_id))
+        except ValueError:
+            raise SD138Refused("recovery proposal reference is not a canonical durable ID") from None
+        request = DemoCloseRequest(
+            close_reference, int(proposal.broker_position_id),
+            proposal.etoro_instrument_id, None)
+        book_id = self._book_for_entry(proposal.entry_reference)
+        protective = proposal.authority == "protective"
+        close_lookup_ref = f"close-recovery-info:{request.reference_id}"
+        try:
+            self._gate._authorize(write=False, reference_id=close_lookup_ref,
+                                  protective=protective)
+            self._gate._audit("SEND", close_lookup_ref,
+                              payload={"action": "CLOSE_RECOVERY_INFO",
+                                       "policy_digest": proposal.policy_digest,
+                                       "book_id": book_id,
+                                       "position_id": request.position_id})
+            close_read = self._port.recover_accepted_close(
+                request, reference_id=close_lookup_ref)
+            if (close_read.outcome.status != "FILLED"
+                    or close_read.outcome.closed_units != proposal.units):
+                raise SD138Refused("recovered close is not a full close of the signed units")
+
+            pnl_ref = f"close-recovery-pnl:{request.reference_id}"
+            self._gate._authorize(write=False, reference_id=pnl_ref,
+                                  protective=protective)
+            self._gate._audit("SEND", pnl_ref,
+                              payload={"action": "FINAL_PORTFOLIO_RECOVERY",
+                                       "policy_digest": proposal.policy_digest,
+                                       "book_id": book_id,
+                                       "position_id": request.position_id,
+                                       "close_order_id": close_read.acceptance.order_id})
+            payload = self._port.read_demo_portfolio(reference_id=pnl_ref)
+            observed_at = self._gate._clock()
+            snapshot = parse_demo_portfolio(payload, observed_at=observed_at)
+            snapshot.require_fresh(observed_at)
+            baseline = self._port.baseline_position_ids
+            if ({p.position_id for p in snapshot.positions} != set(baseline)
+                    or len(baseline) != 4 or snapshot.pending_orders or snapshot.mirror_count):
+                raise SD138Refused("recovery snapshot differs from the protected baseline")
+            simulated_price = self._port.simulated_close_fill_price(
+                close_read.acceptance.order_id)
+            if simulated_price is None:
+                raise SD138Refused("simulator has no close-price evidence for recovery")
+            evidence = self._gate._adapter.seal_simulated_close(
+                payload=close_read.payload, request=request,
+                acceptance=close_read.acceptance, observed_at=observed_at,
+                fill_price=simulated_price)
+            self._gate._audit("RECONCILIATION", proposal.reference_id,
+                              payload={"action": "FINAL_PNL_RECOVERY_SIMULATION",
+                                       "snapshot_sha256": snapshot.payload_sha256,
+                                       "close_order_id": close_read.acceptance.order_id,
+                                       "baseline_position_ids": sorted(baseline),
+                                       "simulated_close_price": str(simulated_price)})
+            self._gate._publish_before_send(self._gate._clock())
+            self._port.reconcile_full_close(
+                reference_id=request.reference_id, order_id=close_read.acceptance.order_id,
+                position_id=request.position_id, closed_units=close_read.outcome.closed_units)
+            if exit_row.outcome in _UNKNOWN_OUTCOMES:
+                self._gate._runtime.reconcile_unknown(evidence)
+            else:
+                self._gate._runtime.resolve(evidence)
+            return AutonomousCloseResult(close_read, snapshot.payload_sha256,
+                                         tuple(sorted(baseline)))
+        except Exception as exc:
+            self._halt_ambiguous("AUTONOMOUS_CLOSE_RECOVERY_UNRESOLVED")
+            raise SD138Refused("close recovery failed closed; no POST was repeated") from exc
 
     def _book_for_entry(self, reference_id: str) -> str:
         state = self._gate._runtime.ledger.state()

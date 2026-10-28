@@ -338,15 +338,19 @@ class EtoroDemoLineage:
                     or opened["order_id"] != position["order_id"]
                     or opened["book_id"] != position["book_id"]
                     or opened["instrument_id"] != position["instrument_id"]
-                    or order["kind"] != "CLOSE" or order["state"] != "ACCEPTED"
+                    or order["kind"] != "CLOSE"
+                    or order["state"] not in {"ACCEPTED", "FILLED"}
                     or order["order_id"] != order_id or order["position_id"] != position_id
                     or order["instrument_id"] != position["instrument_id"]
                     or order["book_id"] != position["book_id"]
                     or Decimal(order["units"]) != closed_units
-                    or position["state"] != "OPEN"
-                    or position_id in self._protected
-                    or closed_units != Decimal(position["remaining_units"])):
+                    or position_id in self._protected):
                 raise EtoroDemoOrderError("full close reconciliation lacks exact durable lineage")
+            if order["state"] == "FILLED" and position["state"] == "CLOSED":
+                return  # idempotent replay after the first durable half of reconciliation
+            if (order["state"] != "ACCEPTED" or position["state"] != "OPEN"
+                    or closed_units != Decimal(position["remaining_units"])):
+                raise EtoroDemoOrderError("full close reconciliation state is inconsistent")
             self.set_state(reference_id, "FILLED", order_id=order_id,
                            filled_units=closed_units)
             self.reduce_position(position_id, closed_units)

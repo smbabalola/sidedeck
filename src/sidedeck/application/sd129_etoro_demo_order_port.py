@@ -385,6 +385,7 @@ class EtoroDemoOrderPort:
 
     def recover_close_info(
         self, acceptance: CloseAcceptance, *, request: DemoCloseRequest,
+        reference_id: str | None = None,
     ) -> CloseRead:
         """GET-only restart recovery for a durably accepted close; never proves flat/P&L.
 
@@ -397,20 +398,22 @@ class EtoroDemoOrderPort:
             raise DemoLineageRefused("durable close recovery requires persisted lineage")
         row = self._lineage.order(request.reference_id)
         owned = self._lineage.owned(request.position_id)
-        if (row["kind"] != "CLOSE" or row["state"] != "ACCEPTED"
+        if (row["kind"] != "CLOSE" or row["state"] not in {"ACCEPTED", "FILLED"}
                 or row["position_id"] != request.position_id
                 or row["instrument_id"] != request.instrument_id
                 or row["order_id"] != acceptance.order_id
                 or acceptance.position_id != request.position_id
                 or request.units_to_deduct is not None
-                or owned is None or owned["book_id"] != row["book_id"]
+                or owned is None or owned["state"] not in {"OPEN", "CLOSED"}
+                or owned["book_id"] != row["book_id"]
                 or owned["instrument_id"] != request.instrument_id
                 or owned["position_id"] != request.position_id):
             raise DemoLineageRefused("durable close acceptance or ownership is inconsistent")
         path = DEMO_CLOSE_INFO_PATH.format(order_id=acceptance.order_id)
         require_demo_route("GET", path)
         payload = self._route.send(
-            "GET", path, reference_id=f"close-recovery:{request.reference_id}",
+            "GET", path,
+            reference_id=reference_id or f"close-recovery:{request.reference_id}",
         )
         outcome = parse_close_info(payload, acceptance=acceptance)
         if outcome.closed_units > Decimal(row["units"]):
@@ -422,3 +425,16 @@ class EtoroDemoOrderPort:
         else:
             state = "UNRESOLVED_PARTIAL_OR_PENDING"
         return CloseRead(acceptance, outcome, payload, position_status=state)
+
+    def recover_accepted_close(
+        self, request: DemoCloseRequest, *, reference_id: str | None = None,
+    ) -> CloseRead:
+        """Reconstruct a durable acceptance and recover by GET without replaying POST."""
+        if self._lineage is None:
+            raise DemoLineageRefused("durable close recovery requires persisted lineage")
+        row = self._lineage.order(request.reference_id)
+        if row["order_id"] is None or row["state"] not in {"ACCEPTED", "FILLED"}:
+            raise DemoLineageRefused("close acceptance is unresolved; only operator reconciliation")
+        acceptance = CloseAcceptance(int(row["order_id"]), request.position_id)
+        return self.recover_close_info(
+            acceptance, request=request, reference_id=reference_id)
