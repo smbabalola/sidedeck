@@ -379,7 +379,7 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
                     exit_reason = "EOD"
                     for future in day_bars[next_index:]:
                         if future.low <= stop:
-                            exit_price = min(stop, entry) if future is day_bars[next_index] else stop
+                            exit_price = min(stop, future.open)
                             exit_reason = "STOP"
                             break
                     trade = {"entry_at": day_bars[next_index].start.isoformat(),
