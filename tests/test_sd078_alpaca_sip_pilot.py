@@ -396,6 +396,7 @@ def test_short_probe_is_bounded_and_not_a_full_year_grant(tmp_path):
 
 def test_inspect_saved_spy_orb_uses_native_scanner_and_refuses_gaps(tmp_path):
     from datetime import timedelta
+    from decimal import Decimal
     from sidedeck.application.sd078_alpaca_sip_pilot import inspect_saved_spy_orb
     from sidedeck.application.p5_alpaca_history import MarketDataUnavailable
 
