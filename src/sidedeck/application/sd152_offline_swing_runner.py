@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from decimal import Decimal
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -337,6 +337,38 @@ class OfflineSwingScheduledService:
             alerts.append("CROSS_LEDGER_RECONCILIATION_REQUIRED")
         if len(lineage.baseline_position_ids) != 4:
             alerts.append("PROTECTED_BASELINE_COUNT_MISMATCH")
+
+        # This is an advisory on a locally configured grant document, NOT
+        # signature or revocation verification. Only SD-064 can authorise a
+        # protective write; an unverified future expiry is never authority.
+        if ledger.open_positions():
+            policy_expiry = self.controller.adapter._gate._policy.expires_at
+            expiry_window = timedelta(hours=24)
+            if now >= policy_expiry:
+                alerts.append("SWING_POLICY_EXPIRED_WITH_OPEN_POSITION")
+            elif now >= policy_expiry - expiry_window:
+                alerts.append("SWING_POLICY_EXPIRY_WITHIN_24H_OPEN_POSITION")
+            protective = self.controller.adapter._gate._protective_grant
+            if protective is None:
+                alerts.append("PROTECTIVE_GRANT_NOT_CONFIGURED_OPEN_POSITION")
+            else:
+                document = protective[0]
+                try:
+                    if not isinstance(document, dict):
+                        raise ValueError("not a grant document")
+                    until = datetime.fromisoformat(str(document["expires_at"]))
+                    if until.tzinfo is None or until.utcoffset() is None:
+                        raise ValueError("grant expiration is naive")
+                    until = until.astimezone(UTC)
+                except (KeyError, TypeError, ValueError):
+                    alerts.append("PROTECTIVE_GRANT_EXPIRY_DOCUMENT_UNREADABLE")
+                else:
+                    if now >= until:
+                        alerts.append("PROTECTIVE_GRANT_DOCUMENT_EXPIRED_UNVERIFIED")
+                    elif now >= until - expiry_window:
+                        alerts.append("PROTECTIVE_GRANT_EXPIRY_WITHIN_24H_UNVERIFIED")
+                if now >= policy_expiry - expiry_window:
+                    alerts.append("PROTECTIVE_GRANT_SIGNATURE_AND_REVOCATION_CHECK_REQUIRED")
         return {
             "schema": "sidedeck.sd152.offline-ops-status/1",
             "fence": fence.report(),
