@@ -286,7 +286,7 @@ def collect_signed_spy_five_minute(
         seen.add(nxt)
         token = nxt
     else:
-        raise MarketDataUnavailable("intraday page budget exhausted")
+        raise MarketDataUnavailable("intraday page budget exhausted; no completed dataset")
     stamps = [bar["timestamp_utc"] for bar in bars]
     if not stamps or stamps != sorted(set(stamps)):
         raise MarketDataUnavailable("missing, duplicate or out-of-order intraday bars")
