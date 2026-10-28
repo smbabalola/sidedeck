@@ -1140,3 +1140,31 @@ def test_sd152_partial_close_ten_restarts_never_infer_flat_or_repost(setup):
         assert env.ledger.open_positions()
         assert restarted.fence.state() == "UNRESOLVED"
     assert env.ledger.kill_switch_engaged()
+
+
+@pytest.mark.parametrize("field,tampered", [
+    ("units", "999"),
+    ("remaining_units", "999"),
+])
+def test_sd152_partial_open_forged_ownership_quantities_remain_blocked(setup, field, tampered):
+    """Accept legitimate partial fills, but reject altered owned-position accounting."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    route.mode = "PARTIAL"
+    assert service.run_due(owner="partial-entry", entry=proposal, entry_quote=quote).status == "ENTRY_CONFIRMED"
+    assert service.recovery_dossier(now=env.clock.now)["uncertain_orders"] == []
+    before = tuple(route.calls)
+    assert field in {"units", "remaining_units"}
+    with sqlite3.connect(env.tmp / "sd138-lineage.sqlite3") as db:
+        db.execute(f"UPDATE etoro_demo_owned_positions SET {field}=? WHERE position_id=?",
+                   (tampered, 880_001))
+    dossier = service.recovery_dossier(now=env.clock.now)
+    assert any(
+        item["review_action"] == "DURABLE_OPEN_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+        for item in dossier["uncertain_orders"]
+    )
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    assert service.run_due(owner="attempt-after-tamper").status == "RECOVERY_REQUIRED"
+    assert tuple(route.calls) == before
