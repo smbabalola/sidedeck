@@ -340,3 +340,40 @@ def test_intraday_accepts_alpaca_base64_page_token_and_paginates(tmp_path):
     assert ledger.used() == 2
     assert result["strategy_admission_eligible"] is False
 
+
+def test_intraday_checkpoint_survives_page_budget_exhaustion(tmp_path):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import (
+        MarketDataUnavailable, collect_signed_spy_five_minute,
+    )
+    auth = DataAuthorization(
+        authorization_id="sd156-checkpoint", provider="ALPACA_SIP_INTRADAY",
+        purpose="mock pagination limit", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=1, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "ledger.sqlite3", auth)
+    directory = tmp_path / "checkpoints"
+    def opener(request, timeout=20):
+        return _Resp(json.dumps({
+            "bars": [{"t": "2026-10-22T13:30:00Z",
+                      "o": 100, "h": 101, "l": 99, "c": 100, "v": 500}],
+            "next_page_token": "bmV4dA==",
+        }).encode())
+    with pytest.raises(MarketDataUnavailable, match="page budget exhausted"):
+        collect_signed_spy_five_minute(
+            auth, ledger, key_id="fixture", secret="fixture",
+            now=lambda: NOW, opener=opener, checkpoint_dir=directory,
+        )
+    progress = json.loads((directory / "progress.json").read_text())
+    page = json.loads((directory / "page-001.json").read_text())
+    assert progress["complete"] is False
+    assert progress["pages"] == 1
+    assert page[0]["timestamp_utc"] == "2026-10-22T13:30:00+00:00"
+    assert ledger.used() == 1
+    assert "bmV4dA" not in (directory / "progress.json").read_text()
+
