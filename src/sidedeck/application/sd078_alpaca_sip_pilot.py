@@ -287,8 +287,10 @@ def collect_signed_spy_five_minute(
                             "accepted_regular_bars": len(bars)})
         if checkpoint_dir is not None:
             page_file = checkpoint_dir / f"page-{pages:03d}.json"
-            page_file.write_text(json.dumps(bars[page_first:], sort_keys=True), encoding="utf-8")
+            page_bytes = json.dumps(bars[page_first:], sort_keys=True).encode("utf-8")
+            page_file.write_bytes(page_bytes)
             checkpoint = {"pages": pages, "raw_count": len(payload["bars"]),
+                          "page_sha256": hashlib.sha256(page_bytes).hexdigest(),
                           "accepted_count": len(bars), "complete": False,
                           "strategy_admission_eligible": False}
             pending = checkpoint_dir / "progress.tmp"
