@@ -13,7 +13,9 @@ from typing import Any
 from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal, Refusal
 from sidedeck.application.sd071_decision_engine import StrategyAdmission
 from sidedeck.application.sd074_trusted_inputs import Envelope
-from sidedeck.application.sd123_day_demo_integration import DayResearchResult
+from sidedeck.application.sd123_day_demo_integration import (
+    STRATEGY_ID, STRATEGY_VERSION, DayResearchResult,
+)
 from sidedeck.application.sd126_offline_day_controller import (
     DayCycleResult, OfflineDayCycleController,
 )
@@ -70,6 +72,8 @@ def run_day_trader_offline_cycle(
     elif (research_result.status != "RESEARCH_ONLY"
           or research_result.signal.track != "DAY"
           or research_result.signal.source_kind != "DAY_TRADER_METHOD"
+          or research_result.signal.source_id != STRATEGY_ID
+          or research_result.signal.source_version != STRATEGY_VERSION
           or research_result.admission.track != research_result.signal.track
           or research_result.admission.strategy_id != research_result.signal.source_id
           or research_result.admission.version != research_result.signal.source_version
