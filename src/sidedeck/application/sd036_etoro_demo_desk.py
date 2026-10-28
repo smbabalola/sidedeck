@@ -85,6 +85,15 @@ class TransportNotFound(RuntimeError):
     """The broker reports no such order (HTTP 404)."""
 
 
+class TransportRetryableStatus(RuntimeError):
+    """A fake broker's transient GET status and its Retry-After seconds."""
+
+    def __init__(self, status_code: int, retry_after_seconds: float | None) -> None:
+        super().__init__(f"simulated retryable GET status {status_code}")
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+
+
 class AcceptedOrderNotVisible(EtoroDemoOrderError):
     """``orders:lookup`` returned 404 for an order whose acceptance echoed our referenceId.
 
@@ -209,6 +218,15 @@ CREATE TABLE IF NOT EXISTS etoro_demo_offline_recovery_reads (
   stage TEXT NOT NULL CHECK(stage IN ('REFERENCE', 'ACCEPTED_ORDER_ID')),
   requested_at TEXT NOT NULL,
   PRIMARY KEY(order_reference, stage),
+  FOREIGN KEY(order_reference) REFERENCES etoro_demo_lineage_orders(reference_id)
+);
+CREATE TABLE IF NOT EXISTS etoro_demo_offline_recovery_attempts (
+  order_reference TEXT NOT NULL,
+  stage TEXT NOT NULL CHECK(stage IN ('REFERENCE', 'ACCEPTED_ORDER_ID')),
+  attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3),
+  requested_at TEXT NOT NULL,
+  retry_after_seconds REAL,
+  PRIMARY KEY(order_reference, stage, attempt),
   FOREIGN KEY(order_reference) REFERENCES etoro_demo_lineage_orders(reference_id)
 );
 -- An offline adapter restart must not silently rebase protected original holdings.
@@ -341,6 +359,76 @@ class EtoroDemoLineage:
         return tuple(str(row[0]) for row in self._db.execute(
             "SELECT stage FROM etoro_demo_offline_recovery_reads "
             "WHERE order_reference=? ORDER BY rowid", (order_reference,),
+        ))
+
+    def reserve_offline_recovery_attempt(
+        self, *, order_reference: str, stage: str, attempt: int, at: datetime,
+        deadline_seconds: int = 120,
+    ) -> None:
+        """Atomically fence one of at most three GET attempts within its stage."""
+        if (stage not in {"REFERENCE", "ACCEPTED_ORDER_ID"}
+                or type(attempt) is not int or not 1 <= attempt <= 3
+                or at.tzinfo is None or at.utcoffset() is None
+                or type(deadline_seconds) is not int or not 1 <= deadline_seconds <= 120):
+            raise EtoroDemoOrderError("recovery GET attempt scope is invalid")
+        now = at.astimezone(timezone.utc)
+        with self.transaction():
+            base = self._db.execute(
+                "SELECT requested_at FROM etoro_demo_offline_recovery_reads "
+                "WHERE order_reference=? AND stage=?", (order_reference, stage),
+            ).fetchone()
+            if base is None:
+                raise EtoroDemoOrderError("GET attempt requires its durable stage reservation")
+            prior = self._db.execute(
+                "SELECT attempt,requested_at,retry_after_seconds "
+                "FROM etoro_demo_offline_recovery_attempts "
+                "WHERE order_reference=? AND stage=? ORDER BY attempt",
+                (order_reference, stage),
+            ).fetchall()
+            if attempt != len(prior) + 1:
+                raise EtoroDemoOrderError("GET attempt sequence is not contiguous")
+            first_at = datetime.fromisoformat(str(base["requested_at"])).astimezone(timezone.utc)
+            if not 0 <= (now - first_at).total_seconds() <= deadline_seconds:
+                raise EtoroDemoOrderError("GET retry deadline or clock invalid")
+            if prior:
+                previous = prior[-1]
+                delay = previous["retry_after_seconds"]
+                if delay is None:
+                    raise EtoroDemoOrderError("previous GET attempt is not retry-authorized")
+                previous_at = datetime.fromisoformat(str(previous["requested_at"])).astimezone(
+                    timezone.utc)
+                if (now - previous_at).total_seconds() < float(delay):
+                    raise EtoroDemoOrderError("GET retry pacing deadline has not elapsed")
+            self._db.execute(
+                "INSERT INTO etoro_demo_offline_recovery_attempts"
+                "(order_reference,stage,attempt,requested_at) VALUES(?,?,?,?)",
+                (order_reference, stage, attempt, now.isoformat()),
+            )
+
+    def authorize_offline_recovery_retry(
+        self, *, order_reference: str, stage: str, attempt: int,
+        retry_after_seconds: float,
+    ) -> None:
+        """Persist a bounded fake Retry-After only for an already-reserved attempt."""
+        if (type(attempt) is not int or not 1 <= attempt < 3
+                or type(retry_after_seconds) not in (int, float)
+                or not 0 < retry_after_seconds <= 30):
+            raise EtoroDemoOrderError("GET retry delay is outside the offline policy")
+        cursor = self._db.execute(
+            "UPDATE etoro_demo_offline_recovery_attempts SET retry_after_seconds=? "
+            "WHERE order_reference=? AND stage=? AND attempt=? "
+            "AND retry_after_seconds IS NULL",
+            (float(retry_after_seconds), order_reference, stage, attempt),
+        )
+        if cursor.rowcount != 1:
+            raise EtoroDemoOrderError("GET retry does not match one unconsumed attempt")
+
+    def offline_recovery_attempts(self, order_reference: str) -> list[sqlite3.Row]:
+        """Read-only synthetic GET attempt history, ordered by request stage and attempt."""
+        return list(self._db.execute(
+            "SELECT stage,attempt,requested_at,retry_after_seconds "
+            "FROM etoro_demo_offline_recovery_attempts WHERE order_reference=? "
+            "ORDER BY rowid", (order_reference,),
         ))
 
     def offline_original_baseline_sha256(self) -> str:
@@ -973,6 +1061,7 @@ class OfflineEtoroDemoSimulator:
         self.lose_next_response = False
         self.drop_next_request = False        # never reaches the broker (lookup -> 404)
         self.lookup_not_visible = 0           # next N lookups 404 although the order exists
+        self.lookup_status_failures: list[tuple[int, float | None]] = []
         self.force_position_id: int | None = None
         self.baseline_rows: list[dict[str, Any]] = []   # served by the simulated /pnl GET
         self.ask: Decimal = fill_price               # simulated realtime ask (rates GET)
@@ -1003,6 +1092,10 @@ class OfflineEtoroDemoSimulator:
         if self.drop_next_request:
             self.drop_next_request = False
             raise TransportOutcomeUnknown("simulated connection reset before delivery")
+        if (method == "GET" and path == DEMO_ORDER_LOOKUP_PATH
+                and self.lookup_status_failures):
+            status, retry_after = self.lookup_status_failures.pop(0)
+            raise TransportRetryableStatus(status, retry_after)
         if method == "GET" and path == DEMO_PNL_PATH:
             return self.pnl_payload(self.baseline_rows)
         if method == "GET" and path == MARKET_DATA_RATES_PATH:

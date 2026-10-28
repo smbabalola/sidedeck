@@ -433,6 +433,147 @@ def test_sd138_lost_post_ack_recovers_by_get_after_port_restart(env, tmp_path):
                for _grant, event, detail in env.authority._ledger.events())
 
 
+def test_sd153_transient_get_status_retries_are_fresh_audited_and_durable(env, tmp_path):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(
+        env, tmp_path, loses_post=True)
+    proposal = env.entry()
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    reference = str(UUID(hex=proposal.reference_id))
+    lineage.close()
+
+    route.lookup_status_failures = [(429, 2), (503, 3)]
+
+    def wait(seconds: float) -> None:
+        env.clock.now += timedelta(seconds=seconds)
+
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    try:
+        restarted = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage),
+            retry_wait=wait,
+        )
+        before, started_at = len(route.calls), env.clock.now
+        result = restarted.recover_entry(proposal)
+        assert result.classification == "SIMULATED_POSITION_OPEN"
+        assert route.calls[before:] == [("GET", DEMO_ORDER_LOOKUP_PATH)] * 3
+        assert env.clock.now == started_at + timedelta(seconds=5)
+        attempts = restarted_lineage.offline_recovery_attempts(reference)
+        assert [(row["stage"], row["attempt"]) for row in attempts] == [
+            ("REFERENCE", 1), ("REFERENCE", 2), ("REFERENCE", 3),
+        ]
+        refs = route.call_references[-3:]
+        assert len(set(refs)) == 3
+        uses = [detail for _grant, event, detail in env.authority._ledger.events()
+                if event == "USE_READ"]
+        assert all(ref in uses for ref in refs)
+        sends = [record for record in gateway._audit_journal.records()
+                 if record.event_type == "SEND" and record.entity_id in refs]
+        assert {record.entity_id for record in sends} == set(refs)
+        assert [method for method, _ in route.calls].count("POST") == 1
+    finally:
+        restarted_lineage.close()
+
+
+@pytest.mark.parametrize(("status", "retry_after"), [(429, None), (503, 31), (418, 1)])
+def test_sd153_invalid_transient_get_metadata_never_retries(env, tmp_path,
+                                                             status, retry_after):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(
+        env, tmp_path, loses_post=True)
+    proposal = env.entry()
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    lineage.close()
+    route.lookup_status_failures = [(status, retry_after)]
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    restarted = AutonomousEtoroDemoOrderAdapter(
+        policy_gateway=gateway,
+        order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage),
+        retry_wait=lambda _seconds: pytest.fail("invalid retry metadata must not sleep"),
+    )
+    try:
+        before = len(route.calls)
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted.recover_entry(proposal)
+        assert route.calls[before:] == [("GET", DEMO_ORDER_LOOKUP_PATH)]
+        assert [method for method, _ in route.calls].count("POST") == 1
+        assert env.ledger.kill_switch_engaged()
+    finally:
+        restarted_lineage.close()
+
+
+def test_sd153_retry_that_does_not_wait_fails_before_second_get(env, tmp_path):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(
+        env, tmp_path, loses_post=True)
+    proposal = env.entry()
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    lineage.close()
+    route.lookup_status_failures = [(429, 2)]
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    restarted = AutonomousEtoroDemoOrderAdapter(
+        policy_gateway=gateway,
+        order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage),
+        retry_wait=lambda _seconds: None,
+    )
+    try:
+        before = len(route.calls)
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted.recover_entry(proposal)
+        assert route.calls[before:] == [("GET", DEMO_ORDER_LOOKUP_PATH)]
+        assert [row["attempt"] for row in restarted_lineage.offline_recovery_attempts(
+            str(UUID(hex=proposal.reference_id)))] == [1]
+        assert [method for method, _ in route.calls].count("POST") == 1
+    finally:
+        restarted_lineage.close()
+
+
+def test_sd153_grant_revoked_during_retry_wait_blocks_retry(env, tmp_path):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(
+        env, tmp_path, loses_post=True)
+    proposal = env.entry()
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    lineage.close()
+    route.lookup_status_failures = [(503, 2)]
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+
+    def revoke_during_wait(seconds: float) -> None:
+        env.authority.revoke(env.grant_document["grant_id"], "synthetic retry revoke")
+        env.clock.now += timedelta(seconds=seconds)
+
+    restarted = AutonomousEtoroDemoOrderAdapter(
+        policy_gateway=gateway,
+        order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage),
+        retry_wait=revoke_during_wait,
+    )
+    try:
+        before = len(route.calls)
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted.recover_entry(proposal)
+        assert route.calls[before:] == [("GET", DEMO_ORDER_LOOKUP_PATH)]
+        refs = route.call_references[before:]
+        uses = [detail for _grant, event, detail in env.authority._ledger.events()
+                if event == "USE_READ"]
+        assert refs[0] in uses and len(refs) == 1
+        assert env.ledger.kill_switch_engaged()
+    finally:
+        restarted_lineage.close()
+
+
 def test_sd141_accepted_open_404_falls_back_by_orderid_only_after_signed_get(env, tmp_path):
     gateway, quote, _signer, route, lineage, path, adapter = _composed(env, tmp_path)
     proposal = env.entry()

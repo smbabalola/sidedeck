@@ -27,6 +27,16 @@ Implementation: `OfflineSwingScheduledService.recovery_read_preflight(now, max_g
 
 **Still open:** independent owner-authenticated broker baseline, deployed true remote immutable anchor, authenticated operator-signed recovery decisions, actual provider GET retry-after/429/5xx pacing, independent security review and any SD-150/151 Demo release. **Bundle R remains IN_PROGRESS**, not ready for a broker canary.
 
+## Bundle R milestone 3 — bounded transient GET retries and local signed review
+
+**Implementation under verification:** `sd138_autonomous_order_adapter.py` retries only fake recovery GET statuses 429/500/502/503/504, with a numeric `Retry-After` in `(0,30]`, at most three attempts, and a 120-second stage deadline. Every retry obtains a fresh SD-064 grant use, appends audit evidence, reserves its unique durable stage attempt before transport, and rechecks the grant after waiting. A callback that does not advance the injected clock fails closed. POST is never retried; 404 fallback remains separately bounded by accepted order ID. SD-036 persists retry reservations across handles and restart.
+
+Added `sd153_recovery_review.py`, a pure read-only verifier for a human-signed, short-lived review of the local recovery manifest and planned GET ceiling. It uses a separate signing namespace from the SD-064 network grant and explicitly returns no broker verification, GET/POST permission, database mutation, HALT clear, or release. This proves local dossier/read-plan integrity only; it is not an owner signature or independent reviewer approval.
+
+**Tests:** SD-138 adapter, SD-153 preflight and signed-review suites cover transient retry success, attempt/audit/grant accounting, bad status/delay, no clock progress, revocation during pacing, manifest tamper, expiry, ceiling mismatch, signature forgery, namespace separation, and local error preservation. Full-suite and exact-head CI results will be recorded once complete.
+
+**Still open:** production transport retry policy/quota approval, remote immutable anchor, authentic broker evidence, named independent reviewer, actual owner authorization and SD-150/151 release. Simulated retry tests do not qualify a real provider or enable transport.
+
 ## Findings / independent reviewer requests
 
 | ID | Priority | Review question / open work | Status |
@@ -34,8 +44,8 @@ Implementation: `OfflineSwingScheduledService.recovery_read_preflight(now, max_g
 | R-01 | CRITICAL release gate | Independently verify that owner-bound SD-064 grant, revocation and request caps are always rechecked immediately before every real GET/POST; test broker proxy and delayed 404/429/5xx budgets | OPEN — independent review not started |
 | R-02 | CRITICAL release gate | Deploy and independently qualify off-machine immutable SD-145/074 policy, grant-use, audit, baseline and revocation evidence, including rollback/tamper tests | OPEN — requires infrastructure/owner decision |
 | R-03 | HIGH | Cross-ledger recovery must use exact OPEN/CLOSE identity, units, baseline and verified broker reads, never merely a locally edited SQLite state; investigate simultaneous restarts and split fills | OFFLINE TESTED IN PART / REVIEW OPEN |
-| R-04 | HIGH | Durable **offline** two-stage GET cap and 120-second fallback deadline now implemented; independently review future 429/5xx retry-after pacing, provider quotas and grant expiry before any real transport | OFFLINE PARTIAL VERIFIED / live pacing OPEN |
-| R-05 | HIGH | Deterministic local **unsigned** recovery evidence manifest implemented; independently signed owner/operator review, remote authority and real broker evidence are still required. Never reuse the network grant as a reset permission | OFFLINE MANIFEST VERIFIED / signing OPEN |
+| R-04 | HIGH | Durable offline GET stages plus bounded fake-only 429/5xx retry-after, per-attempt grant/audit/reservation, three-attempt cap and 120-second deadline; real transport quota/pacing and independent review remain required | OFFLINE IMPLEMENTED / independent review and live pacing OPEN |
+| R-05 | HIGH | Deterministic local manifest plus separate-namespace signed review verifier; it can validate only local dossier/read-plan integrity and grants no I/O, reset or release authority. Remote authority and authentic broker evidence remain required | OFFLINE VERIFIER IMPLEMENTED / owner workflow and independent review OPEN |
 | R-06 | HIGH | Verify protective exit authority after policy expiry, without automatic extension or accepting a forged/revoked grant | OFFLINE TESTED IN PART / REVIEW OPEN |
 | R-07 | HIGH | Independent audit of kill-switch release, human role separation, real-vs-sim UI and no Real route | OPEN |
 | R-08 | MEDIUM | Test cross-process load/restart and CI soak of negative cases and browser states in a complete operational bundle | OPEN — Bundle O |
@@ -44,6 +54,6 @@ Implementation: `OfflineSwingScheduledService.recovery_read_preflight(now, max_g
 
 ## Next Batch R work — grouped
 
-**Milestone 2 offline complete:** bounded durable recovery stages and unsigned evidence manifest are implemented and tested. **Next**: independently review the transport boundary, implement explicitly owner-authorized recovery review workflow without self-grant or HALT reset, address live-shaped 429/5xx and multi-fill cases without enabling transport; then advance Bundle O's multi-track operations/dashboard/soak and Bundle D's permitted historical Alpaca evidence. Update TODO with true external blockers and full exact-head CI.
+**Milestone 3 offline implementation:** bounded fake-only transient retries and a distinct-namespace signed local review verifier are added; full verification and exact-head CI are pending. **Next**: independent transport/security review, remote anchor and real broker evidence remain external; continue Bundle O operations/dashboard/soak and Bundle D only from already-authorized offline evidence. Do not call live-provider retry behavior verified.
 
 **Owner-only matters (do not infer approval):** any authenticated Alpaca/eToro requests, remote anchor provisioning, spend, new owner grants/signatures, HALT reset and SD-150/151 Demo activation.

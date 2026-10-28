@@ -6,9 +6,12 @@ It is integration code for offline verification, not a live broker gateway or re
 from __future__ import annotations
 
 import hashlib
+import math
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
+from typing import Any, Callable
 
 from sidedeck.application.sd063_autonomous_demo_policy import (
     EntryProposal, ExitProposal, _UNKNOWN_OUTCOMES,
@@ -16,11 +19,15 @@ from sidedeck.application.sd063_autonomous_demo_policy import (
 from sidedeck.application.sd107_demo_gateway import (
     OfflineDemoGateway,
 )
-from sidedeck.application.sd036_etoro_demo_desk import TransportNotFound
+from sidedeck.application.sd036_etoro_demo_desk import (
+    TransportNotFound, TransportRetryableStatus,
+)
 from sidedeck.application.sd129_etoro_demo_order_port import (
     CloseRead, ConfirmedOpen, EtoroDemoOrderPort,
 )
-from sidedeck.domain.etoro_demo_orders import CloseOutcome, DemoCloseRequest, DemoOpenRequest
+from sidedeck.domain.etoro_demo_orders import (
+    CloseOutcome, DemoCloseRequest, DemoOpenRequest, DemoOrderOutcome,
+)
 from sidedeck.application.sd074_trusted_inputs import Envelope
 from sidedeck.domain.etoro_demo import parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import BaselinePosition, baseline_from, reconcile_demo
@@ -72,7 +79,8 @@ class AutonomousEtoroDemoOrderAdapter:
     """
 
     def __init__(self, *, policy_gateway: OfflineDemoGateway,
-                 order_port: EtoroDemoOrderPort) -> None:
+                 order_port: EtoroDemoOrderPort,
+                 retry_wait: Callable[[float], None] | None = None) -> None:
         if type(policy_gateway) is not OfflineDemoGateway:
             raise SD138Refused("the existing SD-107 policy gateway is required")
         if type(order_port) is not EtoroDemoOrderPort:
@@ -85,6 +93,7 @@ class AutonomousEtoroDemoOrderAdapter:
             raise SD138Refused("anchored SD-145 audit journal is required")
         self._gate = policy_gateway
         self._port = order_port
+        self._retry_wait = retry_wait
         self._owners: dict[str, ConfirmedOpen] = {}
         now = self._gate._clock()
         try:
@@ -195,20 +204,13 @@ class AutonomousEtoroDemoOrderAdapter:
                 proposal.track, proposal.canonical_id, proposal.etoro_instrument_id,
                 proposal.units, proposal.limit_price):
             raise SD138Refused("restart proposal differs from the durable policy intent")
-        recovery_ref = f"recovery:{request.reference_id}"
-        self._gate._authorize(write=False, reference_id=recovery_ref)
-        self._gate._audit("SEND", recovery_ref,
-                          payload={"action": "OPEN_RECOVERY",
-                                   "policy_digest": proposal.policy_digest,
-                                   "book_id": book_id})
         try:
-            # Crash-safe budget: reserve before any broker-shaped GET. A
-            # retried invocation cannot replay the same stage after restart.
-            self._port.reserve_offline_recovery_get(
-                request, stage="REFERENCE", at=self._gate._clock())
             try:
-                outcome, owner, payload = self._port.lookup_open_with_payload(
-                    request, reference_id=recovery_ref)
+                outcome, owner, payload = self._recover_open_lookup_stage(
+                    request, book_id=book_id, stage="REFERENCE",
+                    base_reference=f"recovery:{request.reference_id}",
+                    action="OPEN_RECOVERY", proposal=proposal,
+                )
             except TransportNotFound:
                 # A broker 404 after a proven ACCEPTED write is not evidence
                 # the order never arrived. A second independent, authorised
@@ -217,18 +219,12 @@ class AutonomousEtoroDemoOrderAdapter:
                 if accepted_id is None:
                     raise SD138Refused(
                         "open acknowledgement unknown; no trusted orderId fallback")
-                fallback_ref = f"recovery-orderid:{request.reference_id}"
-                self._gate._authorize(write=False, reference_id=fallback_ref)
-                self._gate._audit(
-                    "SEND", fallback_ref,
-                    payload={"action": "OPEN_RECOVERY_ORDERID_FALLBACK",
-                             "policy_digest": proposal.policy_digest,
-                             "book_id": book_id, "accepted_order_id": accepted_id},
+                outcome, owner, payload = self._recover_open_lookup_stage(
+                    request, book_id=book_id, stage="ACCEPTED_ORDER_ID",
+                    base_reference=f"recovery-orderid:{request.reference_id}",
+                    action="OPEN_RECOVERY_ORDERID_FALLBACK", proposal=proposal,
+                    order_id=accepted_id,
                 )
-                self._port.reserve_offline_recovery_get(
-                    request, stage="ACCEPTED_ORDER_ID", at=self._gate._clock())
-                outcome, owner, payload = self._port.lookup_open_with_payload(
-                    request, order_id=accepted_id, reference_id=fallback_ref)
             envelope = self._gate._adapter.seal_open_lookup_or_unresolved(
                 payload, request=request, observed_at=self._gate._clock(),
                 accepted_order_id=outcome.order_id)
@@ -249,6 +245,58 @@ class AutonomousEtoroDemoOrderAdapter:
         except Exception as exc:
             self._halt_ambiguous("AUTONOMOUS_OPEN_RECOVERY_UNRESOLVED")
             raise SD138Refused("open recovery failed closed; no POST was repeated") from exc
+
+    def _recover_open_lookup_stage(
+        self, request: DemoOpenRequest, *, book_id: str, stage: str,
+        base_reference: str, action: str, proposal: EntryProposal,
+        order_id: int | None = None,
+    ) -> tuple[DemoOrderOutcome, ConfirmedOpen | None, dict[str, Any]]:
+        """Make at most three freshly granted/audited, durably fenced fake GET attempts."""
+        if stage not in {"REFERENCE", "ACCEPTED_ORDER_ID"}:
+            raise SD138Refused("unknown recovery GET stage")
+        stage_started = self._gate._clock()
+        self._port.reserve_offline_recovery_get(request, stage=stage, at=stage_started)
+        for attempt in range(1, 4):
+            now = self._gate._clock()
+            reference_id = (base_reference if attempt == 1 else
+                            f"{base_reference}:retry:{attempt}")
+            self._gate._authorize(write=False, reference_id=reference_id)
+            self._gate._audit(
+                "SEND", reference_id,
+                payload={"action": action, "policy_digest": proposal.policy_digest,
+                         "book_id": book_id, "stage": stage, "attempt": attempt,
+                         "accepted_order_id": order_id},
+            )
+            self._port.reserve_offline_recovery_attempt(
+                request, stage=stage, attempt=attempt, at=now)
+            try:
+                outcome, owner, payload = self._port.lookup_open_with_payload(
+                    request, order_id=order_id, reference_id=reference_id)
+                return outcome, owner, payload
+            except TransportRetryableStatus as exc:
+                delay = exc.retry_after_seconds
+                retryable = exc.status_code in {429, 500, 502, 503, 504}
+                if (not retryable or attempt == 3 or delay is None or isinstance(delay, bool)
+                        or not isinstance(delay, (int, float))):
+                    raise SD138Refused("transient GET status lacks bounded retry authority") from exc
+                delay_seconds = float(delay)
+                if not math.isfinite(delay_seconds) or not 0 < delay_seconds <= 30:
+                    raise SD138Refused("transient GET status lacks bounded retry authority") from exc
+                self._port.authorize_offline_recovery_retry(
+                    request, stage=stage, attempt=attempt,
+                    retry_after_seconds=delay_seconds,
+                )
+                if now + timedelta(seconds=delay_seconds) > (
+                        stage_started + timedelta(seconds=120)):
+                    raise SD138Refused("GET retry would exceed its recovery deadline") from exc
+                if self._retry_wait is None:
+                    raise SD138Refused("GET retry wait is not configured") from exc
+                self._retry_wait(delay_seconds)
+                if self._gate._clock() < now + timedelta(seconds=delay_seconds):
+                    raise SD138Refused("GET retry pacing interval has not elapsed") from exc
+                if self._gate._clock() > stage_started + timedelta(seconds=120):
+                    raise SD138Refused("GET recovery deadline expired during retry wait") from exc
+        raise SD138Refused("GET recovery retry limit exhausted")
 
     def submit_exit(self, proposal: ExitProposal, *, quote: Envelope) -> AutonomousCloseResult:
         """Simulate one full close and independently authorised final whole-account GET."""
