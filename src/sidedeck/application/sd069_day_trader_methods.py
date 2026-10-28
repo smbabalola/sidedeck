@@ -122,9 +122,9 @@ def opening_range_breakout(
     if session is None:
         raise MethodError("no regular session on this date")
     step = timedelta(minutes=5)
-    complete = [b for b in bars if b.start + step <= now and b.start >= session.open_utc]
-    if any(b.start.tzinfo is None for b in complete):
+    if any(b.start.tzinfo is None or b.start.utcoffset() is None for b in bars):
         raise MethodError("bar timestamps must be timezone-aware")
+    complete = [b for b in bars if b.start + step <= now and b.start >= session.open_utc]
     complete.sort(key=lambda b: b.start)
     expected = session.open_utc
     for bar in complete:
