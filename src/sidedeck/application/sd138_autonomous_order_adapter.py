@@ -16,6 +16,7 @@ from sidedeck.application.sd063_autonomous_demo_policy import (
 from sidedeck.application.sd107_demo_gateway import (
     OfflineDemoGateway,
 )
+from sidedeck.application.sd036_etoro_demo_desk import TransportNotFound
 from sidedeck.application.sd129_etoro_demo_order_port import (
     CloseRead, ConfirmedOpen, EtoroDemoOrderPort,
 )
@@ -201,8 +202,27 @@ class AutonomousEtoroDemoOrderAdapter:
                                    "policy_digest": proposal.policy_digest,
                                    "book_id": book_id})
         try:
-            outcome, owner, payload = self._port.lookup_open_with_payload(
-                request, reference_id=recovery_ref)
+            try:
+                outcome, owner, payload = self._port.lookup_open_with_payload(
+                    request, reference_id=recovery_ref)
+            except TransportNotFound:
+                # A broker 404 after a proven ACCEPTED write is not evidence
+                # the order never arrived. A second independent, authorised
+                # GET by the saved broker orderId is allowed, never a POST.
+                accepted_id = self._port.durable_accepted_open_order_id(request)
+                if accepted_id is None:
+                    raise SD138Refused(
+                        "open acknowledgement unknown; no trusted orderId fallback")
+                fallback_ref = f"recovery-orderid:{request.reference_id}"
+                self._gate._authorize(write=False, reference_id=fallback_ref)
+                self._gate._audit(
+                    "SEND", fallback_ref,
+                    payload={"action": "OPEN_RECOVERY_ORDERID_FALLBACK",
+                             "policy_digest": proposal.policy_digest,
+                             "book_id": book_id, "accepted_order_id": accepted_id},
+                )
+                outcome, owner, payload = self._port.lookup_open_with_payload(
+                    request, order_id=accepted_id, reference_id=fallback_ref)
             envelope = self._gate._adapter.seal_open_lookup_or_unresolved(
                 payload, request=request, observed_at=self._gate._clock(),
                 accepted_order_id=outcome.order_id)
