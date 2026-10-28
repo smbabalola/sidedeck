@@ -937,3 +937,38 @@ def test_sd152_repeated_restart_after_unresolved_fence_never_reposts(setup):
         assert outcome.execution_release == "ETORO_DEMO_NOT_RELEASED"
         assert restarted.fence.state() == "UNRESOLVED"
     assert not any(method == "POST" for method, _ in route.calls)
+
+
+def test_sd152_ambiguous_close_ten_restarts_preserve_single_exit_post(setup):
+    """Unknown simulated close outcome must not cause another close on restart."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    assert service.run_due(owner="entry-worker", entry=proposal,
+                           entry_quote=quote).status == "ENTRY_CONFIRMED"
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    route.lose_next_response = True
+    first_close = service.run_due(
+        owner="exit-worker",
+        planning_bids=(seal_bid(signer, env, "455"),),
+        execution_bids={MSFT: seal_bid(signer, env, "455")},
+    )
+    assert first_close.status == "HALTED"
+    assert fence.state() == "UNRESOLVED"
+    assert env.ledger.kill_switch_engaged()
+    expected_calls = tuple(route.calls)
+    assert [method for method, _ in expected_calls].count("POST") == 2
+    for i in range(10):
+        env.clock.now = NOW + timedelta(hours=2, minutes=35 + i)
+        restarted = OfflineSwingScheduledService(
+            SchedulerStore(env.tmp / "schedule.sqlite3"),
+            OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+            controller, clock=env.clock,
+        )
+        result = restarted.run_due(owner=f"restarted-close-{i}")
+        assert result.status == "RECOVERY_REQUIRED"
+        assert result.execution_release == "ETORO_DEMO_NOT_RELEASED"
+        assert restarted.fence.state() == "UNRESOLVED"
+        assert tuple(route.calls) == expected_calls
+    assert env.ledger.kill_switch_engaged()
