@@ -4,6 +4,24 @@
 
 **Authoritative policy:** [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md), in particular **§20 — Continuous engineering loop** and **§21 — Demo GO-LIVE delivery contract**, together with [AGENTS.md](AGENTS.md). **Critical-path implementation plan:** [docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md](docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md) — deliver one complete offline broker-shaped SWING round trip before feature expansion. **Live task assignments:** the top **Autonomous eToro Demo delivery loop** block of [TODO.md](TODO.md). This entry point does not replace those documents or dilute their security rules.
 
+## Current owner-priority bundle — finish the ORIGINAL Day Trader, no extensions (28 October)
+
+This section sets execution priority within the existing rules; AGENTS.md and SIDEDECK_STEERING.md retain safety precedence. **Do not add modules, extensions, UI features, other trading strategies or separate brokers.** Do not interrupt the owner after every individual commit. Finish a coherent, verifiable batch before reporting. An active chat/agent session is not a background worker.
+
+**One significant offline acceptance target:** the currently implemented five-minute ORB scanner consumes independently admissible source data, establishes a reproducible locked out-of-sample result (minimum 30 qualified OOS trades under the unchanged SD-071 gate), and passes a separately signed/admitted same-opportunity NATIVE_STRATEGY signal through the **existing** SD-154/074/063/126/107 pipeline: policy/risk-generated entry → simulated fill/owned position → stop or scheduled protective exit → final reconciled flat. Entry must not be manually constructed. Repeat/restart, stale/event-time, calendar/half-day, missing-bars, no-signal, forged admission, unknown/partial close, and protected-baseline tests must fail closed. Full exact-head CI is the acceptance evidence.
+
+**Execute in this order, as ONE bundle:**
+1. Reconcile current PR #8 head and full exact-head Python/browser CI. Fix actual regressions in current files and rerun; don't spin out unrelated tickets.
+2. Inventory ONLY already-available, source-authorized five-minute historical data and existing SD-119/122/142/143 ingestion and SD-121 backtest evidence. Distinguish local files from GitHub-only access and actual rights from unverified owner text. Do not make provider calls or claim 1h discovery/daily SD-021 evidence is adequate.
+3. When sufficient admissible data actually exists, run the **existing ORB** locked chronological/walk-forward + costs/spread/latency/slippage + robustness evaluation and independently reconcile >=30 genuine OOS closed trades. Record source coverage, rights, hashes and PASS/FAIL. Never auto-admit from synthetic/claimed performance.
+4. Exercise the existing **qualified native ORB** → trusted sealed signal → admission/policy/risk → generated offline entry → exit/reconciliation integration, plus negative fault matrix. Do not manufacture production admission, signature, quote or P&L.
+5. Commit reviewed code/test fixes only if required by steps 1–4, run complete Python/Ruff/mypy/migrations/frontend/browser verification, inspect exact-head GitHub Actions, and update the authoritative TODO **once per substantial bundle milestone** with evidence and remaining gates.
+6. If genuine lawful five-minute coverage/permissions or independent OOS proof are absent, STOP the qualification portion as **BLOCKED_EXTERNAL / NO_TRADE**, stating precise missing artifacts. Do not fill missing data with fixtures, relax floor, or keep committing cosmetic safety tweaks to simulate progress. Request the one specific owner/provider decision that would unblock this bundle.
+
+**Separate release boundary:** eToro Demo production transport remains `NOT_RELEASED`; historical HALT and the four protected baseline positions remain unchanged. No credentialed market/broker reads, order writes, grant signing, remote-anchor provisioning, kill-switch reset or Real activity is authorized here. After offline acceptance, independently reviewed evidence and a NEW scoped owner-signed Demo release are necessary; that is not covered by this bundle.
+
+**Last confirmed HEAD:** `90d2a98e96e178b4abdb6f6f2f2cd2cddbcb8bf1` passed [CI 40729935762](https://github.com/smbabalola/sidedeck/actions/runs/40729935762). Synthetic SD-155 offline round trip passed previously. Genuine ORB data/OOS gate still BLOCKED_EXTERNAL.
+
 ## Mission
 
 Deliver one integrated, reliable path from genuine licensed data and an independently admitted strategy, through signed deterministic risk and **eToro Demo-only** execution, to broker-confirmed entry, protective exits, reconciled closing positions, operator visibility and sustained Demo soak.
