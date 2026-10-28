@@ -190,3 +190,36 @@ def test_unpinned_signer_is_refused_before_verification(tmp_path, monkeypatch):
     with pytest.raises(Exception, match="pinned"):
         pilot.main(args)
     assert not list(auth_path.parent.glob("*.consumed")) and calls == []
+
+def test_signed_spy_five_minute_collects_real_timestamp_shape_offline(tmp_path):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import collect_signed_spy_five_minute
+
+    auth = DataAuthorization(
+        authorization_id="sd156-test", provider="ALPACA_SIP_INTRADAY",
+        purpose="fixture five-minute fetch", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=2, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "intraday.sqlite3", auth)
+    calls = []
+    def opener(request, timeout=20):
+        calls.append(request.full_url)
+        rows = [{"t": "2026-10-22T13:30:00Z", "o": 100,
+                 "h": 101, "l": 99, "c": 100, "v": 500}]
+        return _Resp(json.dumps({"bars": rows, "next_page_token": None}).encode())
+    out = collect_signed_spy_five_minute(
+        auth, ledger, key_id="fixture", secret="fixture",
+        now=lambda: NOW, opener=opener,
+    )
+    assert len(calls) == 1
+    assert out["bars"][0]["timestamp_utc"] == "2026-10-22T13:30:00+00:00"
+    assert out["strategy_admission_eligible"] is False
+    assert out["broker_execution"] == "DISABLED"
+    assert ledger.used() == 1
+
+
