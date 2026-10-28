@@ -248,6 +248,7 @@ def collect_signed_spy_five_minute(
             raise MarketDataUnavailable("Alpaca intraday request failed") from None
         if not isinstance(payload, dict) or not isinstance(payload.get("bars"), list):
             raise MarketDataUnavailable("invalid Alpaca intraday response")
+        page_first = len(bars)
         for row in payload["bars"]:
             if not isinstance(row, dict) or not isinstance(row.get("t"), str):
                 raise MarketDataUnavailable("invalid five-minute timestamp")
@@ -285,6 +286,8 @@ def collect_signed_spy_five_minute(
         page_counts.append({"page": pages, "raw_bars": len(payload["bars"]),
                             "accepted_regular_bars": len(bars)})
         if checkpoint_dir is not None:
+            page_file = checkpoint_dir / f"page-{pages:03d}.json"
+            page_file.write_text(json.dumps(bars[page_first:], sort_keys=True), encoding="utf-8")
             checkpoint = {"pages": pages, "raw_count": len(payload["bars"]),
                           "accepted_count": len(bars), "complete": False,
                           "strategy_admission_eligible": False}
