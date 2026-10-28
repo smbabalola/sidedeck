@@ -66,6 +66,15 @@ def test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_en
             "correlations": {}, "execution_eligible": True, "as_of": now.isoformat(),
         })
         controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+        # Research signals are never enough to create an entry.
+        unadmitted = run_day_trader_offline_cycle(
+            controller, research_result=research, native_signals=(native,),
+            admissions=(), sealed_research=sealed_research,
+            planning_quote=planning_quote,
+        )
+        assert unadmitted.cycle.open_positions == 0
+        assert "INDEPENDENT_NATIVE_STRATEGY_ADMISSION_REQUIRED" in unadmitted.proposal_reasons
+        assert gateway._simulator.submitted_orders == 0
         opened = run_day_trader_offline_cycle(
             controller, research_result=research, native_signals=(native,),
             admissions=(StrategyAdmission(
@@ -99,6 +108,7 @@ def test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_en
         )
         assert closed.cycle.status == "EXITS_CONFIRMED", closed
         assert closed.cycle.open_positions == 0
+        assert gateway._simulator.submitted_orders == 2
         assert not env.ledger.kill_switch_engaged()
         assert closed.report()["broker_execution"] == "DISABLED"
     finally:
