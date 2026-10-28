@@ -789,3 +789,73 @@ os._exit(79)
     assert tuple(route.calls) == parent_requests
     assert [method for method, _ in route.calls].count("POST") == 1
     assert scheduler.history("swing_review") == ()
+
+
+@pytest.mark.parametrize(
+    ("column", "value"), [
+        ("units", "999"),
+        ("remaining_units", "999"),
+        ("book_id", "etoro-demo:ai-trading"),
+        ("instrument_id", 9988),
+    ],
+)
+def test_sd141_tampered_owned_open_facts_block_idle_restart(setup, column, value):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    entry = env.entry()
+    controller.adapter.submit_entry(entry, quote=quote)
+    original_calls = tuple(route.calls)
+    # A forged local SQLite value cannot be assumed to be a genuine broker
+    # event even if the opening order and position IDs remain unchanged.
+    assert column in {"units", "remaining_units", "book_id", "instrument_id"}
+    with sqlite3.connect(env.tmp / "sd138-lineage.sqlite3") as conn:
+        conn.execute(
+            f"UPDATE etoro_demo_owned_positions SET {column}=? WHERE position_id=880001",
+            (value,),
+        )
+    dossier = service.recovery_dossier(now=NOW)
+    assert any(
+        item["review_action"] == "DURABLE_OPEN_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+        for item in dossier["uncertain_orders"]
+    )
+    assert "CROSS_LEDGER_RECONCILIATION_REQUIRED" in service.inspect(now=NOW)["alerts"]
+    assert service.run_due(owner="new-worker").status == "RECOVERY_REQUIRED"
+    assert fence.state() == "IDLE"
+    assert scheduler.history("swing_review") == ()
+    assert tuple(route.calls) == original_calls
+
+
+@pytest.mark.parametrize(
+    ("column", "value"), [
+        ("filled_units", "999"),
+        ("units", "999"),
+        ("book_id", "etoro-demo:ai-trading"),
+        ("instrument_id", 9988),
+    ],
+)
+def test_sd141_tampered_full_close_lineage_blocks_idle_restart(setup, column, value):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    entry = env.entry()
+    controller.adapter.submit_entry(entry, quote=quote)
+    plan = controller.runtime.plan_exits(bids=(seal_bid(signer, env, "455"),))
+    assert len(plan.exits) == 1
+    controller.adapter.submit_exit(plan.exits[0], quote=seal_bid(signer, env, "455"))
+    assert service.recovery_dossier(now=NOW)["uncertain_orders"] == []
+    original_calls = tuple(route.calls)
+    assert column in {"filled_units", "units", "book_id", "instrument_id"}
+    with sqlite3.connect(env.tmp / "sd138-lineage.sqlite3") as conn:
+        conn.execute(
+            f"UPDATE etoro_demo_lineage_orders SET {column}=? "
+            "WHERE kind='CLOSE' AND state='FILLED'",
+            (value,),
+        )
+    dossier = service.recovery_dossier(now=NOW)
+    assert any(
+        item["review_action"] == "DURABLE_CLOSE_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+        for item in dossier["uncertain_orders"]
+    )
+    assert "CROSS_LEDGER_RECONCILIATION_REQUIRED" in service.inspect(now=NOW)["alerts"]
+    assert service.run_due(owner="new-worker").status == "RECOVERY_REQUIRED"
+    assert scheduler.history("swing_review") == ()
+    assert tuple(route.calls) == original_calls
