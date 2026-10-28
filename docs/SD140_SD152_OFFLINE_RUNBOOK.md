@@ -1,6 +1,6 @@
 # SD-140 / SD-152 — first offline SWING service slice and recovery runbook
 
-**As of 28 October 2026**. Verified implementation commit `fbd992a0b419a799523399e26d2b39e4338b74f3`, [exact-head GitHub CI 40654151962 PASS](https://github.com/smbabalola/sidedeck/actions/runs/40654151962): 1,888 passed / 2 skipped, Ruff, mypy, Alembic, frontend and browser E2E. **Not a release approval.**
+**As of 28 October 2026**. Initial implementation `fbd992a` passed [CI 40654151962](https://github.com/smbabalola/sidedeck/actions/runs/40654151962) (1,888 passed / 2 skipped). Subsequent SD-141 adversarial tests exposed a missing protective-monitoring HALT; fix `2353635` passed [exact-head CI 40654988053](https://github.com/smbabalola/sidedeck/actions/runs/40654988053): **1,892 passed / 2 skipped**, Ruff, mypy (206 files), Alembic, frontend and browser E2E. **Not a release approval.**
 
 ## Boundary
 
@@ -28,6 +28,7 @@
 - Missing send quote produces HALT and durable `UNRESOLVED`; a later cycle is refused.
 - Off-session, non-SWING proposal and no-signal cases send no order.
 - No simulated P&L is presented as broker-authoritative.
+- SD-141 extension: concurrent workers allow exactly one durable fence claim; lost close POST acknowledgement HALTs and remains non-replayable; audit-anchor outage during protective monitoring of an open position now **durably HALTs** rather than reporting only ATTENTION_REQUIRED; XNYS early-close swing review uses 13:00 ET close (not 16:00).
 
 ## Open engineering work — do not mark SD-140/152 complete
 
