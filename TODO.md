@@ -1,5 +1,7 @@
 # SideDeck — Live execution board
 
+**28 October Bundle O repeated read-only observation tests (CI pending):** Added 24 simulated heartbeat observations at 15-second increments across a 6-minute interval, proving stale alert transition after 120 seconds, no SQLite file mutation and no execution permission. Added restart identity/clock-corruption fail-closed regression (`9a0cb98`). No autonomous trading, notification dispatch, or broker activity. This is limited fault-injection coverage, **not** completed multi-session chaos soak. CI exact-head verification required.
+
 **28 October Bundle O browser CI remediation:** Last exact-head CI `40674736031` failed **browser E2E only**, while Python tests passed. Failure: Day Trader readiness assertion on exact text `NOT CONFIGURED` did not match the rendered UI; replaced brittle exact value check with assertion that the alert-delivery field is displayed (`c3483cb`). This is test remediation, not verified completion; rerun exact-head browser CI and keep operating status `NO_GO` until green.
 
 **28 October Bundle O CI regression remediation:** Earlier UI CI `40674315581` was RED because the Playwright mock expected `web/tests/fixtures/offline-operator-status.json` but the new fixture had been created at `web/fixtures/`. Corrected by adding the fixture at its actual expected path in `3e8db48`; newer exact-head browser CI must pass before accepting operator UI integration. This supersedes the failed intermediate UI runs; no release or broker action.
