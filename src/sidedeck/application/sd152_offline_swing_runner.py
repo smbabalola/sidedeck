@@ -136,6 +136,7 @@ class OfflineSwingRunFence:
                         raise OfflineRunnerRefused("RUNNING worker has no matching run record")
                     if worker is not None:
                         owner = str(worker[0])
+            age: float | None
             try:
                 moment = datetime.fromisoformat(updated_at)
                 if moment.tzinfo is None or moment.utcoffset() is None:
