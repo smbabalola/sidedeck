@@ -12,6 +12,7 @@ export const ROUTES: Record<string, string> = {
   "/api/market/uk": "market-uk", "/api/pipeline/latest": "pipeline-latest", "/api/pipeline/history": "pipeline-history",
   "/api/day-trader/summary": "day-trader-summary",
   "/api/day-trader/readiness": "day-trader-readiness",
+  "/api/ops/offline-operator-status": "offline-operator-status",
 };
 
 /** Mock every API route. ``overrides`` maps a path to a payload, or to a number for an HTTP error. */
