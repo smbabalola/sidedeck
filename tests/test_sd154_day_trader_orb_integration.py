@@ -33,9 +33,9 @@ def test_actual_orb_signal_enters_bridge_but_cannot_self_admit(tmp_path: Path):
             IntradayBar(
                 start=now - timedelta(minutes=30 - 5 * i),
                 open=Decimal(o), high=Decimal(h),
-                low=Decimal(l), close=Decimal(c), volume=Decimal("10000"),
+                low=Decimal(low), close=Decimal(c), volume=Decimal("10000"),
             )
-            for i, (o, h, l, c) in enumerate(prices)
+            for i, (o, h, low, c) in enumerate(prices)
         )
         signal = orb_signal(MSFT, bars, now)
         assert signal is not None and signal.source_id == "day_trader_skill.orb"
