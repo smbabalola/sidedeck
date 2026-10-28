@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-from sidedeck.application.sd152_digest_integrity import validate_offline_digest
+from sidedeck.application.sd152_digest_integrity import validate_informational_digest, validate_offline_digest
 
 
 class OfflineAlertJournal:
@@ -35,8 +35,8 @@ class OfflineAlertJournal:
                 or not isinstance(digest, str) or len(digest) != 64
                 or any(c not in "0123456789abcdef" for c in digest)):
             raise ValueError("invalid or executable alert digest")
-        if report["severity"] == "ACTION_REQUIRED" and not validate_offline_digest(report):
-            raise ValueError("critical alert digest integrity invalid")
+        if (report["severity"] == "ACTION_REQUIRED" and not validate_offline_digest(report)) or (report["severity"] == "INFORMATIONAL" and not validate_informational_digest(report)):
+            raise ValueError("alert digest integrity invalid")
         now = at.astimezone(UTC).isoformat()
         with closing(sqlite3.connect(self.path, isolation_level=None, timeout=30)) as db:
             db.execute("BEGIN IMMEDIATE")
