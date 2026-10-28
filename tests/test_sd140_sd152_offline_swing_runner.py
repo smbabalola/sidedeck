@@ -1,13 +1,14 @@
 """SD-140/152 OFFLINE scheduled SWING end-to-end and single-writer negative tests."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal
-from sidedeck.application.sd068_track_scheduler import SchedulerStore, slots_for
+from sidedeck.application.sd068_track_scheduler import SchedulerStore, session_for, slots_for
 from sidedeck.application.sd140_offline_swing_controller import OfflineSwingCycleController
 from sidedeck.application.sd152_offline_swing_runner import (
     OfflineSwingRunFence, OfflineSwingScheduledService,
@@ -154,4 +155,74 @@ def test_sd152_no_signal_day_keeps_broker_locked(setup):
     assert outcome.status == "NO_TRADE"
     assert outcome.report()["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
     assert fence.state() == "IDLE"
+    assert route.calls == []
+
+
+def test_sd141_durable_fence_refuses_concurrent_workers(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    second_handle = OfflineSwingRunFence(env.tmp / "single-writer.sqlite3")
+    slot = slots_for(scheduler.jobs["swing_review"], NOW.date())[0]
+    def take(handle):
+        return handle.acquire(slot, owner="concurrent-worker", at=NOW)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        tokens = list(pool.map(take, [fence, second_handle]))
+    assert sum(token is not None for token in tokens) == 1
+    assert route.calls == []
+    assert fence.state() == "RUNNING"
+    fence.finish(next(token for token in tokens if token is not None),
+                 at=NOW, safe=False, outcome="CONCURRENCY_TEST")
+    assert fence.state() == "UNRESOLVED"
+
+
+def test_sd141_ambiguous_close_post_halts_worker_without_replay(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert service.run_due(owner="worker-a", entry=proposal, entry_quote=quote).status == "ENTRY_CONFIRMED"
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    route.lose_next_response = True
+    result = service.run_due(
+        owner="worker-b",
+        planning_bids=(seal_bid(signer, env, "455"),),
+        execution_bids={MSFT: seal_bid(signer, env, "455")},
+    )
+    assert result.status == "HALTED"
+    assert fence.state() == "UNRESOLVED"
+    assert env.ledger.kill_switch_engaged()
+    assert [method for method, _ in route.calls].count("POST") == 2
+    restarted = OfflineSwingScheduledService(
+        SchedulerStore(env.tmp / "schedule.sqlite3"),
+        OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"), controller,
+        clock=env.clock)
+    assert restarted.run_due(owner="worker-c").status == "RECOVERY_REQUIRED"
+    assert [method for method, _ in route.calls].count("POST") == 2
+
+
+def test_sd141_anchor_outage_before_exit_never_sends_close(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert service.run_due(owner="worker-a", entry=proposal, entry_quote=quote).status == "ENTRY_CONFIRMED"
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    env.gateway_audit_anchor.unavailable = True
+    result = service.run_due(
+        owner="worker-b",
+        planning_bids=(seal_bid(signer, env, "455"),),
+        execution_bids={MSFT: seal_bid(signer, env, "455")},
+    )
+    assert result.status == "HALTED"
+    assert fence.state() == "UNRESOLVED"
+    assert env.ledger.kill_switch_engaged()
+    assert [method for method, _ in route.calls].count("POST") == 1
+    assert lineage.owned(880_001)["state"] == "OPEN"
+
+
+def test_sd140_swing_review_uses_exchange_early_close_not_regular_close(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    half_day = date(2026, 11, 27)
+    session = session_for(half_day)
+    assert session is not None and session.early_close
+    assert session.close_utc == datetime(2026, 11, 27, 18, 0, tzinfo=UTC)
+    slots = slots_for(scheduler.jobs["swing_review"], half_day)
+    assert slots[-1] == datetime(2026, 11, 27, 17, 30, tzinfo=UTC)
     assert route.calls == []
