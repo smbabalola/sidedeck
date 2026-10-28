@@ -221,6 +221,80 @@ def test_sd138_lost_post_ack_recovers_by_get_after_port_restart(env, tmp_path):
                for _grant, event, detail in env.authority._ledger.events())
 
 
+def test_sd141_accepted_open_404_falls_back_by_orderid_only_after_signed_get(env, tmp_path):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    route.lookup_not_visible = 1
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    open_reference = str(UUID(hex=proposal.reference_id))
+    assert lineage.order(open_reference)["state"] == "ACCEPTED"
+    assert lineage.order(open_reference)["order_id"] == 770_001
+    assert env.ledger.kill_switch_engaged()
+    lineage.close()
+
+    # A broker 404 on the *first recovery GET* may fall back to the durable
+    # accepted orderId, but never a second POST or fabricated position.
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    try:
+        restarted = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage))
+        route.lookup_not_visible = 1
+        before = len(route.calls)
+        result = restarted.recover_entry(proposal)
+        assert result.classification == "SIMULATED_POSITION_OPEN"
+        assert result.position is not None
+        assert result.position.order_id == 770_001
+        assert route.calls[before:] == [
+            ("GET", DEMO_ORDER_LOOKUP_PATH),
+            ("GET", DEMO_ORDER_LOOKUP_PATH),
+        ]
+        fallback = f"recovery-orderid:{open_reference}"
+        assert route.call_references[-1] == fallback
+        assert any(event == "USE_READ" and detail == fallback
+                   for _grant, event, detail in env.authority._ledger.events())
+        assert [method for method, _ in route.calls].count("POST") == 1
+        assert restarted_lineage.owned(result.position.position_id) is not None
+        assert env.ledger.kill_switch_engaged()  # Recovery cannot clear owner HALT.
+    finally:
+        restarted_lineage.close()
+
+
+def test_sd141_unknown_open_404_has_no_orderid_fallback_or_repost(env, tmp_path):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(
+        env, tmp_path, loses_post=True)
+    proposal = env.entry()
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    open_reference = str(UUID(hex=proposal.reference_id))
+    assert lineage.order(open_reference)["state"] == "OUTCOME_UNKNOWN"
+    assert lineage.order(open_reference)["order_id"] is None
+    lineage.close()
+
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    try:
+        restarted = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage))
+        route.lookup_not_visible = 1
+        before = len(route.calls)
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted.recover_entry(proposal)
+        assert route.calls[before:] == [("GET", DEMO_ORDER_LOOKUP_PATH)]
+        assert [method for method, _ in route.calls].count("POST") == 1
+        assert restarted_lineage.order(open_reference)["state"] == "OUTCOME_UNKNOWN"
+        assert env.ledger.kill_switch_engaged()
+    finally:
+        restarted_lineage.close()
+
+
 def test_sd138_final_pnl_baseline_drift_keeps_close_unresolved_and_halts(env, tmp_path):
     gateway, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
     proposal = env.entry()
