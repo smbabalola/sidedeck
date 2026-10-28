@@ -67,7 +67,8 @@ def run_day_trader_offline_cycle(
         reasons = ("EXISTING_POSITION_EXIT_PRIORITY",)
     elif research_result.signal is None:
         reasons = ("DAY_TRADER_NO_ENTRY_SIGNAL",)
-    elif (research_result.signal.track != "DAY"
+    elif (research_result.status != "RESEARCH_ONLY"
+          or research_result.signal.track != "DAY"
           or research_result.signal.source_kind != "DAY_TRADER_METHOD"
           or research_result.admission.status != "RESEARCH_ONLY"):
         reasons = ("UNTRUSTED_DAY_TRADER_RESEARCH",)
