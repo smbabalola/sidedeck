@@ -18,6 +18,7 @@ Alpaca PAPER is secondary. This desk is **offline only**:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -341,6 +342,15 @@ class EtoroDemoLineage:
             "SELECT stage FROM etoro_demo_offline_recovery_reads "
             "WHERE order_reference=? ORDER BY rowid", (order_reference,),
         ))
+
+    def offline_original_baseline_sha256(self) -> str:
+        """Local original-facts fingerprint; NEVER broker-owner verification."""
+        row = self._db.execute(
+            "SELECT facts_json FROM etoro_demo_original_baseline WHERE id=1"
+        ).fetchone()
+        if row is None:
+            raise EtoroDemoBookError("original offline baseline facts are unavailable")
+        return hashlib.sha256(str(row["facts_json"]).encode("utf-8")).hexdigest()
 
     def close(self) -> None:
         self._db.close()
