@@ -213,9 +213,9 @@ class OfflineSwingRunFence:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 state = conn.execute(
-                    "SELECT state FROM offline_swing_single_writer WHERE id=1"
+                    "SELECT state,token FROM offline_swing_single_writer WHERE id=1"
                 ).fetchone()
-                if state is None or state[0] != "IDLE":
+                if state is None or state[0] != "IDLE" or state[1]:
                     conn.execute("ROLLBACK")
                     return None
                 if conn.execute(
@@ -445,6 +445,15 @@ class OfflineSwingScheduledService:
         if self.fence.state() != "IDLE":
             return RunnerOutcome("RECOVERY_REQUIRED", None,
                                  "a prior worker is running or unresolved; no automatic takeover")
+        # Check the persisted SD-036 ledger as well as the singleton worker
+        # fence. A crash or an orphan reservation must never be turned into a
+        # new order merely because the worker row happens to be IDLE.
+        dossier = self.recovery_dossier(now=now)
+        if dossier["uncertain_orders"]:
+            return RunnerOutcome(
+                "RECOVERY_REQUIRED", None,
+                "durable broker order or position requires signed GET-only reconciliation",
+            )
         job = self.scheduler.jobs[SWING_JOB]
         if self.scheduler.effective_mode(job) != "SIMULATION_ONLY":
             return RunnerOutcome("LOCKED", None, "explicit SIMULATION_ONLY mode required")
