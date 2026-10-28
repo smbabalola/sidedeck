@@ -746,14 +746,22 @@ class OfflineSwingScheduledService:
                 entry=entry, entry_quote=entry_quote, entry_marks=entry_marks,
             )
             success = result.status != "HALTED"
-            self.fence.finish(token, at=self.clock(), safe=success, outcome=result.status)
+            # Commit the scheduler result before releasing the durable exclusive
+            # worker. A crash between these writes must leave RUNNING (manual
+            # reconciliation), never IDLE with an unfinished scheduler claim.
             self.scheduler.finish(SWING_JOB, slot, owner, self.clock(), ok=success)
+            self.fence.finish(token, at=self.clock(), safe=success, outcome=result.status)
             return RunnerOutcome(
                 result.status, slot.isoformat(), "OFFLINE_SIMULATOR_ONLY", result,
             )
         except Exception:
             # Do not retry this cycle or automatically take over an unknown
             # state; a crash before this block also leaves RUNNING durable.
+            # Any failure leaves the durable worker unresolved. Avoid
+            # assuming the scheduler transaction succeeded or retrying a send.
+            if self.fence.state() == "IDLE":
+                raise OfflineRunnerRefused(
+                    "worker fence released before scheduler confirmation"
+                ) from None
             self.fence.finish(token, at=self.clock(), safe=False, outcome="EXCEPTION")
-            self.scheduler.finish(SWING_JOB, slot, owner, self.clock(), ok=False)
             raise
