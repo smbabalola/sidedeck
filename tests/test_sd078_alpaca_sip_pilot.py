@@ -373,6 +373,7 @@ def test_intraday_checkpoint_survives_page_budget_exhaustion(tmp_path):
     page = json.loads((directory / "page-001.json").read_text())
     assert progress["complete"] is False
     assert progress["pages"] == 1
+    assert progress["page_accepted_count"] == 1
     assert page[0]["timestamp_utc"] == "2026-10-22T13:30:00+00:00"
     assert ledger.used() == 1
     import hashlib
