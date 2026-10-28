@@ -631,6 +631,7 @@ def test_sd152_actual_child_process_exit_leaves_durable_run_fenced(setup):
     child_code = """
 import os
 import sys
+sys.path.insert(0, sys.argv.pop(1))  # isolated src-layout checkout, no installation
 from datetime import datetime
 from pathlib import Path
 from sidedeck.application.sd152_offline_swing_runner import OfflineSwingRunFence
@@ -643,7 +644,7 @@ if not token:
 os._exit(77)
 """
     crashed = subprocess.run(
-        [sys.executable, "-c", child_code,
+        [sys.executable, "-c", child_code, str(Path(__file__).resolve().parents[1] / "src"),
          str(env.tmp / "single-writer.sqlite3"), slot.isoformat(), NOW.isoformat()],
         check=False, capture_output=True, text=True, timeout=15,
     )
@@ -676,6 +677,7 @@ def test_sd141_actual_child_process_exits_after_open_lineage_without_policy_resu
     child_code = """
 import os
 import sys
+sys.path.insert(0, sys.argv.pop(1))  # isolated src-layout checkout, no installation
 from decimal import Decimal
 from sidedeck.application.sd036_etoro_demo_desk import EtoroDemoLineage
 db, ref, intent, instrument, units, limit = sys.argv[1:]
@@ -697,7 +699,7 @@ lineage.register_position(
 os._exit(78)
 """
     crashed = subprocess.run(
-        [sys.executable, "-c", child_code,
+        [sys.executable, "-c", child_code, str(Path(__file__).resolve().parents[1] / "src"),
          str(env.tmp / "lineage.sqlite3"), request.reference_id,
          proposal.reference_id, str(request.instrument_id),
          str(request.units), str(request.limit_rate)],
