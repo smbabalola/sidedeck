@@ -72,15 +72,19 @@ def test_intraday_alpaca_scope_is_separate_and_read_only(tmp_path: Path) -> None
     auth = _auth(
         provider="ALPACA_SIP_INTRADAY", urls=(url,),
         authorization_id="sd156-spy-intraday-fixture", max_requests=1,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2025-10-27T00:00:00Z", "end": "2026-10-24T00:00:00Z",
+               "limit": "10000"},
     )
-    assert auth.allows_url(url + "?timeframe=5Min&feed=sip&limit=10000")
+    assert auth.allows_url(url + "?timeframe=5Min&feed=sip&adjustment=split&start=2025-10-27T00:00:00Z&end=2026-10-24T00:00:00Z&limit=10000")
     assert not auth.allows_url("https://data.alpaca.markets/v2/stocks/QQQ/bars")
+    assert not auth.allows_url(url + "?timeframe=1Day&feed=sip")
     with pytest.raises(AuthorizationRefused, match="never authorized"):
         auth.allows_url("https://data.alpaca.markets/v2/stocks/SPY/orders")
     ledger = DataRequestLedger(tmp_path / "intraday.sqlite3", auth)
-    ledger.reserve(url + "?timeframe=5Min&feed=sip&limit=10000", NOW)
+    ledger.reserve(url + "?timeframe=5Min&feed=sip&adjustment=split&start=2025-10-27T00:00:00Z&end=2026-10-24T00:00:00Z&limit=10000", NOW)
     with pytest.raises(AuthorizationRefused, match="exhausted"):
-        ledger.reserve(url + "?timeframe=5Min&feed=sip&limit=10000", NOW)
+        ledger.reserve(url + "?timeframe=5Min&feed=sip&adjustment=split&start=2025-10-27T00:00:00Z&end=2026-10-24T00:00:00Z&limit=10000", NOW)
     with pytest.raises(AuthorizationRefused):
         _auth(
             provider="ALPACA_SIP_INTRADAY",
