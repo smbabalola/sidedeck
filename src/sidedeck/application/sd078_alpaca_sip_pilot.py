@@ -364,7 +364,30 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
         if actual != expected:
             raise MarketDataUnavailable(f"incomplete or nonconsecutive SPY session {day}")
         hit = opening_range_breakout(day_bars, session.close_utc)
+        # Research-only fill convention: signal is known at the hit bar CLOSE;
+        # enter at the NEXT bar OPEN; stop at the opening-range LOW.
+        # If there is no next regular bar, no trade is counted.
+        trade: dict[str, Any] | None = None
+        if hit is not None:
+            next_index = next((i for i, bar in enumerate(day_bars)
+                               if bar.start == hit.hit_at), None)
+            if next_index is not None:
+                entry = day_bars[next_index].open
+                stop = hit.range_low
+                if entry > stop:
+                    exit_price = day_bars[-1].close
+                    exit_reason = "EOD"
+                    for future in day_bars[next_index:]:
+                        if future.low <= stop:
+                            exit_price = min(stop, entry) if future is day_bars[next_index] else stop
+                            exit_reason = "STOP"
+                            break
+                    trade = {"entry_at": day_bars[next_index].start.isoformat(),
+                             "entry": str(entry), "stop": str(stop),
+                             "exit": str(exit_price), "exit_reason": exit_reason,
+                             "gross_r": str((exit_price - entry) / (entry - stop))}
         findings.append({
+            "trade": trade,
             "date": day.isoformat(), "bars": len(actual),
             "opening_high": str(max(b.high for b in day_bars[:3])),
             "opening_low": str(min(b.low for b in day_bars[:3])),
@@ -375,6 +398,8 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
         "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "sessions": len(findings), "total_bars": len(rows),
         "orb_breakout_sessions": sum(1 for finding in findings if finding["orb_breakout"]),
+        "completed_research_trades": sum(1 for finding in findings if finding["trade"] is not None),
+        "assumptions": "next-bar open; opening-range-low stop; EOD exit; gross R excluding costs; research only",
         "days": findings, "research_only": True,
         "strategy_admission_eligible": False, "broker_execution": "DISABLED",
     }
