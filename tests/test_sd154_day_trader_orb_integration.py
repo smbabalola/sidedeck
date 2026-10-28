@@ -11,6 +11,7 @@ import pytest
 
 from sidedeck.application.sd069_day_trader_methods import IntradayBar, orb_signal, METHOD_VERSION
 from sidedeck.application.sd071_decision_engine import StrategyAdmission
+from sidedeck.application.sd074_trusted_inputs import Envelope
 from sidedeck.application.sd123_day_demo_integration import DayResearchResult
 from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
 from sidedeck.application.sd154_day_trader_offline_bridge import run_day_trader_offline_cycle
@@ -239,6 +240,58 @@ def test_unpinned_day_research_method_cannot_enter(
         assert result.proposal_reasons == ("UNTRUSTED_DAY_TRADER_RESEARCH",)
         assert result.cycle.status == "NO_TRADE"
         assert gateway._simulator.submitted_orders == 0
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+@pytest.mark.parametrize("field, value", [
+    ("canonical_id", "US:XNAS:QQQ"),
+    ("track", "SWING"),
+    ("direction", "SHORT"),
+])
+def test_orb_rejects_unrelated_native_signal_before_entry(
+    tmp_path: Path, field: str, value: str,
+):
+    """Independent strategy approval cannot attach a different opportunity to ORB."""
+    now = datetime(2026, 11, 27, 15, 0, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env, fill_price="500")
+    try:
+        bars = tuple(
+            IntradayBar(
+                start=now - timedelta(minutes=30 - 5 * i),
+                open=Decimal("500"), high=Decimal("502") if i < 3 else Decimal("505"),
+                low=Decimal("499"), close=Decimal("501") if i < 3 else Decimal("504"),
+                volume=Decimal("10000"),
+            ) for i in range(4)
+        )
+        signal = orb_signal(MSFT, bars, now)
+        assert signal is not None
+        research = DayResearchResult(
+            signal=signal,
+            admission=StrategyAdmission(
+                signal.source_id, METHOD_VERSION, "DAY", "RESEARCH_ONLY",
+                "fixture-chart-not-oos", 0, False,
+            ),
+            metadata={"data_basis": "SYNTHETIC_FIXTURE"}, status="RESEARCH_ONLY",
+        )
+        payload = {"canonical_id": MSFT, "track": "DAY", "direction": "LONG"}
+        payload[field] = value
+        # Deliberately untrusted envelope: mismatch must be refused even before
+        # SD-074 verifies authentic signatures and independent OOS admission.
+        native = Envelope("signal", "fixture", now.isoformat(), "test", payload, "unsealed")
+        result = run_day_trader_offline_cycle(
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            research_result=research, native_signals=(native,),
+            admissions=(StrategyAdmission(
+                "independent.fixture", "1", "DAY", "ADMITTED", "fixture-only", 30, True,
+            ),),
+        )
+        assert result.proposal_reasons == ("DAY_TRADER_NATIVE_SIGNAL_MISMATCH",)
+        assert result.cycle.status == "NO_TRADE"
+        assert gateway._simulator.submitted_orders == 0
+        assert not env.ledger.open_positions()
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
