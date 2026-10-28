@@ -419,12 +419,14 @@ def test_inspect_saved_spy_orb_uses_native_scanner_and_refuses_gaps(tmp_path):
     assert result["orb_breakout_sessions"] == 1
     assert result["completed_research_trades"] == 1
     assert result["performance"]["completed"] == 1
+    assert result["performance"]["oos_completed_trades"] == 0
+    assert result["performance"]["oos_qualification"] == "INSUFFICIENT_DATA"
     assert result["performance"]["qualification"] == "INSUFFICIENT_DATA"
     assert Decimal(result["performance"]["stressed_net_total_r"]) < 0
     assert Decimal(result["days"][0]["trade"]["stressed_net_r"]) < 0
     assert result["days"][0]["trade"]["entry"] == "102"
     assert result["days"][0]["trade"]["stop"] == "99"
-    assert result["days"][0]["trade"]["exit_reason"] == "EOD"
+    assert result["days"][0]["trade"]["exit_reason"] == "EOD_LAST_BAR_OPEN_PROXY"
     assert result["days"][0]["trade"]["gross_r"] == "0"
     assert result["strategy_admission_eligible"] is False
     document["bars"].pop(4)
