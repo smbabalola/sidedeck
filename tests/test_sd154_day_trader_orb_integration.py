@@ -366,7 +366,10 @@ def test_outdated_or_future_orb_research_never_enters(
         )
         original = orb_signal(MSFT, bars, now)
         assert original is not None
-        signal = replace(\n            original, generated_at=now - timedelta(minutes=age_minutes),\n            data_cutoff=now - timedelta(minutes=max(age_minutes, 10)),\n        )
+        signal = replace(
+            original, generated_at=now - timedelta(minutes=age_minutes),
+            data_cutoff=now - timedelta(minutes=max(age_minutes, 10)),
+        )
         research = DayResearchResult(
             signal=signal,
             admission=StrategyAdmission(
