@@ -19,7 +19,7 @@ import test_sd140_sd152_offline_swing_runner as scenarios
     scenarios.test_sd152_close_ledger_mismatch_blocks_twelve_restarts_without_replay,
     scenarios.test_sd152_tampered_final_close_units_blocks_ten_clean_slot_restarts,
     scenarios.test_sd152_inconsistent_remaining_units_never_rearms_synthetic_entry,
-    scenarios.test_sd152_partial_entry_then_full_reduce_across_two_slots,
+    scenarios.test_sd152_partial_entry_requires_manual_recovery_before_second_slot,
     scenarios.test_sd152_partial_close_ten_restarts_never_infer_flat_or_repost,
 ], ids=lambda test: test.__name__.removeprefix("test_"))
 def test_bundle_o_offline_acceptance_scenarios(setup, scenario):
