@@ -202,6 +202,10 @@ class AutonomousEtoroDemoOrderAdapter:
                                    "policy_digest": proposal.policy_digest,
                                    "book_id": book_id})
         try:
+            # Crash-safe budget: reserve before any broker-shaped GET. A
+            # retried invocation cannot replay the same stage after restart.
+            self._port.reserve_offline_recovery_get(
+                request, stage="REFERENCE", at=self._gate._clock())
             try:
                 outcome, owner, payload = self._port.lookup_open_with_payload(
                     request, reference_id=recovery_ref)
@@ -221,6 +225,8 @@ class AutonomousEtoroDemoOrderAdapter:
                              "policy_digest": proposal.policy_digest,
                              "book_id": book_id, "accepted_order_id": accepted_id},
                 )
+                self._port.reserve_offline_recovery_get(
+                    request, stage="ACCEPTED_ORDER_ID", at=self._gate._clock())
                 outcome, owner, payload = self._port.lookup_open_with_payload(
                     request, order_id=accepted_id, reference_id=fallback_ref)
             envelope = self._gate._adapter.seal_open_lookup_or_unresolved(
