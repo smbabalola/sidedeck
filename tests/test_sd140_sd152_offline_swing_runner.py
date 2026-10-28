@@ -486,3 +486,87 @@ def test_sd152_durable_uncertain_order_blocks_fresh_idle_swing_run(setup):
     assert scheduler.history("swing_review") == ()
     assert fence.state() == "IDLE"
     assert route.calls == []
+
+
+def test_sd141_open_broker_lineage_before_policy_crash_blocks_idle_runner(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    original_resolve = controller.runtime.resolve
+
+    def crash_between_open_ledgers(_evidence):
+        raise RuntimeError("crash after durable broker position, before policy resolution")
+
+    controller.runtime.resolve = crash_between_open_ledgers
+    try:
+        from sidedeck.application.sd138_autonomous_order_adapter import SD138Refused
+        with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+            controller.adapter.submit_entry(proposal, quote=quote)
+    finally:
+        controller.runtime.resolve = original_resolve
+
+    assert len(lineage.owned_positions()) == 1
+    assert env.ledger.state().entries[proposal.reference_id].outcome is None
+    assert env.ledger.kill_switch_engaged()
+    before = tuple(route.calls)
+    dossier = service.recovery_dossier(now=NOW)
+    assert dossier["status"] == "HALTED_REVIEW_REQUIRED"
+    assert any(
+        item["review_action"] == "DURABLE_OPEN_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+        for item in dossier["uncertain_orders"]
+    )
+    assert "CROSS_LEDGER_RECONCILIATION_REQUIRED" in service.inspect(now=NOW)["alerts"]
+    assert service.run_due(owner="new-worker").status == "RECOVERY_REQUIRED"
+    assert fence.state() == "IDLE"
+    assert scheduler.history("swing_review") == ()
+    assert tuple(route.calls) == before
+
+
+def test_sd141_filled_close_broker_ledger_before_policy_crash_blocks_idle_runner(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    entry = env.entry()
+    controller.adapter.submit_entry(entry, quote=quote)
+    plan = controller.runtime.plan_exits(bids=(seal_bid(signer, env, "455"),))
+    assert len(plan.exits) == 1
+    original_resolve = controller.runtime.resolve
+
+    def crash_between_close_ledgers(_evidence):
+        raise RuntimeError("crash after durable close, before policy resolution")
+
+    controller.runtime.resolve = crash_between_close_ledgers
+    try:
+        from sidedeck.application.sd138_autonomous_order_adapter import SD138Refused
+        with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+            controller.adapter.submit_exit(
+                plan.exits[0], quote=seal_bid(signer, env, "455"),
+            )
+    finally:
+        controller.runtime.resolve = original_resolve
+
+    assert lineage.owned(880_001)["state"] == "CLOSED"
+    assert env.ledger.state().exits[plan.exits[0].reference_id].outcome is None
+    assert env.ledger.kill_switch_engaged()
+    before = tuple(route.calls)
+    dossier = service.recovery_dossier(now=NOW)
+    assert any(
+        item["review_action"] == "DURABLE_CLOSE_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+        for item in dossier["uncertain_orders"]
+    )
+    assert "CROSS_LEDGER_RECONCILIATION_REQUIRED" in service.inspect(now=NOW)["alerts"]
+    assert service.run_due(owner="new-worker").status == "RECOVERY_REQUIRED"
+    assert scheduler.history("swing_review") == ()
+    assert tuple(route.calls) == before
+    assert [method for method, _ in route.calls].count("POST") == 2
+
+
+def test_sd141_normal_open_and_close_recovery_dossier_has_no_ledger_discrepancies(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    proposal = env.entry()
+    controller.adapter.submit_entry(proposal, quote=quote)
+    assert service.recovery_dossier(now=NOW)["uncertain_orders"] == []
+    plan = controller.runtime.plan_exits(bids=(seal_bid(signer, env, "455"),))
+    controller.adapter.submit_exit(plan.exits[0], quote=seal_bid(signer, env, "455"))
+    assert service.recovery_dossier(now=NOW)["uncertain_orders"] == []
+    assert "CROSS_LEDGER_RECONCILIATION_REQUIRED" not in service.inspect(now=NOW)["alerts"]
+    assert [method for method, _ in route.calls].count("POST") == 2
