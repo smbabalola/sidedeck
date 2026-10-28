@@ -281,7 +281,7 @@ def collect_signed_spy_five_minute(
         nxt = payload.get("next_page_token")
         if nxt is None:
             break
-        if not isinstance(nxt, str) or not re.fullmatch(r"[A-Za-z0-9_\\-]{1,512}", nxt) or nxt in seen:
+        if not isinstance(nxt, str) or not re.fullmatch(r"[A-Za-z0-9_+/=-]{1,512}", nxt) or nxt in seen:
             raise MarketDataUnavailable("invalid intraday pagination token")
         seen.add(nxt)
         token = nxt
