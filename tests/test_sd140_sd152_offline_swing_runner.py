@@ -1095,6 +1095,14 @@ def test_sd152_partial_entry_requires_manual_recovery_before_second_slot(setup):
     assert [method for method, _ in before].count("POST") == 1
     route.mode = "FILL"
     env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    # Capture the exact local blocker before attempting the next slot.
+    # A recovery hold is never silently reclassified as a clean exit.
+    dossier = service.recovery_dossier(now=env.clock.now)
+    assert dossier["uncertain_orders"], dossier
+    assert all(item["automatic_post_allowed"] is False for item in dossier["uncertain_orders"])
+    assert dossier["broker_account_verified"] is False
+    read_only_calls = tuple(route.calls)
+    assert read_only_calls == before
     closed = service.run_due(
         owner="second-slot", planning_bids=(seal_bid(signer, env, "455"),),
         execution_bids={MSFT: seal_bid(signer, env, "455")},
