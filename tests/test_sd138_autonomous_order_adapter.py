@@ -196,6 +196,33 @@ def test_sd139_partial_close_never_claims_flat_or_sends_final_pnl(env, tmp_path)
     assert [method for method, _ in route.calls].count("POST") == 2
 
 
+def test_sd141_single_partial_open_tracks_only_filled_units_and_full_reduce_close(env, tmp_path):
+    _gate, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    route.mode = "PARTIAL"
+    result = adapter.submit_entry(proposal, quote=quote)
+    assert result.position is not None
+    assert result.position.units == proposal.units / 2
+    assert result.position.remaining_units == result.position.units
+    assert len(lineage.owned_positions()) == 1
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    assert env.ledger.open_positions()[0].units == proposal.units / 2
+
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    assert len(plan.exits) == 1
+    assert plan.exits[0].units == proposal.units / 2
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    result_close = adapter.submit_exit(plan.exits[0], quote=close_quote)
+    assert result_close.outcome.status == "FILLED"
+    assert lineage.owned(880_001)["state"] == "CLOSED"
+    assert env.ledger.open_positions() == ()
+    assert [m for m, _ in route.calls].count("POST") == 2
+    assert route.calls[-1] == ("GET", DEMO_PNL_PATH)
+
+
 def test_sd141_multi_position_fill_fails_closed_before_ownership_registration(env, tmp_path):
     _gate, quote, _signer, route, lineage, _path, adapter = _composed(env, tmp_path)
     proposal = env.entry()
