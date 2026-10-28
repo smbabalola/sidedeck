@@ -417,6 +417,11 @@ def test_inspect_saved_spy_orb_uses_native_scanner_and_refuses_gaps(tmp_path):
     assert result["sessions"] == 1
     assert result["total_bars"] == 78
     assert result["orb_breakout_sessions"] == 1
+    assert result["completed_research_trades"] == 1
+    assert result["days"][0]["trade"]["entry"] == "102"
+    assert result["days"][0]["trade"]["stop"] == "99"
+    assert result["days"][0]["trade"]["exit_reason"] == "EOD"
+    assert result["days"][0]["trade"]["gross_r"] == "0"
     assert result["strategy_admission_eligible"] is False
     document["bars"].pop(4)
     file.write_text(json.dumps(document))
