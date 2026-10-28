@@ -196,6 +196,18 @@ class EtoroDemoOrderPort:
             request, order_id=order_id, reference_id=reference_id)
         return outcome, position
 
+    def reserve_offline_recovery_get(
+        self, request: DemoOpenRequest, *, stage: str, at: datetime,
+    ) -> None:
+        """Durably reserve one GET stage; only the exact offline fake may use it."""
+        if not self.is_offline_fake_route or self._lineage is None:
+            raise DemoLineageRefused("offline recovery reservation requires durable fake route")
+        if self._durable_open(request) is None:
+            raise DemoLineageRefused("cannot reserve recovery without original order")
+        self._lineage.reserve_offline_recovery_read(
+            order_reference=request.reference_id, stage=stage, at=at,
+        )
+
     def durable_accepted_open_order_id(self, request: DemoOpenRequest) -> int | None:
         """Read accepted identity for a bounded GET-only 404 fallback.
 
