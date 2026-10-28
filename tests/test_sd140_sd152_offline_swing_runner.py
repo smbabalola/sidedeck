@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -11,7 +12,7 @@ from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal
 from sidedeck.application.sd068_track_scheduler import SchedulerStore, session_for, slots_for
 from sidedeck.application.sd140_offline_swing_controller import OfflineSwingCycleController
 from sidedeck.application.sd152_offline_swing_runner import (
-    OfflineSwingRunFence, OfflineSwingScheduledService,
+    OfflineRunnerRefused, OfflineSwingRunFence, OfflineSwingScheduledService,
 )
 
 from test_sd063_autonomous_demo_policy import _Env, MSFT, NOW
@@ -225,4 +226,77 @@ def test_sd140_swing_review_uses_exchange_early_close_not_regular_close(setup):
     assert session.close_utc == datetime(2026, 11, 27, 18, 0, tzinfo=UTC)
     slots = slots_for(scheduler.jobs["swing_review"], half_day)
     assert slots[-1] == datetime(2026, 11, 27, 17, 30, tzinfo=UTC)
+    assert route.calls == []
+
+
+
+def test_sd152_read_only_health_and_stale_alert_never_releases_worker(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    idle = service.health(now=NOW).report()
+    assert idle["state"] == "IDLE"
+    assert idle["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    assert idle["broker_route"] == "SIMULATED_LOCAL"
+    assert idle["alerts"] == []
+    slot = slots_for(scheduler.jobs["swing_review"], NOW.date())[0]
+    token = fence.acquire(slot, owner="worker-a", at=NOW)
+    assert token is not None
+    current = service.health(now=NOW + timedelta(seconds=30))
+    assert current.state == "RUNNING"
+    assert current.owner == "worker-a"
+    assert current.heartbeat_age_seconds == 30
+    assert current.alerts == ("EXCLUSIVE_WORKER_ACTIVE",)
+    stale = service.health(now=NOW + timedelta(seconds=121))
+    assert "STALE_RUNNING_HEARTBEAT_RECONCILIATION_REQUIRED" in stale.alerts
+    assert fence.state() == "RUNNING"
+    assert fence.acquire(slot, owner="worker-b", at=NOW + timedelta(minutes=30)) is None
+    assert route.calls == []
+
+
+def test_sd152_heartbeat_requires_original_token_owner_and_monotonic_clock(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    slot = slots_for(scheduler.jobs["swing_review"], NOW.date())[0]
+    token = fence.acquire(slot, owner="worker-a", at=NOW)
+    assert token is not None
+    with pytest.raises(OfflineRunnerRefused, match="identity"):
+        fence.heartbeat(token, owner="worker-b", at=NOW + timedelta(seconds=10))
+    with pytest.raises(OfflineRunnerRefused, match="fence"):
+        fence.heartbeat("forged-token", owner="worker-a", at=NOW + timedelta(seconds=10))
+    fence.heartbeat(token, owner="worker-a", at=NOW + timedelta(seconds=10))
+    assert service.health(now=NOW + timedelta(seconds=15)).heartbeat_age_seconds == 5
+    with pytest.raises(OfflineRunnerRefused, match="regressed"):
+        fence.heartbeat(token, owner="worker-a", at=NOW + timedelta(seconds=9))
+    assert fence.state() == "RUNNING"
+    with pytest.raises(OfflineRunnerRefused, match="regressed"):
+        fence.finish(token, at=NOW, safe=True, outcome="NO_TRADE")
+    assert fence.state() == "RUNNING"
+    fence.finish(token, at=NOW + timedelta(seconds=11),
+                 safe=False, outcome="INCIDENT")
+    assert service.health(now=NOW + timedelta(seconds=12)).alerts == (
+        "MANUAL_RECONCILIATION_REQUIRED_NO_AUTOMATIC_TAKEOVER",
+    )
+    assert route.calls == []
+
+
+def test_sd152_durable_missing_run_record_prevents_false_safe_release(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    slot = slots_for(scheduler.jobs["swing_review"], NOW.date())[0]
+    token = fence.acquire(slot, owner="worker-a", at=NOW)
+    assert token is not None
+    with sqlite3.connect(env.tmp / "single-writer.sqlite3") as conn:
+        conn.execute("DELETE FROM offline_swing_runs WHERE token=?", (token,))
+    with pytest.raises(OfflineRunnerRefused, match="matching run record"):
+        service.health(now=NOW)
+    with pytest.raises(OfflineRunnerRefused, match="durable run row missing"):
+        fence.finish(token, at=NOW, safe=True, outcome="NO_TRADE")
+    assert fence.state() == "RUNNING"
+    assert route.calls == []
+
+
+def test_sd152_successful_tick_reports_heartbeat_without_new_network_capability(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    result = service.run_due(owner="heartbeat-worker")
+    assert result.status == "NO_TRADE"
+    assert service.health(now=NOW).state == "IDLE"
+    assert len(fence.history()) == 1
     assert route.calls == []
