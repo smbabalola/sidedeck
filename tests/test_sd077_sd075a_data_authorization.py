@@ -79,6 +79,30 @@ def test_intraday_alpaca_scope_is_separate_and_read_only(tmp_path: Path) -> None
     assert auth.allows_url(url + "?timeframe=5Min&feed=sip&adjustment=split&start=2025-10-27T00:00:00Z&end=2026-10-24T00:00:00Z&limit=10000")
     assert not auth.allows_url("https://data.alpaca.markets/v2/stocks/QQQ/bars")
     assert not auth.allows_url(url + "?timeframe=1Day&feed=sip")
+    assert not auth.allows_url(
+        url + "?timeframe=5Min&feed=iex&adjustment=split"
+        "&start=2025-10-27T00:00:00Z&end=2026-10-24T00:00:00Z&limit=10000"
+    )
+    assert not auth.allows_url(
+        url + "?timeframe=5Min&feed=sip&adjustment=split"
+        "&start=2025-10-27T00:00:00Z&end=2026-10-25T00:00:00Z&limit=10000"
+    )
+    assert not auth.allows_url(
+        url + "?timeframe=5Min&feed=sip&adjustment=split"
+        "&start=2025-10-27T00:00:00Z&end=2026-10-24T00:00:00Z&limit=10000"
+        "&timeframe=1Day"
+    )
+    assert auth.allows_url(
+        url + "?timeframe=5Min&feed=sip&adjustment=split"
+        "&start=2025-10-27T00:00:00Z&end=2026-10-24T00:00:00Z&limit=10000"
+        "&page_token=opaque123"
+    )
+    assert not auth.allows_url(
+        url + "?timeframe=5Min&feed=sip&adjustment=split"
+        "&start=2025-10-27T00:00:00Z&end=2026-10-24T00:00:00Z&limit=10000"
+        "&page_token="
+    )
+
     with pytest.raises(AuthorizationRefused, match="never authorized"):
         auth.allows_url("https://data.alpaca.markets/v2/stocks/SPY/orders")
     ledger = DataRequestLedger(tmp_path / "intraday.sqlite3", auth)
