@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
+import uuid
+from datetime import datetime, timezone
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
@@ -16,7 +19,7 @@ from sidedeck.application.sd036_etoro_demo_desk import (
     TransportNotFound,
 )
 from sidedeck.application.sd107_demo_gateway import GatewayRefused
-from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal
+from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal, protective_subject
 from sidedeck.application.sd129_etoro_demo_order_port import (
     EtoroDemoOrderPort,
 )
@@ -31,7 +34,7 @@ from sidedeck.domain.etoro_demo_orders import (
 )
 
 from test_sd063_autonomous_demo_policy import (
-    _Env, _offline_gateway, _policy,
+    _Env, _grant, _offline_gateway, _policy,
 )
 
 
@@ -42,8 +45,10 @@ def env(tmp_path):
     current.ledger.close()
 
 
-def _composed(env: _Env, tmp_path: Path, *, loses_post: bool = False):
-    gateway, quote, signer = _offline_gateway(env, close_price="498")
+def _composed(env: _Env, tmp_path: Path, *, loses_post: bool = False,
+              protective_grant: tuple[dict[str, object], str] | None = None):
+    gateway, quote, signer = _offline_gateway(
+        env, close_price="498", protective_grant=protective_grant)
     route = OfflineEtoroDemoSimulator(fill_price=Decimal("500"),
                                       first_position_id=880_001, first_order_id=770_001)
     route.baseline_rows = [dict(row) for row in SYNTHETIC_BASELINE_ROWS]
@@ -189,6 +194,134 @@ def test_sd139_partial_close_never_claims_flat_or_sends_final_pnl(env, tmp_path)
     assert route.calls[-1][1] == DEMO_CLOSE_INFO_PATH.format(order_id=770_002)
     assert all(path != DEMO_PNL_PATH for _, path in route.calls)
     assert [method for method, _ in route.calls].count("POST") == 2
+
+
+def test_sd141_multi_position_fill_fails_closed_before_ownership_registration(env, tmp_path):
+    _gate, quote, _signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    original_send = route.send
+
+    def duplicate_open_execution(method, request_path, **kwargs):
+        if method == "GET" and request_path == DEMO_ORDER_LOOKUP_PATH:
+            source = next(iter(route._orders.values()))
+            original = source["positionExecutions"][0]
+            second = {
+                **original,
+                "positionId": original["positionId"] + 1,
+                "remainingUnits": original["remainingUnits"] / 2,
+                "openingData": {**original["openingData"],
+                                "units": original["openingData"]["units"] / 2},
+            }
+            original["remainingUnits"] /= 2
+            original["openingData"]["units"] /= 2
+            source["positionExecutions"].append(second)
+        return original_send(method, request_path, **kwargs)
+
+    route.send = duplicate_open_execution
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    assert env.ledger.kill_switch_engaged()
+    row = lineage.order(str(UUID(hex=proposal.reference_id)))
+    assert row["state"] == "ACCEPTED"
+    assert lineage.owned_positions() == ()
+    assert [method for method, _ in route.calls].count("POST") == 1
+    assert all(path != DEMO_PNL_PATH for _, path in route.calls)
+
+
+def test_sd141_partial_close_restart_does_not_infer_flat_from_partial_info(env, tmp_path):
+    gateway, quote, signer, route, lineage, path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    assert len(plan.exits) == 1
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    route.close_mode = "PARTIAL"
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_exit(plan.exits[0], quote=close_quote)
+    close_ref = str(UUID(hex=plan.exits[0].reference_id))
+    assert lineage.order(close_ref)["state"] == "ACCEPTED"
+    assert env.ledger.kill_switch_engaged()
+    lineage.close()
+
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    try:
+        restarted = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage),
+        )
+        before = len(route.calls)
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted.recover_exit(plan.exits[0])
+        assert route.calls[before:] == [
+            ("GET", DEMO_CLOSE_INFO_PATH.format(order_id=770_002)),
+        ]
+        assert [method for method, _ in route.calls].count("POST") == 2
+        assert all(p != DEMO_PNL_PATH for _, p in route.calls)
+        assert restarted_lineage.owned(880_001)["state"] == "OPEN"
+        assert restarted_lineage.order(close_ref)["state"] == "ACCEPTED"
+        assert env.ledger.open_positions()
+        assert env.ledger.kill_switch_engaged()
+    finally:
+        restarted_lineage.close()
+
+
+def _offline_protective_grant(env: _Env) -> tuple[dict[str, object], str]:
+    grant = _grant(
+        env.policy,
+        grant_id=str(uuid.uuid4()),
+        subject_digest=protective_subject(env.policy),
+        not_before=datetime(2026, 11, 3, 14, 0, tzinfo=timezone.utc),
+        expires_at=datetime(2026, 11, 10, 14, 0, tzinfo=timezone.utc),
+        purpose="SD-140 deterministic protective exit after policy expiry",
+    )
+    return json.loads(grant.canonical()), f"sig:{grant.digest()}"
+
+
+def test_sd140_policy_expired_protective_grant_closes_only_owned_position(env, tmp_path):
+    protective = _offline_protective_grant(env)
+    gateway, quote, signer, route, lineage, _path, adapter = _composed(
+        env, tmp_path, protective_grant=protective)
+    entry = env.entry()
+    adapter.submit_entry(entry, quote=quote)
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=timezone.utc)
+    plan = env.rt.plan_exits(bids=env.bids("498"))
+    assert len(plan.exits) == 1
+    assert plan.exits[0].reason == "PROTECTIVE_FLATTEN"
+    assert plan.exits[0].authority == "protective"
+    quote_close = signer.seal({
+        "canonical_id": entry.canonical_id, "bid": "498", "ask": "499",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    done = adapter.submit_exit(plan.exits[0], quote=quote_close)
+    assert done.outcome.status == "FILLED"
+    assert done.baseline_position_ids == (11, 12, 13, 14)
+    assert lineage.owned(880_001)["state"] == "CLOSED"
+    assert env.ledger.open_positions() == ()
+    assert [method for method, _ in route.calls].count("POST") == 2
+    assert route.calls[-1] == ("GET", DEMO_PNL_PATH)
+    assert any(event == "USE_WRITE" and detail == str(UUID(hex=plan.exits[0].reference_id))
+               for _grant, event, detail in env.authority._ledger.events())
+    # Grant is only for protective close; it does not renew the expired policy.
+    assert env.entry().reasons == ("POLICY_NOT_ACTIVE",)
+
+
+def test_sd140_policy_expired_without_protective_grant_cannot_close(env, tmp_path):
+    _gate, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    entry = env.entry()
+    adapter.submit_entry(entry, quote=quote)
+    env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=timezone.utc)
+    plan = env.rt.plan_exits(bids=env.bids("498"))
+    assert plan.exits == ()
+    assert any(a.startswith("POLICY_EXPIRED_POSITION_OPEN:") for a in plan.alerts)
+    assert [method for method, _ in route.calls].count("POST") == 1
+    assert lineage.owned(880_001)["state"] == "OPEN"
 
 
 def test_sd138_lost_post_ack_recovers_by_get_after_port_restart(env, tmp_path):
