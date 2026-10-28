@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal
+from sidedeck.application.sd036_etoro_demo_desk import TransportNotFound
+from sidedeck.domain.etoro_demo_orders import DEMO_CLOSE_INFO_PATH
 from sidedeck.application.sd068_track_scheduler import SchedulerStore, session_for, slots_for
 from sidedeck.application.sd140_offline_swing_controller import OfflineSwingCycleController
 from sidedeck.application.sd152_offline_swing_runner import (
@@ -365,4 +367,122 @@ def test_sd152_tampered_idle_fence_cannot_allow_a_new_tick(setup):
         service.health(now=NOW)
     with pytest.raises(OfflineRunnerRefused, match="identity conflict"):
         service.run_due(owner="worker-a", entry=env.entry(), entry_quote=quote)
+    assert route.calls == []
+
+
+
+def test_sd141_recovery_dossier_is_read_only_and_never_grants_order_authority(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    count = len(route.calls)
+    dossier = service.recovery_dossier(now=NOW)
+    assert dossier["status"] == "NO_LOCAL_UNCERTAIN_ORDERS"
+    assert dossier["uncertain_orders"] == []
+    assert dossier["automatic_get_allowed"] is False
+    assert dossier["automatic_post_allowed"] is False
+    assert dossier["clear_halt_allowed"] is False
+    assert dossier["broker_account_verified"] is False
+    assert dossier["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    assert len(route.calls) == count
+
+
+def test_sd141_unknown_open_is_reference_get_only_and_does_not_repost(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    route.lose_next_response = True
+    result = service.run_due(owner="worker-a", entry=proposal, entry_quote=quote)
+    assert result.status == "HALTED"
+    before = tuple(route.calls)
+    dossier = service.recovery_dossier(now=env.clock.now)
+    assert dossier["status"] == "HALTED_REVIEW_REQUIRED"
+    assert dossier["fence"]["state"] == "UNRESOLVED"
+    assert len(dossier["uncertain_orders"]) == 1
+    item = dossier["uncertain_orders"][0]
+    assert item["kind"] == "OPEN"
+    assert item["durable_state"] == "OUTCOME_UNKNOWN"
+    assert item["accepted_order_id"] is None
+    assert item["review_action"] == "ORDER_REFERENCE_LOOKUP_GET_ONLY"
+    assert item["signed_read_and_audit_required"] is True
+    assert item["automatic_post_allowed"] is False
+    assert tuple(route.calls) == before
+    assert [m for m, _ in before].count("POST") == 1
+
+
+def test_sd141_unknown_close_with_no_id_requires_whole_account_review(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    entry = env.entry()
+    assert service.run_due(owner="worker-a", entry=entry,
+                           entry_quote=quote).status == "ENTRY_CONFIRMED"
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    route.lose_next_response = True
+    result = service.run_due(
+        owner="worker-b",
+        planning_bids=(seal_bid(signer, env, "455"),),
+        execution_bids={MSFT: seal_bid(signer, env, "455")},
+    )
+    assert result.status == "HALTED"
+    before = tuple(route.calls)
+    dossier = service.recovery_dossier(now=env.clock.now)
+    items = dossier["uncertain_orders"]
+    assert len(items) == 1
+    assert items[0]["kind"] == "CLOSE"
+    assert items[0]["accepted_order_id"] is None
+    assert items[0]["review_action"] == "SIGNED_WHOLE_ACCOUNT_RECONCILIATION_ONLY"
+    assert dossier["clear_halt_allowed"] is False
+    assert tuple(route.calls) == before
+    assert [m for m, _ in before].count("POST") == 2
+
+
+def test_sd141_accepted_close_needs_close_info_and_pnl_not_repost(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    entry = env.entry()
+    assert service.run_due(owner="worker-a", entry=entry,
+                           entry_quote=quote).status == "ENTRY_CONFIRMED"
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    original_send = route.send
+    def delayed_close_info(method, request_path, **kwargs):
+        if request_path == DEMO_CLOSE_INFO_PATH.format(order_id=770_002):
+            raise TransportNotFound("accepted close not yet visible")
+        return original_send(method, request_path, **kwargs)
+    route.send = delayed_close_info
+    try:
+        result = service.run_due(
+            owner="worker-b",
+            planning_bids=(seal_bid(signer, env, "455"),),
+            execution_bids={MSFT: seal_bid(signer, env, "455")},
+        )
+        assert result.status == "HALTED"
+        before = tuple(route.calls)
+        dossier = service.recovery_dossier(now=env.clock.now)
+        assert len(dossier["uncertain_orders"]) == 1
+        item = dossier["uncertain_orders"][0]
+        assert item["kind"] == "CLOSE"
+        assert item["durable_state"] == "ACCEPTED"
+        assert item["accepted_order_id"] == 770_002
+        assert item["review_action"] == "SIGNED_CLOSE_INFO_THEN_ACCOUNT_GET_ONLY"
+        assert tuple(route.calls) == before
+        assert [m for m, _ in before].count("POST") == 2
+    finally:
+        route.send = original_send
+
+
+def test_sd152_durable_uncertain_order_blocks_fresh_idle_swing_run(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    # Reproduce an orphaned durable reservation with an otherwise IDLE
+    # scheduler/fence: no automatically repeated or unrelated new opening.
+    lineage.record_pending(
+        reference_id="bcbf47e9-0a34-463e-9b8b-648f999eb2ee",
+        kind="OPEN", intent_id="bcbf47e90a34463e9b8b648f999eb2ee",
+        book_id="etoro-demo:tradingagents", instrument_id=1004,
+        units=None, limit_rate=None, position_id=None,
+    )
+    candidate = env.entry()
+    result = service.run_due(owner="worker-a", entry=candidate, entry_quote=quote)
+    assert result.status == "RECOVERY_REQUIRED"
+    assert "reconciliation" in result.detail
+    assert scheduler.history("swing_review") == ()
+    assert fence.state() == "IDLE"
     assert route.calls == []
