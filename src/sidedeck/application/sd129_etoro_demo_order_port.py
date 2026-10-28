@@ -196,6 +196,19 @@ class EtoroDemoOrderPort:
             request, order_id=order_id, reference_id=reference_id)
         return outcome, position
 
+    def durable_accepted_open_order_id(self, request: DemoOpenRequest) -> int | None:
+        """Read accepted identity for a bounded GET-only 404 fallback.
+
+        No HTTP, grant or POST is performed here. An uncertain opening with no
+        trusted orderId may only be looked up by its original referenceId.
+        """
+        row = self._durable_open(request)
+        if row is None or row["kind"] != "OPEN":
+            raise DemoLineageRefused("fallback requires an original durable open intent")
+        if row["state"] not in {"ACCEPTED", "OUTCOME_UNKNOWN"}:
+            raise DemoLineageRefused("fallback requires an accepted or uncertain durable open")
+        return None if row["order_id"] is None else int(row["order_id"])
+
     def lookup_open_with_payload(
         self, request: DemoOpenRequest, *, order_id: int | None = None,
         reference_id: str | None = None,
