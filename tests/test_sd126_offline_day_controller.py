@@ -89,8 +89,10 @@ def test_open_position_missing_planning_quote_never_opens_another(tmp_path: Path
         assert controller.tick(entry=proposal, entry_quote=quote).status == "ENTRY_CONFIRMED"
         other = replace(proposal, reference_id="a" * 32)
         result = controller.tick(entry=other, entry_quote=_quote(signer, env.clock.now))
-        assert result.status == "ATTENTION_REQUIRED"
+        assert result.status == "HALTED"
         assert any(a.startswith("QUOTE_UNAVAILABLE:") for a in result.alerts)
+        assert "POSITION_PROTECTION_UNVERIFIED" in result.alerts
+        assert env.ledger.kill_switch_engaged()
         assert gateway._simulator.submitted_orders == 1
     finally:
         gateway._simulator.close_store()
