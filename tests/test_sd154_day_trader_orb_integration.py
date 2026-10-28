@@ -346,3 +346,42 @@ def test_matching_native_metadata_still_requires_authenticated_evidence(tmp_path
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+@pytest.mark.parametrize("age_minutes", [16, -1])
+def test_outdated_or_future_orb_research_never_enters(
+    tmp_path: Path, age_minutes: int,
+) -> None:
+    now = datetime(2026, 11, 27, 15, 0, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env, fill_price="500")
+    try:
+        bars = tuple(
+            IntradayBar(
+                start=now - timedelta(minutes=30 - 5 * i),
+                open=Decimal("500"), high=Decimal("502") if i < 3 else Decimal("505"),
+                low=Decimal("499"), close=Decimal("501") if i < 3 else Decimal("504"),
+                volume=Decimal("10000"),
+            ) for i in range(4)
+        )
+        original = orb_signal(MSFT, bars, now)
+        assert original is not None
+        signal = replace(original, generated_at=now - timedelta(minutes=age_minutes))
+        research = DayResearchResult(
+            signal=signal,
+            admission=StrategyAdmission(
+                signal.source_id, signal.source_version, "DAY", "RESEARCH_ONLY",
+                "fixture-chart-not-oos", 0, False,
+            ),
+            metadata={"data_basis": "SYNTHETIC_FIXTURE"}, status="RESEARCH_ONLY",
+        )
+        result = run_day_trader_offline_cycle(
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            research_result=research,
+        )
+        assert result.proposal_reasons == ("STALE_OR_FUTURE_DAY_TRADER_RESEARCH",)
+        assert result.cycle.status == "NO_TRADE"
+        assert gateway._simulator.submitted_orders == 0
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
