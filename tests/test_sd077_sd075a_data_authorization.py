@@ -75,7 +75,8 @@ def test_intraday_alpaca_scope_is_separate_and_read_only(tmp_path: Path) -> None
     )
     assert auth.allows_url(url + "?timeframe=5Min&feed=sip&limit=10000")
     assert not auth.allows_url("https://data.alpaca.markets/v2/stocks/QQQ/bars")
-    assert not auth.allows_url("https://data.alpaca.markets/v2/stocks/SPY/orders")
+    with pytest.raises(AuthorizationRefused, match="never authorized"):
+        auth.allows_url("https://data.alpaca.markets/v2/stocks/SPY/orders")
     ledger = DataRequestLedger(tmp_path / "intraday.sqlite3", auth)
     ledger.reserve(url + "?timeframe=5Min&feed=sip&limit=10000", NOW)
     with pytest.raises(AuthorizationRefused, match="exhausted"):
