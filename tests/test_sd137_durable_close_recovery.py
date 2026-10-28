@@ -133,7 +133,7 @@ def test_unknown_close_post_is_one_shot_even_after_process_restart(
     with pytest.raises(TransportOutcomeUnknown):
         port.submit_owned_close(close_request(), owner=owner,
                                 intent_id="intent-close", book_id=BOOK)
-    assert first.order(CLOSE_ID)["state"] == "PENDING_SUBMIT"
+    assert first.order(CLOSE_ID)["state"] == "OUTCOME_UNKNOWN"
     first.close()
 
     second = store(path)

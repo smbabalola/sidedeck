@@ -22,7 +22,12 @@ from sidedeck.application.sd129_etoro_demo_order_port import (
 from sidedeck.application.sd138_autonomous_order_adapter import (
     AutonomousEtoroDemoOrderAdapter, SD138Refused,
 )
-from sidedeck.domain.etoro_demo_orders import DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH
+from sidedeck.domain.etoro_demo_orders import (
+    DEMO_CLOSE_INFO_PATH, DEMO_CLOSE_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
+    DEMO_PNL_PATH,
+    DemoCloseRequest,
+    EtoroDemoOrderError,
+)
 
 from test_sd063_autonomous_demo_policy import (
     _Env, _offline_gateway, _policy,
@@ -57,7 +62,7 @@ def test_sd138_composes_signed_policy_grant_quote_anchor_and_durable_port(env, t
     proposal = env.entry()
     result = adapter.submit_entry(proposal, quote=quote)
 
-    assert result.classification == "BROKER_CONFIRMED_OPEN"
+    assert result.classification == "SIMULATED_POSITION_OPEN"
     assert result.position is not None
     assert result.position.order_id == result.acceptance_order_id
     assert lineage.owned(result.position.position_id)["book_id"] == "etoro-demo:tradingagents"
@@ -71,19 +76,41 @@ def test_sd138_composes_signed_policy_grant_quote_anchor_and_durable_port(env, t
     assert {"POLICY", "GRANT", "GRANT_USE"}.issubset(set(events))
     assert env.authority._ledger.events()
 
-    plan = env.rt.plan_exits(bids=env.bids("400"))
+    plan = env.rt.plan_exits(bids=env.bids("455"))
     assert len(plan.exits) == 1
     close_quote = _signer.seal({
-        "canonical_id": proposal.canonical_id, "bid": "400", "ask": "401",
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
         "quote_time": env.clock.now.isoformat(),
     })
-    close_read = adapter.submit_exit(plan.exits[0], quote=close_quote)
-    assert close_read.outcome.status == "FILLED"
-    assert close_read.realised_pnl_status == "UNAVAILABLE_WITHOUT_BROKER_CLOSE_PRICE"
-    assert close_read.position_status == "BROKER_REPORTS_FULL_CLOSE_PENDING_PORTFOLIO_RECONCILIATION"
-    assert env.ledger.kill_switch_engaged()
-    assert lineage.order(str(UUID(hex=plan.exits[0].reference_id)))["state"] == "ACCEPTED"
-    assert route.calls[-2][0] == "POST" and route.calls[-1][0] == "GET"
+    close_result = adapter.submit_exit(plan.exits[0], quote=close_quote)
+    assert close_result.outcome.status == "FILLED"
+    assert close_result.realised_pnl_status == "SIMULATED_ONLY_NOT_BROKER_PNL"
+    assert close_result.position_status == "FLAT_CONFIRMED_BY_SIMULATED_CLOSE_AND_FINAL_PNL"
+    assert close_result.baseline_position_ids == (11, 12, 13, 14)
+    assert env.ledger.open_positions() == ()
+    close_ref = str(UUID(hex=plan.exits[0].reference_id))
+    assert lineage.order(close_ref)["state"] == "FILLED"
+    assert lineage.owned(close_result.close_read.acceptance.position_id)["state"] == "CLOSED"
+    assert not env.ledger.kill_switch_engaged()
+    assert route.calls[-3:] == [
+        ("POST", DEMO_CLOSE_PATH.format(position_id=close_result.close_read.acceptance.position_id)),
+        ("GET", DEMO_CLOSE_INFO_PATH.format(order_id=close_result.close_read.acceptance.order_id)),
+        ("GET", DEMO_PNL_PATH),
+    ]
+    expected_refs = [
+        str(UUID(hex=proposal.reference_id)),
+        f"lookup:{UUID(hex=proposal.reference_id)}",
+        str(UUID(hex=plan.exits[0].reference_id)),
+        f"close-lookup:{UUID(hex=plan.exits[0].reference_id)}",
+        f"close-pnl:{UUID(hex=plan.exits[0].reference_id)}",
+    ]
+    assert route.call_references == expected_refs
+    grant_uses = [(event, detail) for _grant, event, detail in env.authority._ledger.events()
+                  if event in {"USE_READ", "USE_WRITE"}]
+    assert grant_uses == list(zip(
+        ("USE_WRITE", "USE_READ", "USE_WRITE", "USE_READ", "USE_READ"), expected_refs))
+    assert any(record.payload.get("action") == "FINAL_PNL_SIMULATION"
+               for record in gateway._audit_journal.records())
 
 
 def test_sd138_revoked_grant_stale_quote_and_audit_outage_send_nothing(env, tmp_path):
@@ -122,6 +149,24 @@ def test_sd138_revoked_grant_stale_quote_and_audit_outage_send_nothing(env, tmp_
     assert env2.ledger.kill_switch_engaged()
 
 
+def test_sd138_expired_grant_refuses_fresh_quote_before_any_fake_request(tmp_path):
+    env = _Env(tmp_path)
+    gateway, _quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    env.clock.now = env.policy.expires_at
+    fresh = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "499.9", "ask": "500",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    with pytest.raises(GatewayRefused, match="outside its signed window"):
+        adapter.submit_entry(proposal, quote=fresh)
+    assert route.calls == []
+    assert not env.ledger.kill_switch_engaged()
+    lineage.close()
+    env.ledger.close()
+
+
 def test_sd138_lost_post_ack_recovers_by_get_after_port_restart(env, tmp_path):
     gateway, quote, _signer, route, lineage, path, adapter = _composed(
         env, tmp_path, loses_post=True)
@@ -142,10 +187,106 @@ def test_sd138_lost_post_ack_recovers_by_get_after_port_restart(env, tmp_path):
     restarted = AutonomousEtoroDemoOrderAdapter(policy_gateway=gateway,
                                                  order_port=restarted_port)
     result = restarted.recover_entry(proposal)
-    assert result.classification == "BROKER_CONFIRMED_OPEN"
+    assert result.classification == "SIMULATED_POSITION_OPEN"
     assert [method for method, _ in route.calls].count("POST") == 1
     assert env.ledger.state().entries[proposal.reference_id].outcome == "FILLED"
     assert restarted_lineage.owned(result.position.position_id) is not None
+    recovery_ref = f"recovery:{UUID(hex=proposal.reference_id)}"
+    assert route.call_references[-1] == recovery_ref
+    assert any(event == "USE_READ" and detail == recovery_ref
+               for _grant, event, detail in env.authority._ledger.events())
+
+
+def test_sd138_final_pnl_baseline_drift_keeps_close_unresolved_and_halts(env, tmp_path):
+    gateway, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    route.baseline_rows.append({
+        "positionID": 99, "instrumentID": 1001, "orderID": 9099, "isBuy": True,
+        "units": 1, "amount": 100, "leverage": 1,
+        "openDateTime": "2026-09-01T14:30:00Z", "unrealizedPnL": {"pnL": 0},
+    })
+    with pytest.raises(SD138Refused, match="stopped for reconciliation") as refused:
+        adapter.submit_exit(plan.exits[0], quote=close_quote)
+    assert isinstance(refused.value.__cause__, SD138Refused)
+    assert "protected four-position baseline" in str(refused.value.__cause__)
+    close_ref = str(UUID(hex=plan.exits[0].reference_id))
+    assert lineage.order(close_ref)["state"] == "ACCEPTED"
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    assert env.ledger.kill_switch_engaged()
+    assert [method for method, _ in route.calls].count("POST") == 2
+    assert route.calls[-1] == ("GET", DEMO_PNL_PATH)
+
+
+def test_sd138_missing_audit_anchor_blocks_final_pnl_get_after_close(env, tmp_path):
+    gateway, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    original_send = route.send
+
+    def lose_anchor_after_close_lookup(method, path, **kwargs):
+        result = original_send(method, path, **kwargs)
+        if path == DEMO_CLOSE_INFO_PATH.format(order_id=770_002):
+            gateway._audit_journal._anchor.unavailable = True
+        return result
+
+    route.send = lose_anchor_after_close_lookup
+    with pytest.raises(SD138Refused, match="close stopped for reconciliation"):
+        adapter.submit_exit(plan.exits[0], quote=close_quote)
+    assert route.calls[-1][1] == DEMO_CLOSE_INFO_PATH.format(order_id=770_002)
+    assert all(path != DEMO_PNL_PATH for _, path in route.calls)
+    assert [method for method, _ in route.calls].count("POST") == 2
+    assert lineage.order(str(UUID(hex=plan.exits[0].reference_id)))["state"] == "ACCEPTED"
+    assert env.ledger.kill_switch_engaged()
+
+
+def test_sd138_lost_close_ack_persists_fence_and_restart_cannot_repost(env, tmp_path):
+    gateway, quote, signer, route, lineage, path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    route.lose_next_response = True
+    with pytest.raises(SD138Refused, match="close stopped for reconciliation"):
+        adapter.submit_exit(plan.exits[0], quote=close_quote)
+    close_reference = str(UUID(hex=plan.exits[0].reference_id))
+    assert lineage.order(close_reference)["state"] == "OUTCOME_UNKNOWN"
+    assert env.ledger.kill_switch_engaged()
+    assert [method for method, _ in route.calls].count("POST") == 2
+    lineage.close()
+
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    restarted_port = EtoroDemoOrderPort(route, lineage=restarted_lineage)
+    open_request = adapter._open_request(proposal)
+    _outcome, owner, _payload = restarted_port.lookup_open_with_payload(
+        open_request, reference_id=f"recovery:{open_request.reference_id}")
+    assert owner is not None
+    close_request = DemoCloseRequest(
+        close_reference, owner.position_id, proposal.etoro_instrument_id, None)
+    with pytest.raises(EtoroDemoOrderError, match="reference or intent already used"):
+        restarted_port.submit_owned_close(
+            close_request, owner=owner, intent_id=plan.exits[0].reference_id,
+            book_id="etoro-demo:tradingagents",
+        )
+    assert [method for method, _ in route.calls].count("POST") == 2
+    assert restarted_lineage.order(close_reference)["state"] == "OUTCOME_UNKNOWN"
+    restarted_lineage.close()
 
 
 def test_sd138_two_workers_cannot_reserve_the_same_port_reference(env, tmp_path):

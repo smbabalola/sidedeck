@@ -24,6 +24,12 @@ the existing SD-036 lineage before the fake transport call. The adapter accepts 
 repository's deterministic offline eToro Demo simulator. No live transport, release or
 account changes are part of this decision.
 
+For the fake-only SD-138/139 vertical slice, every SD-064 use reference must equal the
+reference passed to the typed SD-129 route. A fake full close is settled only after its
+close-info reports all owned units and a separately granted/audited `/pnl` snapshot shows
+exactly the four configured baseline positions with no pending or other positions. Fixture
+close price is explicitly simulation-only; this path does not assert broker P&L.
+
 ## Consequences
 
 - Policy schema v2 documents no longer parse as v3. Any future owner policy must be

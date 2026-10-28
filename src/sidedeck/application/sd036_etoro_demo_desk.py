@@ -227,6 +227,11 @@ class EtoroDemoLineage:
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.executescript(_LINEAGE_DDL)
 
+    @property
+    def baseline_position_ids(self) -> frozenset[int]:
+        """Configured protected IDs, exposed read-only for whole-account checks."""
+        return self._protected
+
     def close(self) -> None:
         self._db.close()
 
@@ -319,6 +324,32 @@ class EtoroDemoLineage:
         self._db.execute("UPDATE etoro_demo_owned_positions SET remaining_units=?, state=? "
                          "WHERE position_id=?",
                          (str(remaining), "CLOSED" if remaining == 0 else "OPEN", position_id))
+
+    def reconcile_full_close(self, *, reference_id: str, order_id: int,
+                             position_id: int, closed_units: Decimal) -> None:
+        """Settle a full close only after caller verifies close receipt and final portfolio."""
+        with self.transaction():
+            order = self.order(reference_id)
+            position = self.owned(position_id)
+            if position is None:
+                raise EtoroDemoOrderError("full close reconciliation has no owned position")
+            opened = self.order(position["reference_id"])
+            if (opened["kind"] != "OPEN" or opened["state"] != "ACCEPTED"
+                    or opened["order_id"] != position["order_id"]
+                    or opened["book_id"] != position["book_id"]
+                    or opened["instrument_id"] != position["instrument_id"]
+                    or order["kind"] != "CLOSE" or order["state"] != "ACCEPTED"
+                    or order["order_id"] != order_id or order["position_id"] != position_id
+                    or order["instrument_id"] != position["instrument_id"]
+                    or order["book_id"] != position["book_id"]
+                    or Decimal(order["units"]) != closed_units
+                    or position["state"] != "OPEN"
+                    or position_id in self._protected
+                    or closed_units != Decimal(position["remaining_units"])):
+                raise EtoroDemoOrderError("full close reconciliation lacks exact durable lineage")
+            self.set_state(reference_id, "FILLED", order_id=order_id,
+                           filled_units=closed_units)
+            self.reduce_position(position_id, closed_units)
 
     def attributions(self) -> tuple[OrderAttribution, ...]:
         rows = self._db.execute("SELECT order_id, book_id FROM etoro_demo_lineage_orders "
@@ -826,8 +857,16 @@ class OfflineEtoroDemoSimulator:
         self.eligibility: dict[str, Any] = {"unitsQuantityType": "fractional",
                                             "minPositionExposure": 10, "minPositionAmount": 10}
         self.calls: list[tuple[str, str]] = []
+        self.call_references: list[str] = []
         self._orders: dict[str, dict[str, Any]] = {}
         self._close_orders: dict[int, dict[str, Any]] = {}
+
+    def simulated_close_fill_price(self, order_id: int) -> Decimal | None:
+        """Price from this exact deterministic fake; never broker response evidence."""
+        close = self._close_orders.get(order_id)
+        if close is None or close["statusID"] != 3 or len(close["positions"]) != 1:
+            return None
+        return self.fill_price
 
     def _new_order_id(self) -> int:
         self.next_order_id += 1
@@ -836,6 +875,7 @@ class OfflineEtoroDemoSimulator:
     def send(self, method: str, path: str, *, reference_id: str,
              body: dict[str, Any] | None = None, query: dict[str, str] | None = None) -> Any:
         self.calls.append((method, path))
+        self.call_references.append(reference_id)
         if self.drop_next_request:
             self.drop_next_request = False
             raise TransportOutcomeUnknown("simulated connection reset before delivery")

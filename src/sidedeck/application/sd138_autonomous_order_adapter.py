@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 
 from sidedeck.application.sd063_autonomous_demo_policy import (
     EntryProposal, ExitProposal, _UNKNOWN_OUTCOMES,
@@ -18,8 +19,9 @@ from sidedeck.application.sd107_demo_gateway import (
 from sidedeck.application.sd129_etoro_demo_order_port import (
     CloseRead, ConfirmedOpen, EtoroDemoOrderPort,
 )
-from sidedeck.domain.etoro_demo_orders import DemoOpenRequest
+from sidedeck.domain.etoro_demo_orders import CloseOutcome, DemoOpenRequest
 from sidedeck.application.sd074_trusted_inputs import Envelope
+from sidedeck.domain.etoro_demo import parse_demo_portfolio
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,30 @@ class AutonomousOpenResult:
     acceptance_order_id: int | None
     position: ConfirmedOpen | None
     evidence: Envelope | None
+
+
+@dataclass(frozen=True)
+class AutonomousCloseResult:
+    """Offline close plus whole-account observation; economics stay simulation-only."""
+    close_read: CloseRead
+    snapshot_sha256: str
+    baseline_position_ids: tuple[int, ...]
+
+    @property
+    def classification(self) -> str:
+        return "SIMULATED_ROUND_TRIP_CLOSED"
+
+    @property
+    def outcome(self) -> CloseOutcome:
+        return self.close_read.outcome
+
+    @property
+    def realised_pnl_status(self) -> str:
+        return "SIMULATED_ONLY_NOT_BROKER_PNL"
+
+    @property
+    def position_status(self) -> str:
+        return "FLAT_CONFIRMED_BY_SIMULATED_CLOSE_AND_FINAL_PNL"
 
 
 class SD138Refused(PermissionError):
@@ -110,20 +136,21 @@ class AutonomousEtoroDemoOrderAdapter:
                      "book_id": book_id, "units": str(proposal.units),
                      "instrument_id": proposal.etoro_instrument_id},
         )
-        self._gate._authorize(write=True, reference_id=proposal.reference_id)
+        self._gate._authorize(write=True, reference_id=request.reference_id)
         try:
-            self._gate._audit("SEND", proposal.reference_id,
+            self._gate._audit("SEND", request.reference_id,
                               payload={"action": "OPEN", "policy_digest": proposal.policy_digest,
-                                       "book_id": book_id})
+                                       "book_id": book_id,
+                                       "intent_reference": proposal.reference_id})
             acceptance = self._port.submit_open(
                 request, intent_id=proposal.reference_id, book_id=book_id)
-            self._gate._authorize(write=False,
-                                   reference_id=f"lookup:{proposal.reference_id}")
-            self._gate._audit("SEND", f"lookup:{proposal.reference_id}",
+            lookup_ref = f"lookup:{request.reference_id}"
+            self._gate._authorize(write=False, reference_id=lookup_ref)
+            self._gate._audit("SEND", lookup_ref,
                               payload={"action": "OPEN_LOOKUP",
                                        "policy_digest": proposal.policy_digest})
             outcome, owner, payload = self._port.lookup_open_with_payload(
-                request, order_id=acceptance.order_id)
+                request, order_id=acceptance.order_id, reference_id=lookup_ref)
             envelope = self._gate._adapter.seal_open_lookup_or_unresolved(
                 payload, request=request, observed_at=self._gate._clock(),
                 accepted_order_id=acceptance.order_id)
@@ -132,7 +159,7 @@ class AutonomousEtoroDemoOrderAdapter:
             if owner is not None:
                 self._owners[proposal.reference_id] = owner
             return AutonomousOpenResult(
-                "BROKER_CONFIRMED_OPEN" if owner is not None else outcome.status,
+                "SIMULATED_POSITION_OPEN" if owner is not None else outcome.status,
                 acceptance.order_id, owner, envelope)
         except Exception as exc:
             self._halt_ambiguous("AUTONOMOUS_OPEN_UNRESOLVED")
@@ -149,14 +176,15 @@ class AutonomousEtoroDemoOrderAdapter:
                 proposal.track, proposal.canonical_id, proposal.etoro_instrument_id,
                 proposal.units, proposal.limit_price):
             raise SD138Refused("restart proposal differs from the durable policy intent")
-        self._gate._authorize(write=False,
-                              reference_id=f"recovery:{proposal.reference_id}")
-        self._gate._audit("SEND", f"recovery:{proposal.reference_id}",
+        recovery_ref = f"recovery:{request.reference_id}"
+        self._gate._authorize(write=False, reference_id=recovery_ref)
+        self._gate._audit("SEND", recovery_ref,
                           payload={"action": "OPEN_RECOVERY",
                                    "policy_digest": proposal.policy_digest,
                                    "book_id": book_id})
         try:
-            outcome, owner, payload = self._port.lookup_open_with_payload(request)
+            outcome, owner, payload = self._port.lookup_open_with_payload(
+                request, reference_id=recovery_ref)
             envelope = self._gate._adapter.seal_open_lookup_or_unresolved(
                 payload, request=request, observed_at=self._gate._clock(),
                 accepted_order_id=outcome.order_id)
@@ -172,14 +200,14 @@ class AutonomousEtoroDemoOrderAdapter:
             if owner is not None:
                 self._owners[proposal.reference_id] = owner
             return AutonomousOpenResult(
-                "BROKER_CONFIRMED_OPEN" if owner is not None else outcome.status,
+                "SIMULATED_POSITION_OPEN" if owner is not None else outcome.status,
                 outcome.order_id, owner, envelope)
         except Exception as exc:
             self._halt_ambiguous("AUTONOMOUS_OPEN_RECOVERY_UNRESOLVED")
             raise SD138Refused("open recovery failed closed; no POST was repeated") from exc
 
-    def submit_exit(self, proposal: ExitProposal, *, quote: Envelope) -> CloseRead:
-        """Send one authorised full close, then stop short of asserting flat/P&L."""
+    def submit_exit(self, proposal: ExitProposal, *, quote: Envelope) -> AutonomousCloseResult:
+        """Simulate one full close and independently authorised final whole-account GET."""
         request, protective = self._gate.validate_exit_at_send(proposal, quote=quote)
         owner = self._owners.get(proposal.entry_reference)
         if owner is None or owner.position_id != request.position_id:
@@ -192,26 +220,75 @@ class AutonomousEtoroDemoOrderAdapter:
                      "instrument_id": proposal.etoro_instrument_id,
                      "position_id": request.position_id},
         )
-        self._gate._authorize(write=True, reference_id=proposal.reference_id,
+        self._gate._authorize(write=True, reference_id=request.reference_id,
                               protective=protective)
         try:
-            self._gate._audit("SEND", proposal.reference_id,
+            self._gate._audit("SEND", request.reference_id,
                               payload={"action": "CLOSE", "policy_digest": proposal.policy_digest,
-                                       "book_id": book_id})
+                                       "book_id": book_id,
+                                       "intent_reference": proposal.reference_id})
             accepted = self._port.submit_owned_close(
                 request, owner=owner, intent_id=proposal.reference_id, book_id=book_id)
-            self._gate._authorize(write=False,
-                                  reference_id=f"close-lookup:{proposal.reference_id}",
+            close_lookup_ref = f"close-lookup:{request.reference_id}"
+            self._gate._authorize(write=False, reference_id=close_lookup_ref,
                                   protective=protective)
-            self._gate._audit("SEND", f"close-lookup:{proposal.reference_id}",
+            self._gate._audit("SEND", close_lookup_ref,
                               payload={"action": "CLOSE_LOOKUP",
                                        "policy_digest": proposal.policy_digest})
-            result = self._port.lookup_close(accepted, request=request, owner=owner)
-            # Close-info has no execution price and cannot prove final account flatness.
-            self._gate._runtime.ledger.trip_kill_switch(
-                "CLOSE_REQUIRES_FINAL_PORTFOLIO_AND_EXECUTION_EVIDENCE", self._gate._clock())
+            result = self._port.lookup_close(accepted, request=request, owner=owner,
+                                             reference_id=close_lookup_ref)
+            if (result.outcome.status != "FILLED"
+                    or result.outcome.closed_units != owner.remaining_units):
+                raise SD138Refused("close-info did not report the full owned position closed")
+
+            pnl_reference = f"close-pnl:{request.reference_id}"
+            self._gate._authorize(write=False, reference_id=pnl_reference,
+                                  protective=protective)
+            self._gate._audit("SEND", pnl_reference,
+                              payload={"action": "FINAL_PORTFOLIO_RECONCILIATION",
+                                       "policy_digest": proposal.policy_digest,
+                                       "book_id": book_id,
+                                       "position_id": request.position_id,
+                                       "close_order_id": accepted.order_id})
+            payload = self._port.read_demo_portfolio(reference_id=pnl_reference)
+            observed_at = self._gate._clock()
+            snapshot = parse_demo_portfolio(payload, observed_at=observed_at)
+            snapshot.require_fresh(observed_at)
+            baseline = self._port.baseline_position_ids
+            observed_ids = {position.position_id for position in snapshot.positions}
+            if (len(baseline) != 4 or observed_ids != set(baseline)
+                    or request.position_id in observed_ids or snapshot.pending_orders
+                    or snapshot.mirror_count != 0):
+                raise SD138Refused(
+                    "final fake portfolio does not show exactly the protected four-position baseline")
+
+            # Only the exact offline simulator exposes fixture economics; the typed
+            # production-shaped close-info response itself has no execution price.
+            simulated_price: Decimal | None = self._port.simulated_close_fill_price(
+                accepted.order_id)
+            if simulated_price is None:
+                raise SD138Refused("offline simulator has no full-close price evidence")
+            evidence = self._gate._adapter.seal_simulated_close(
+                payload=result.payload,
+                request=request, acceptance=accepted, observed_at=observed_at,
+                fill_price=simulated_price,
+            )
+            self._gate._audit(
+                "RECONCILIATION", proposal.reference_id,
+                payload={"action": "FINAL_PNL_SIMULATION",
+                         "snapshot_sha256": snapshot.payload_sha256,
+                         "baseline_position_ids": sorted(baseline),
+                         "close_order_id": accepted.order_id,
+                         "simulated_close_price": str(simulated_price)},
+            )
             self._gate._publish_before_send(self._gate._clock())
-            return result
+            self._port.reconcile_full_close(
+                reference_id=request.reference_id, order_id=accepted.order_id,
+                position_id=request.position_id, closed_units=result.outcome.closed_units,
+            )
+            self._gate._runtime.resolve(evidence)
+            return AutonomousCloseResult(result, snapshot.payload_sha256,
+                                         tuple(sorted(baseline)))
         except Exception as exc:
             self._halt_ambiguous("AUTONOMOUS_CLOSE_UNRESOLVED")
             raise SD138Refused("autonomous close stopped for reconciliation") from exc

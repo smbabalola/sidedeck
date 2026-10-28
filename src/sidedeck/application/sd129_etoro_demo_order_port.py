@@ -14,14 +14,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, cast
 
 from sidedeck.application.sd036_etoro_demo_desk import (
     EtoroDemoLineage, OfflineEtoroDemoSimulator, TransportNotFound,
 )
 
 from sidedeck.domain.etoro_demo_orders import (
-    DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
+    DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH, DEMO_PNL_PATH,
     DemoCloseRequest, DemoOpenRequest, DemoOrderOutcome, CloseOutcome,
     CloseAcceptance, OpenAcceptance, EtoroDemoOrderError,
     parse_close_acceptance, parse_close_info, parse_open_acceptance,
@@ -74,6 +74,7 @@ class CloseRead:
 
     acceptance: CloseAcceptance
     outcome: CloseOutcome
+    payload: dict[str, Any]
     realised_pnl_status: str = "UNAVAILABLE_WITHOUT_BROKER_CLOSE_PRICE"
     position_status: str = "UNRESOLVED_REQUIRES_PORTFOLIO_RECONCILIATION"
 
@@ -106,6 +107,21 @@ class EtoroDemoOrderPort:
     def is_offline_fake_route(self) -> bool:
         """Only the repository's deterministic fake can enter SD-138 offline wiring."""
         return type(self._route) is OfflineEtoroDemoSimulator
+
+    @property
+    def baseline_position_ids(self) -> frozenset[int]:
+        if self._lineage is None:
+            raise DemoLineageRefused("durable protected baseline is unavailable")
+        return self._lineage.baseline_position_ids
+
+    def reconcile_full_close(self, *, reference_id: str, order_id: int,
+                             position_id: int, closed_units: Decimal) -> None:
+        if self._lineage is None:
+            raise DemoLineageRefused("durable close reconciliation requires SD-036 lineage")
+        self._lineage.reconcile_full_close(
+            reference_id=reference_id, order_id=order_id,
+            position_id=position_id, closed_units=closed_units,
+        )
 
     def submit_open(self, request: DemoOpenRequest, *,
                     intent_id: str | None = None,
@@ -155,12 +171,15 @@ class EtoroDemoOrderPort:
 
     def lookup_open(
         self, request: DemoOpenRequest, *, order_id: int | None = None,
+        reference_id: str | None = None,
     ) -> tuple[DemoOrderOutcome, ConfirmedOpen | None]:
-        outcome, position, _payload = self.lookup_open_with_payload(request, order_id=order_id)
+        outcome, position, _payload = self.lookup_open_with_payload(
+            request, order_id=order_id, reference_id=reference_id)
         return outcome, position
 
     def lookup_open_with_payload(
         self, request: DemoOpenRequest, *, order_id: int | None = None,
+        reference_id: str | None = None,
     ) -> tuple[DemoOrderOutcome, ConfirmedOpen | None, dict[str, Any]]:
         """Return the exact validated lookup payload for SD-074 evidence sealing."""
         if (request.reference_id in self._accepted_requests and
@@ -175,7 +194,7 @@ class EtoroDemoOrderPort:
         require_demo_route("GET", DEMO_ORDER_LOOKUP_PATH)
         payload = self._route.send(
             "GET", DEMO_ORDER_LOOKUP_PATH,
-            reference_id=f"lookup:{request.reference_id}",
+            reference_id=reference_id or f"lookup:{request.reference_id}",
             query=query,
         )
         accepted = self._accepted_orders.get(request.reference_id)
@@ -306,11 +325,16 @@ class EtoroDemoOrderPort:
         # Reserve before I/O: an unknown close outcome must not produce a
         # second sell. Read-only reconciliation and explicit owner recovery only.
         self._closing_positions.add(owner.position_id)
-        payload = self._route.send(
-            "POST", request.path, reference_id=request.reference_id,
-            body=request.body(),
-        )
-        acceptance = parse_close_acceptance(payload, request=request)
+        try:
+            payload = self._route.send(
+                "POST", request.path, reference_id=request.reference_id,
+                body=request.body(),
+            )
+            acceptance = parse_close_acceptance(payload, request=request)
+        except Exception:
+            if self._lineage is not None:
+                self._lineage.set_state(request.reference_id, "OUTCOME_UNKNOWN")
+            raise
         if self._lineage is not None:
             self._lineage.set_state(request.reference_id, "ACCEPTED",
                                     order_id=acceptance.order_id)
@@ -319,7 +343,7 @@ class EtoroDemoOrderPort:
 
     def lookup_close(
         self, acceptance: CloseAcceptance, *, request: DemoCloseRequest,
-        owner: ConfirmedOpen,
+        owner: ConfirmedOpen, reference_id: str | None = None,
     ) -> CloseRead:
         if (self._verified_positions.get(owner.position_id) is not owner or
                 self._accepted_closes.get(request.reference_id) is not acceptance or
@@ -330,7 +354,7 @@ class EtoroDemoOrderPort:
         path = DEMO_CLOSE_INFO_PATH.format(order_id=acceptance.order_id)
         require_demo_route("GET", path)
         payload = self._route.send(
-            "GET", path, reference_id=f"close-lookup:{request.reference_id}",
+            "GET", path, reference_id=reference_id or f"close-lookup:{request.reference_id}",
         )
         outcome = parse_close_info(payload, acceptance=acceptance)
         if outcome.closed_units > owner.remaining_units:
@@ -343,7 +367,21 @@ class EtoroDemoOrderPort:
             state = "BROKER_REPORTS_NO_CLOSE"
         else:
             state = "UNRESOLVED_PARTIAL_OR_PENDING"
-        return CloseRead(acceptance, outcome, position_status=state)
+        return CloseRead(acceptance, outcome, payload, position_status=state)
+
+    def read_demo_portfolio(self, *, reference_id: str) -> dict[str, Any]:
+        """One typed, read-only Demo portfolio GET; caller owns grant and audit gates."""
+        require_demo_route("GET", DEMO_PNL_PATH)
+        payload = self._route.send("GET", DEMO_PNL_PATH, reference_id=reference_id)
+        if not isinstance(payload, dict):
+            raise EtoroDemoOrderError("Demo portfolio response is not an object")
+        return payload
+
+    def simulated_close_fill_price(self, order_id: int) -> Decimal | None:
+        """Return fixture economics only for the exact offline simulator transport."""
+        if not self.is_offline_fake_route:
+            raise DemoLineageRefused("simulated close economics are unavailable on broker routes")
+        return cast(OfflineEtoroDemoSimulator, self._route).simulated_close_fill_price(order_id)
 
     def recover_close_info(
         self, acceptance: CloseAcceptance, *, request: DemoCloseRequest,
@@ -383,4 +421,4 @@ class EtoroDemoOrderPort:
             state = "BROKER_REPORTS_NO_CLOSE"
         else:
             state = "UNRESOLVED_PARTIAL_OR_PENDING"
-        return CloseRead(acceptance, outcome, position_status=state)
+        return CloseRead(acceptance, outcome, payload, position_status=state)
