@@ -1049,3 +1049,30 @@ def test_sd152_tampered_final_close_units_blocks_ten_clean_slot_restarts(setup):
         assert restarted.run_due(owner=f"tamper-restart-{attempt}").status == "RECOVERY_REQUIRED"
         assert tuple(route.calls) == original_calls
     assert not env.ledger.kill_switch_engaged()  # No automatic HALT reset was attempted.
+
+
+def test_sd152_inconsistent_remaining_units_never_rearms_synthetic_entry(setup):
+    """Post-fill position accounting tampering remains blocked across restarts."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    controller.adapter.submit_entry(proposal, quote=quote)
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    with sqlite3.connect(env.tmp / "sd138-lineage.sqlite3") as conn:
+        conn.execute(
+            "UPDATE etoro_demo_owned_positions SET remaining_units=? "
+            "WHERE position_id=?", ("999", 880_001),
+        )
+    before = tuple(route.calls)
+    for attempt in range(8):
+        restarted = OfflineSwingScheduledService(
+            SchedulerStore(env.tmp / "schedule.sqlite3"),
+            OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+            controller, clock=env.clock,
+        )
+        dossier = restarted.recovery_dossier(now=env.clock.now)
+        assert dossier["uncertain_orders"]
+        assert restarted.run_due(owner=f"remaining-units-{attempt}").status == "RECOVERY_REQUIRED"
+        assert tuple(route.calls) == before
+    assert [method for method, _ in before].count("POST") == 1
