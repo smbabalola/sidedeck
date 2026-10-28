@@ -349,6 +349,88 @@ class OfflineSwingScheduledService:
             "execution_release": "ETORO_DEMO_NOT_RELEASED",
         }
 
+    def recovery_dossier(self, *, now: datetime) -> dict[str, Any]:
+        """Classify local uncertain orders for a separately authorised GET-only review.
+
+        This method NEVER executes recovery, calls the fake broker, clears a HALT,
+        uses a grant or permits a new POST. It is an operator checklist, not a
+        licence to call /pnl. An unknown close without a durable orderId cannot
+        be looked up via close-info: it requires a separately signed whole-account
+        reconciliation and protection of the original baseline first.
+        """
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise OfflineRunnerRefused("recovery dossier requires timezone-aware time")
+        fence = self.fence.health(now=now)
+        ledger = self.controller.runtime.ledger
+        state = ledger.state()
+        lineage = self.controller.adapter._port._lineage
+        if lineage is None:
+            raise OfflineRunnerRefused("recovery dossier requires durable order lineage")
+        orders = lineage.orders()
+        owned = {int(pos["position_id"]): pos for pos in lineage.owned_positions()}
+        items: list[dict[str, Any]] = []
+        for row in orders:
+            kind, status = str(row["kind"]), str(row["state"])
+            ref = str(row["reference_id"])
+            order_id = row["order_id"]
+            position_id = row["position_id"]
+            action: str | None = None
+            if kind == "OPEN":
+                if status in {"PENDING_SUBMIT", "OUTCOME_UNKNOWN"}:
+                    action = "ORDER_REFERENCE_LOOKUP_GET_ONLY"
+                elif status == "ACCEPTED" and not any(
+                    int(pos["order_id"]) == int(order_id)
+                    for pos in owned.values() if order_id is not None
+                ):
+                    action = "VERIFY_ACCEPTED_OPEN_GET_ONLY"
+            elif kind == "CLOSE":
+                if status in {"PENDING_SUBMIT", "OUTCOME_UNKNOWN"}:
+                    # No trusted close orderId: never invent one or repeat POST.
+                    action = "SIGNED_WHOLE_ACCOUNT_RECONCILIATION_ONLY"
+                elif status == "ACCEPTED":
+                    if order_id is None:
+                        action = "SIGNED_WHOLE_ACCOUNT_RECONCILIATION_ONLY"
+                    else:
+                        action = "SIGNED_CLOSE_INFO_THEN_ACCOUNT_GET_ONLY"
+                elif status == "FILLED" and (
+                    position_id is None or int(position_id) not in owned
+                    or owned[int(position_id)]["state"] != "CLOSED"
+                ):
+                    action = "DURABLE_LEDGER_DISCREPANCY_MANUAL_REVIEW"
+            else:
+                raise OfflineRunnerRefused("unknown durable broker order kind")
+            if action is not None:
+                items.append({
+                    "reference_id": ref,
+                    "kind": kind,
+                    "durable_state": status,
+                    "accepted_order_id": None if order_id is None else int(order_id),
+                    "owned_position_id": None if position_id is None else int(position_id),
+                    "review_action": action,
+                    "signed_read_and_audit_required": True,
+                    "automatic_post_allowed": False,
+                })
+        if state.killed:
+            status = "HALTED_REVIEW_REQUIRED"
+        elif fence.state != "IDLE" or items:
+            status = "RECONCILIATION_REQUIRED"
+        else:
+            status = "NO_LOCAL_UNCERTAIN_ORDERS"
+        return {
+            "schema": "sidedeck.sd152.offline-recovery-dossier/1",
+            "status": status,
+            "fence": fence.report(),
+            "policy_kill_switch": bool(state.killed),
+            "protected_original_positions": len(lineage.baseline_position_ids),
+            "uncertain_orders": items,
+            "automatic_get_allowed": False,
+            "automatic_post_allowed": False,
+            "clear_halt_allowed": False,
+            "broker_account_verified": False,
+            "broker_route": "SIMULATED_LOCAL",
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+
     def run_due(
         self, *, owner: str,
         planning_bids: Sequence[Envelope] = (),
