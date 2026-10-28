@@ -859,3 +859,31 @@ def test_sd141_tampered_full_close_lineage_blocks_idle_restart(setup, column, va
     assert service.run_due(owner="new-worker").status == "RECOVERY_REQUIRED"
     assert scheduler.history("swing_review") == ()
     assert tuple(route.calls) == original_calls
+
+
+def test_sd141_orphan_durable_owned_position_cannot_rearm_idle_runner(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    controller.adapter.submit_entry(proposal, quote=quote)
+    before = tuple(route.calls)
+    with sqlite3.connect(env.tmp / "sd138-lineage.sqlite3") as conn:
+        conn.execute(
+            "INSERT INTO etoro_demo_owned_positions "
+            "(position_id,reference_id,order_id,book_id,instrument_id,"
+            "units,remaining_units,state,recorded_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (887001, "orphan-reference", 779901,
+             "etoro-demo:tradingagents", 1004, "1", "1",
+             "OPEN", NOW.isoformat()),
+        )
+    dossier = service.recovery_dossier(now=NOW)
+    assert any(
+        item["review_action"] == "ORPHAN_OWNED_POSITION_MANUAL_REVIEW"
+        and item["owned_position_id"] == 887001
+        for item in dossier["uncertain_orders"]
+    )
+    assert service.run_due(owner="replacement").status == "RECOVERY_REQUIRED"
+    assert "ORDER_LINEAGE_RECONCILIATION_REQUIRED" in service.inspect(now=NOW)["alerts"]
+    assert fence.state() == "IDLE"
+    assert scheduler.history("swing_review") == ()
+    assert tuple(route.calls) == before
