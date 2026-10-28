@@ -380,3 +380,16 @@ def test_intraday_checkpoint_survives_page_budget_exhaustion(tmp_path):
     assert progress["page_sha256"] == hashlib.sha256((directory / "page-001.json").read_bytes()).hexdigest()
     assert "bmV4dA" not in (directory / "progress.json").read_text()
 
+
+def test_short_probe_is_bounded_and_not_a_full_year_grant(tmp_path):
+    from sidedeck.application.sd078_alpaca_sip_pilot import main
+    target = tmp_path / "short-probe.json"
+    assert main(["draft-intraday", "--out", str(target),
+                 "--short-probe", "--owner-confirms-terms-reviewed"]) == 0
+    draft = json.loads(target.read_text(encoding="utf-8"))
+    assert draft["max_requests"] == 5
+    assert draft["max_retries"] == 0
+    assert draft["scope"]["start"] == "2026-10-19T00:00:00Z"
+    assert draft["scope"]["end"] == "2026-10-24T00:00:00Z"
+    assert draft["scope"]["timeframe"] == "5Min"
+
