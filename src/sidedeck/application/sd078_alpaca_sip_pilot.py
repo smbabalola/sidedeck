@@ -317,10 +317,75 @@ def collect_signed_spy_five_minute(
             "strategy_admission_eligible": False, "broker_execution": "DISABLED"}
 
 
+def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
+    """Inspect a saved, real-data five-minute sample offline; NEVER admit signals."""
+    from sidedeck.application.sd068_track_scheduler import NEW_YORK, session_for
+    from sidedeck.application.sd069_day_trader_methods import (
+        IntradayBar, opening_range_breakout,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (payload.get("schema") != "sidedeck-alpaca-five-minute-raw/1"
+            or payload.get("symbol") != "SPY"
+            or payload.get("feed") != "sip"
+            or payload.get("timeframe") != "5Min"
+            or payload.get("strategy_admission_eligible") is not False):
+        raise MarketDataUnavailable("not an unadmitted SPY five-minute research file")
+    rows = payload.get("bars")
+    if not isinstance(rows, list) or not rows:
+        raise MarketDataUnavailable("no saved five-minute bars")
+    by_day: dict[date, list[IntradayBar]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise MarketDataUnavailable("malformed saved bar")
+        try:
+            stamp = datetime.fromisoformat(row["timestamp_utc"])
+            vals = [Decimal(row[key]) for key in ("o", "h", "l", "c", "v")]
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            raise MarketDataUnavailable("malformed saved OHLCV or timestamp") from None
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise MarketDataUnavailable("saved timestamp must be timezone-aware")
+        stamp = stamp.astimezone(UTC)
+        if (stamp.second or stamp.microsecond or stamp.minute % 5
+                or any(not v.is_finite() or v <= 0 for v in vals)
+                or vals[1] < max(vals[0], vals[3])
+                or vals[2] > min(vals[0], vals[3])):
+            raise MarketDataUnavailable("invalid saved five-minute bar")
+        day = stamp.astimezone(NEW_YORK).date()
+        by_day.setdefault(day, []).append(IntradayBar(stamp, *vals))
+    findings = []
+    for day, day_bars in sorted(by_day.items()):
+        session = session_for(day)
+        if session is None:
+            raise MarketDataUnavailable("bars on a non-trading day")
+        expected = [session.open_utc + timedelta(minutes=5 * i)
+                    for i in range(int((session.close_utc - session.open_utc).total_seconds() // 300))]
+        actual = [bar.start for bar in day_bars]
+        if actual != expected:
+            raise MarketDataUnavailable(f"incomplete or nonconsecutive SPY session {day}")
+        hit = opening_range_breakout(day_bars, session.close_utc)
+        findings.append({
+            "date": day.isoformat(), "bars": len(actual),
+            "opening_high": str(max(b.high for b in day_bars[:3])),
+            "opening_low": str(min(b.low for b in day_bars[:3])),
+            "orb_breakout": hit is not None,
+            "first_hit_at": hit.hit_at.isoformat() if hit else None,
+        })
+    return {
+        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "sessions": len(findings), "total_bars": len(rows),
+        "orb_breakout_sessions": sum(1 for finding in findings if finding["orb_breakout"]),
+        "days": findings, "research_only": True,
+        "strategy_admission_eligible": False, "broker_execution": "DISABLED",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="SD-075B Alpaca SIP pilot (owner-signed)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("proposal")
+    inspect = sub.add_parser("inspect-spy-orb")
+    inspect.add_argument("--input", required=True)
     draft = sub.add_parser("draft")
     draft.add_argument("--out", required=True)
     draft.add_argument("--owner-confirms-terms-reviewed", action="store_true",
@@ -347,6 +412,9 @@ def main(argv: list[str] | None = None) -> int:
     intraday.add_argument("--secret-env", required=True)
     intraday.add_argument("--out-dir", default="data/sd156")
     args = parser.parse_args(argv)
+    if args.command == "inspect-spy-orb":
+        print(json.dumps(inspect_saved_spy_orb(Path(args.input)), indent=2))
+        return 0
     if args.command == "proposal":
         print(json.dumps(proposal(), indent=2))
         return 0
