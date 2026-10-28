@@ -30,6 +30,26 @@ const details = (label: string, data: unknown) =>
     <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-muted">{JSON.stringify(data, null, 2)}</pre>
   </details>;
 
+function OfflineOperatorDiagnostics() {
+  return <Panel title="Offline operator diagnostics" provenance={null}
+    subtitle="Engineering-only visibility. No deployed worker-health or recovery-alert feed is connected to this screen.">
+    <div role="status" aria-label="Offline operator alerts unavailable"
+      className="rounded border border-rule bg-raised/40 p-3">
+      <Badge tone="blocked">Evidence unavailable</Badge>
+      <p className="mt-2 text-xs text-muted">
+        The offline runner has read-only health, recovery and alert-digest code, but this dashboard
+        cannot inspect its local SQLite evidence. Do not infer that any worker, order or account is healthy.
+      </p>
+      <KeyValues rows={[
+        ["Broker execution", "NOT RELEASED"],
+        ["Alert delivery", "NOT CONFIGURED"],
+        ["Recovery", "Manual, separately authorised"],
+        ["HALT reset", "Not available"],
+      ]}/>
+    </div>
+  </Panel>;
+}
+
 function Readiness() {
   const state = useResource("/api/day-trader/readiness", isDayTraderReadiness);
   return <StateBlock resource={state}>{d => <>
@@ -48,6 +68,7 @@ function Readiness() {
         </div>
       </article>)}
     </div>
+    <OfflineOperatorDiagnostics/>
     <Panel title="Readiness limits" provenance={null} className="mt-4">
       <KeyValues rows={[
         ["Five-minute data", words(d.data_status)],
