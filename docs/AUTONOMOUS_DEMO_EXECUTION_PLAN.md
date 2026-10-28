@@ -5,6 +5,17 @@
 **Baseline:** verified offline SD-136/137/142/145; SD-138 IN_PROGRESS; SD-152 QUEUED; last inspected HEAD `ae47e56e9e38c18003d0b0483c78f0856f244a15` and [CI 40563563249 PASS](https://github.com/smbabalola/sidedeck/actions/runs/40563563249).  
 **Authority:** subordinate to `AGENTS.md`, `STEERING.md`, `SIDEDECK_STEERING.md` §§20–21 and the live `TODO.md`. This plan **does not** grant network access, data entitlements, kill reset, trading authority or an autonomous background Codex session.
 
+## Current execution allocation superseding initial "NOW" steps (28 October 2026)
+
+This document records the **original critical path**, including its initial SD-138 fake round-trip objective, which is now **implemented and CI-verified offline**; it should not send Codex back to rebuild that objective. The current coordinated work allocation is [SD-153 bundled engineering queue](SD153_BUNDLED_ENGINEERING_QUEUE.md), controlled by [STEERING.md](../STEERING.md) and live [TODO.md](../TODO.md):
+
+- **R first:** SD-138/139/141 signed recovery fault coverage and independent-review readiness.
+- **O next:** SD-140/152/147/148 multi-track offline operations, read-only UI and soak.
+- **D independent:** SD-143/144 Alpaca lawful-data and genuine out-of-sample swing qualification, no new reads.
+- **G independent review:** SD-146/149 security/release evidence; human-only SD-150/151 remain separately blocked.
+
+Last confirmed code/test evidence at bundle creation: `419e324` [CI 40664791594 PASS](https://github.com/smbabalola/sidedeck/actions/runs/40664791594), 1,932 Python passed / 2 skipped. Do not confuse an offline green test or this work allocation with broker/market-data permission, owner kill-switch reset or autonomous deployment. **Treat the subsequent "Concrete next Codex batch" below as superseded historical instructions**, while retaining its security expectations and lifecycle contract.
+
 ## Decision: deliver ONE vertical slice before broad feature expansion
 
 **First delivery target:** one end-to-end **offline** broker-shaped, automated **SWING** trade (not an intraday scalper): one admitted-strategy fixture → policy and signed-grant test fixtures → *distinct* sealed planning/send quote → durable reserve → exactly one fake eToro Demo OPEN POST → accepted-order lookup and verified owned position → stop/horizon/expiry-driven full reduce-only CLOSE POST → broker close-info plus independent fresh /pnl → flat SideDeck position, original 4/4 baseline positions unchanged, all counters and audit checkpoints verified, and honest simulated economics. Repeat with restarts, 404 fallbacks, revoked grants, partial/unknown fills and audit outages. **This is a simulator acceptance gate, not strategy admission or actual Demo brokerage evidence.**
