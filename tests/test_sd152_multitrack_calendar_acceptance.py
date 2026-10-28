@@ -2,7 +2,7 @@
 
 Planning only. No broker transport, owner release, or daemon.
 """
-from datetime import UTC, date, datetime
+from datetime import UTC, date
 
 from sidedeck.application.sd068_track_scheduler import (
     DEFAULT_JOBS, UK_DEFAULT_JOBS, SchedulerStore, session_for, slots_for,
