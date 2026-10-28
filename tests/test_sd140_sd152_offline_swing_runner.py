@@ -913,3 +913,27 @@ def test_sd152_twenty_restart_attempts_do_not_repeat_simulated_entry(setup):
         assert [call for call in route.calls if call[0] == "POST"] == original_posts
         assert fence.state() == "IDLE"
     assert len(scheduler.history("swing_review")) == 1
+
+
+def test_sd152_repeated_restart_after_unresolved_fence_never_reposts(setup):
+    """A durable unresolved simulated worker cannot be rearmed by later slots."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    slot = slots_for(scheduler.jobs["swing_review"], NOW.date())[0]
+    token = fence.acquire(slot, owner="crashed-worker", at=NOW)
+    assert token is not None
+    fence.finish(token, at=NOW, safe=False, outcome="SIMULATED_CRASH")
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    for i in range(12):
+        env.clock.now = NOW + timedelta(minutes=i * 10)
+        restarted = OfflineSwingScheduledService(
+            SchedulerStore(env.tmp / "schedule.sqlite3"),
+            OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+            controller, clock=env.clock,
+        )
+        outcome = restarted.run_due(owner=f"restart-{i}", entry=proposal, entry_quote=quote)
+        assert outcome.status == "RECOVERY_REQUIRED"
+        assert outcome.execution_release == "ETORO_DEMO_NOT_RELEASED"
+        assert restarted.fence.state() == "UNRESOLVED"
+    assert not any(method == "POST" for method, _ in route.calls)
