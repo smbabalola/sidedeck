@@ -1078,8 +1078,8 @@ def test_sd152_inconsistent_remaining_units_never_rearms_synthetic_entry(setup):
     assert [method for method, _ in before].count("POST") == 1
 
 
-def test_sd152_partial_entry_then_full_reduce_across_two_slots(setup):
-    """Real fake adapter tracks filled rather than requested quantity."""
+def test_sd152_partial_entry_requires_manual_recovery_before_second_slot(setup):
+    """Partial opening units are recorded, but an unsafe second slot stays blocked."""
     env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
     allow_fake_schedule(scheduler)
     proposal = env.entry()
@@ -1091,19 +1091,18 @@ def test_sd152_partial_entry_then_full_reduce_across_two_slots(setup):
     assert opened.cycle.open_positions == 1
     assert env.ledger.open_positions()[0].units == proposal.units / 2
     assert lineage.owned(880_001)["state"] == "OPEN"
+    before = tuple(route.calls)
+    assert [method for method, _ in before].count("POST") == 1
     route.mode = "FILL"
     env.clock.now = NOW + timedelta(hours=2, minutes=35)
     closed = service.run_due(
-        owner="full-reduce", planning_bids=(seal_bid(signer, env, "455"),),
+        owner="second-slot", planning_bids=(seal_bid(signer, env, "455"),),
         execution_bids={MSFT: seal_bid(signer, env, "455")},
     )
-    assert closed.status == "EXITS_CONFIRMED"
-    assert closed.cycle is not None
-    assert closed.cycle.open_positions == 0
-    assert env.ledger.open_positions() == ()
-    assert lineage.owned(880_001)["state"] == "CLOSED"
-    assert [method for method, _ in route.calls].count("POST") == 2
-    assert service.recovery_dossier(now=env.clock.now)["uncertain_orders"] == []
+    assert closed.status == "RECOVERY_REQUIRED"
+    assert tuple(route.calls) == before
+    assert env.ledger.open_positions()
+    assert closed.execution_release == "ETORO_DEMO_NOT_RELEASED"
 
 
 def test_sd152_partial_close_ten_restarts_never_infer_flat_or_repost(setup):
