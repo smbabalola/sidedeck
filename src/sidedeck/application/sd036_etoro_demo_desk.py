@@ -201,6 +201,15 @@ CREATE TABLE IF NOT EXISTS etoro_demo_owned_positions (
   remaining_units TEXT NOT NULL, state TEXT NOT NULL, recorded_at TEXT NOT NULL,
   FOREIGN KEY(reference_id) REFERENCES etoro_demo_lineage_orders(reference_id)
 );
+-- Recovery GETs are independently reserved once per stage and original intent.
+-- This is not a signed GET grant or a broker release; the SD-064/145 gate is separate.
+CREATE TABLE IF NOT EXISTS etoro_demo_offline_recovery_reads (
+  order_reference TEXT NOT NULL,
+  stage TEXT NOT NULL CHECK(stage IN ('REFERENCE', 'ACCEPTED_ORDER_ID')),
+  requested_at TEXT NOT NULL,
+  PRIMARY KEY(order_reference, stage),
+  FOREIGN KEY(order_reference) REFERENCES etoro_demo_lineage_orders(reference_id)
+);
 -- An offline adapter restart must not silently rebase protected original holdings.
 CREATE TABLE IF NOT EXISTS etoro_demo_original_baseline (
   id INTEGER PRIMARY KEY CHECK(id=1), facts_json TEXT NOT NULL
@@ -279,6 +288,59 @@ class EtoroDemoLineage:
             elif saved["facts_json"] != facts:
                 raise EtoroDemoBookError(
                     "protected baseline facts differ from durable original after restart")
+
+    def reserve_offline_recovery_read(
+        self, *, order_reference: str, stage: str, at: datetime,
+        deadline_seconds: int = 120,
+    ) -> None:
+        """Conservatively reserve one stage before a signed, audited fake GET.
+
+        A crash after this reserve consumes the step. It cannot create
+        permission, retry a POST, reset HALT, or imply broker confirmation.
+        """
+        if (at.tzinfo is None or at.utcoffset() is None
+                or type(deadline_seconds) is not int or not 1 <= deadline_seconds <= 120):
+            raise EtoroDemoOrderError("recovery read clock/deadline is invalid")
+        if stage not in {"REFERENCE", "ACCEPTED_ORDER_ID"}:
+            raise EtoroDemoOrderError("unrecognized recovery read stage")
+        now = at.astimezone(timezone.utc)
+        with self.transaction():
+            original = self._db.execute(
+                "SELECT kind,state,order_id FROM etoro_demo_lineage_orders "
+                "WHERE reference_id=?", (order_reference,),
+            ).fetchone()
+            if original is None or original["kind"] != "OPEN":
+                raise EtoroDemoOrderError("recovery read requires original durable OPEN")
+            rows = self._db.execute(
+                "SELECT stage,requested_at FROM etoro_demo_offline_recovery_reads "
+                "WHERE order_reference=?", (order_reference,),
+            ).fetchall()
+            prior = {str(row["stage"]): datetime.fromisoformat(
+                str(row["requested_at"])) for row in rows}
+            if stage in prior or len(prior) >= 2:
+                raise EtoroDemoOrderError("offline recovery GET stage already reserved")
+            if stage == "ACCEPTED_ORDER_ID":
+                first = prior.get("REFERENCE")
+                if first is None or original["order_id"] is None:
+                    raise EtoroDemoOrderError(
+                        "orderId fallback requires prior reference GET and accepted broker ID")
+                elapsed = (now - first.astimezone(timezone.utc)).total_seconds()
+                if not 0 <= elapsed <= deadline_seconds:
+                    raise EtoroDemoOrderError("fallback GET deadline or clock invalid")
+            elif prior:
+                raise EtoroDemoOrderError("reference recovery GET cannot replay")
+            self._db.execute(
+                "INSERT INTO etoro_demo_offline_recovery_reads"
+                "(order_reference,stage,requested_at) VALUES(?,?,?)",
+                (order_reference, stage, now.isoformat()),
+            )
+
+    def offline_recovery_read_stages(self, order_reference: str) -> tuple[str, ...]:
+        """Read-only inspection of one offline recovery's durable budget."""
+        return tuple(str(row[0]) for row in self._db.execute(
+            "SELECT stage FROM etoro_demo_offline_recovery_reads "
+            "WHERE order_reference=? ORDER BY rowid", (order_reference,),
+        ))
 
     def close(self) -> None:
         self._db.close()
