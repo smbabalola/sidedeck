@@ -1078,8 +1078,8 @@ def test_sd152_inconsistent_remaining_units_never_rearms_synthetic_entry(setup):
     assert [method for method, _ in before].count("POST") == 1
 
 
-def test_sd152_partial_entry_requires_manual_recovery_before_second_slot(setup):
-    """Partial opening units are recorded, but an unsafe second slot stays blocked."""
+def test_sd152_partial_entry_then_full_reduce_across_two_slots(setup):
+    """Verified partial opening fill may close exactly the recorded units."""
     env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
     allow_fake_schedule(scheduler)
     proposal = env.entry()
@@ -1091,26 +1091,22 @@ def test_sd152_partial_entry_requires_manual_recovery_before_second_slot(setup):
     assert opened.cycle.open_positions == 1
     assert env.ledger.open_positions()[0].units == proposal.units / 2
     assert lineage.owned(880_001)["state"] == "OPEN"
+    assert service.recovery_dossier(now=env.clock.now)["uncertain_orders"] == []
     before = tuple(route.calls)
     assert [method for method, _ in before].count("POST") == 1
     route.mode = "FILL"
     env.clock.now = NOW + timedelta(hours=2, minutes=35)
-    # Capture the exact local blocker before attempting the next slot.
-    # A recovery hold is never silently reclassified as a clean exit.
-    dossier = service.recovery_dossier(now=env.clock.now)
-    assert dossier["uncertain_orders"], dossier
-    assert all(item["automatic_post_allowed"] is False for item in dossier["uncertain_orders"])
-    assert dossier["broker_account_verified"] is False
-    read_only_calls = tuple(route.calls)
-    assert read_only_calls == before
     closed = service.run_due(
-        owner="second-slot", planning_bids=(seal_bid(signer, env, "455"),),
+        owner="full-reduce", planning_bids=(seal_bid(signer, env, "455"),),
         execution_bids={MSFT: seal_bid(signer, env, "455")},
     )
-    assert closed.status == "RECOVERY_REQUIRED"
-    assert tuple(route.calls) == before
-    assert env.ledger.open_positions()
-    assert closed.execution_release == "ETORO_DEMO_NOT_RELEASED"
+    assert closed.status == "EXITS_CONFIRMED"
+    assert closed.cycle is not None
+    assert closed.cycle.open_positions == 0
+    assert env.ledger.open_positions() == ()
+    assert lineage.owned(880_001)["state"] == "CLOSED"
+    assert [method for method, _ in route.calls].count("POST") == 2
+    assert service.recovery_dossier(now=env.clock.now)["uncertain_orders"] == []
 
 
 def test_sd152_partial_close_ten_restarts_never_infer_flat_or_repost(setup):
