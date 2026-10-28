@@ -46,7 +46,7 @@ def _composed(env: _Env, tmp_path: Path, *, loses_post: bool = False):
     gateway, quote, signer = _offline_gateway(env, close_price="498")
     route = OfflineEtoroDemoSimulator(fill_price=Decimal("500"),
                                       first_position_id=880_001, first_order_id=770_001)
-    route.baseline_rows = list(SYNTHETIC_BASELINE_ROWS)
+    route.baseline_rows = [dict(row) for row in SYNTHETIC_BASELINE_ROWS]
     route.lose_next_response = loses_post
     lineage_path = tmp_path / "sd138-lineage.sqlite3"
     lineage = EtoroDemoLineage(
@@ -266,6 +266,35 @@ def test_sd138_final_pnl_detects_changed_baseline_facts_with_same_ids(env, tmp_p
     assert lineage.owned(880_001)["state"] == "OPEN"
     assert env.ledger.kill_switch_engaged()
     assert route.calls[-1] == ("GET", DEMO_PNL_PATH)
+
+
+def test_sd138_restart_refuses_changed_original_baseline_even_when_ids_match(env, tmp_path):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    assert not env.ledger.kill_switch_engaged()
+    lineage.close()
+
+    # Simulate a broker-side change occurring before the process comes back up:
+    # original four position/order IDs are identical, but one unit count differs.
+    # Reconstructing the baseline from the now-mutated fixture must NOT rebase it.
+    route.baseline_rows[0]["units"] = 2
+    restarted_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    try:
+        restarted_port = EtoroDemoOrderPort(route, lineage=restarted_lineage)
+        with pytest.raises(SD138Refused, match="original protected baseline facts") as exc:
+            AutonomousEtoroDemoOrderAdapter(
+                policy_gateway=gateway, order_port=restarted_port)
+        assert exc.value.__cause__ is not None
+        assert "differ from durable original" in str(exc.value.__cause__)
+        assert env.ledger.kill_switch_engaged()
+        assert [method for method, _ in route.calls].count("POST") == 1
+        assert restarted_lineage.owned(880_001)["state"] == "OPEN"
+    finally:
+        restarted_lineage.close()
 
 
 def test_sd138_missing_audit_anchor_blocks_final_pnl_get_after_close(env, tmp_path):
