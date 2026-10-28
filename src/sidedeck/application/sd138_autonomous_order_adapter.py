@@ -95,6 +95,7 @@ class AutonomousEtoroDemoOrderAdapter:
             # changed fixture holdings must not become a new trusted baseline.
             self._port.bind_offline_original_baseline(baseline)
         except Exception as exc:
+            self._halt_ambiguous("AUTONOMOUS_ORIGINAL_BASELINE_UNVERIFIED")
             raise SD138Refused("original protected baseline facts are unavailable") from exc
         if (len(baseline) != 4
                 or {row.position_id for row in baseline} != set(self._port.baseline_position_ids)
