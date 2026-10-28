@@ -79,6 +79,7 @@ def test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_en
         )
         assert opened.cycle.status == "ENTRY_CONFIRMED", opened
         assert opened.cycle.open_positions == 1
+        assert opened.proposal_reasons == ()
         assert opened.cycle.entry_reference is not None
         assert gateway._simulator.submitted_orders == 1
 
