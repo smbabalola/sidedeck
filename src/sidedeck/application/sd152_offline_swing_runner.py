@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
+from decimal import Decimal
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -326,10 +327,14 @@ class OfflineSwingScheduledService:
         close_pending = sum(1 for order in orders
                             if order["kind"] == "CLOSE" and order["state"] == "ACCEPTED")
         alerts = list(fence.alerts)
+        dossier = self.recovery_dossier(now=now)
         if state.killed:
             alerts.append("POLICY_KILL_SWITCH_ENGAGED")
-        if unknown or pending or close_pending:
+        if dossier["uncertain_orders"]:
             alerts.append("ORDER_LINEAGE_RECONCILIATION_REQUIRED")
+        if any("LEDGER_MISMATCH" in item["review_action"]
+               for item in dossier["uncertain_orders"]):
+            alerts.append("CROSS_LEDGER_RECONCILIATION_REQUIRED")
         if len(lineage.baseline_position_ids) != 4:
             alerts.append("PROTECTED_BASELINE_COUNT_MISMATCH")
         return {
@@ -383,6 +388,21 @@ class OfflineSwingScheduledService:
                     for pos in owned.values() if order_id is not None
                 ):
                     action = "VERIFY_ACCEPTED_OPEN_GET_ONLY"
+                elif status == "ACCEPTED":
+                    positions = [pos for pos in owned.values()
+                                 if order_id is not None and
+                                 int(pos["order_id"]) == int(order_id)]
+                    if positions:
+                        policy_entry = state.entries.get(str(row["intent_id"]))
+                        if (len(positions) != 1 or policy_entry is None
+                                or policy_entry.outcome != "FILLED"
+                                or policy_entry.broker_order_id != str(order_id)
+                                or policy_entry.broker_position_id !=
+                                    str(positions[0]["position_id"])
+                                or policy_entry.instrument != row["instrument_id"]
+                                or policy_entry.filled - policy_entry.exited !=
+                                    Decimal(str(positions[0]["remaining_units"]))):
+                            action = "DURABLE_OPEN_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
             elif kind == "CLOSE":
                 if status in {"PENDING_SUBMIT", "OUTCOME_UNKNOWN"}:
                     # No trusted close orderId: never invent one or repeat POST.
@@ -392,11 +412,19 @@ class OfflineSwingScheduledService:
                         action = "SIGNED_WHOLE_ACCOUNT_RECONCILIATION_ONLY"
                     else:
                         action = "SIGNED_CLOSE_INFO_THEN_ACCOUNT_GET_ONLY"
-                elif status == "FILLED" and (
-                    position_id is None or int(position_id) not in owned
-                    or owned[int(position_id)]["state"] != "CLOSED"
-                ):
-                    action = "DURABLE_LEDGER_DISCREPANCY_MANUAL_REVIEW"
+                elif status == "FILLED":
+                    policy_exit = state.exits.get(str(row["intent_id"]))
+                    policy_entry = (
+                        None if policy_exit is None
+                        else state.entries.get(policy_exit.entry)
+                    )
+                    if (position_id is None or int(position_id) not in owned
+                            or owned[int(position_id)]["state"] != "CLOSED"
+                            or policy_exit is None or policy_exit.outcome != "FILLED"
+                            or policy_entry is None
+                            or policy_entry.broker_position_id != str(position_id)
+                            or policy_entry.filled != policy_entry.exited):
+                        action = "DURABLE_CLOSE_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
             else:
                 raise OfflineRunnerRefused("unknown durable broker order kind")
             if action is not None:
