@@ -67,6 +67,26 @@ def test_authorization_scope_validation(change: dict[str, Any], message: str) ->
         _auth(**change)
 
 
+def test_intraday_alpaca_scope_is_separate_and_read_only(tmp_path: Path) -> None:
+    url = "https://data.alpaca.markets/v2/stocks/SPY/bars"
+    auth = _auth(
+        provider="ALPACA_SIP_INTRADAY", urls=(url,),
+        authorization_id="sd156-spy-intraday-fixture", max_requests=1,
+    )
+    assert auth.allows_url(url + "?timeframe=5Min&feed=sip&limit=10000")
+    assert not auth.allows_url("https://data.alpaca.markets/v2/stocks/QQQ/bars")
+    assert not auth.allows_url("https://data.alpaca.markets/v2/stocks/SPY/orders")
+    ledger = DataRequestLedger(tmp_path / "intraday.sqlite3", auth)
+    ledger.reserve(url + "?timeframe=5Min&feed=sip&limit=10000", NOW)
+    with pytest.raises(AuthorizationRefused, match="exhausted"):
+        ledger.reserve(url + "?timeframe=5Min&feed=sip&limit=10000", NOW)
+    with pytest.raises(AuthorizationRefused):
+        _auth(
+            provider="ALPACA_SIP_INTRADAY",
+            urls=("https://data.alpaca.markets/v2/account",),
+        )
+
+
 def test_canonical_round_trip_and_prepare(tmp_path: Path) -> None:
     auth = _auth()
     again = DataAuthorization.from_json(auth.canonical())
