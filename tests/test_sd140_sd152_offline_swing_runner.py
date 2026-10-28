@@ -1091,7 +1091,7 @@ def test_sd152_partial_entry_then_full_reduce_across_two_slots(setup):
     assert opened.cycle.open_positions == 1
     assert env.ledger.open_positions()[0].units == proposal.units / 2
     assert lineage.owned(880_001)["state"] == "OPEN"
-    route.mode = "FILLED"
+    route.mode = "FILL"
     env.clock.now = NOW + timedelta(hours=2, minutes=35)
     closed = service.run_due(
         owner="full-reduce", planning_bids=(seal_bid(signer, env, "455"),),
