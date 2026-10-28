@@ -30,6 +30,7 @@ MAX_LIFETIME = timedelta(days=7)
 PROVIDER_HOSTS: dict[str, frozenset[str]] = {
     "NASDAQ_TRADER_SYMBOL_DIRECTORY": frozenset({"www.nasdaqtrader.com"}),
     "ALPACA_SIP_DAILY": frozenset({"data.alpaca.markets"}),
+    "ALPACA_SIP_INTRADAY": frozenset({"data.alpaca.markets"}),
     # SD-094A: public England & Wales bank-holiday feed (Open Government Licence v3.0).
     "GOV_UK_BANK_HOLIDAYS": frozenset({"www.gov.uk"}),
     "ETORO_DEMO_MARKET_DATA": frozenset({"public-api.etoro.com"}),
