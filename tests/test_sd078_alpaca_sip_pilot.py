@@ -436,3 +436,19 @@ def test_inspect_saved_spy_orb_uses_native_scanner_and_refuses_gaps(tmp_path):
         inspect_saved_spy_orb(file)
 
 
+
+def test_quarter_probe_signs_bounded_multi_month_window(tmp_path):
+    from sidedeck.application.sd078_alpaca_sip_pilot import main
+    target = tmp_path / "quarter.json"
+    assert main(["draft-intraday", "--out", str(target),
+                 "--quarter-probe", "--owner-confirms-terms-reviewed"]) == 0
+    draft = json.loads(target.read_text(encoding="utf-8"))
+    assert draft["max_requests"] == 10
+    assert draft["max_retries"] == 0
+    assert draft["scope"]["start"] == "2026-07-01T00:00:00Z"
+    assert draft["scope"]["end"] == "2026-10-24T00:00:00Z"
+    assert draft["scope"]["timeframe"] == "5Min"
+    with pytest.raises(SystemExit):
+        main(["draft-intraday", "--out", str(tmp_path / "invalid.json"),
+              "--short-probe", "--quarter-probe", "--owner-confirms-terms-reviewed"])
+
