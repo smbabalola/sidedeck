@@ -201,6 +201,10 @@ CREATE TABLE IF NOT EXISTS etoro_demo_owned_positions (
   remaining_units TEXT NOT NULL, state TEXT NOT NULL, recorded_at TEXT NOT NULL,
   FOREIGN KEY(reference_id) REFERENCES etoro_demo_lineage_orders(reference_id)
 );
+-- An offline adapter restart must not silently rebase protected original holdings.
+CREATE TABLE IF NOT EXISTS etoro_demo_original_baseline (
+  id INTEGER PRIMARY KEY CHECK(id=1), facts_json TEXT NOT NULL
+);
 -- Protect multiple processes against sending two concurrent closes for one position.
 -- Settled attempts can only be retried after independently verified reconciliation;
 -- unresolved/unknown outcomes remain reserved across every process restart.
@@ -236,6 +240,45 @@ class EtoroDemoLineage:
     def baseline_order_ids(self) -> frozenset[int]:
         """Configured protected order IDs, exposed read-only for whole-account checks."""
         return self._protected_orders
+
+    def bind_offline_original_baseline(self, baseline: Iterable[BaselinePosition]) -> None:
+        """Bind complete original facts once in this durable lineage (offline only).
+
+        IDs alone cannot protect against a pre-restart change in quantities,
+        direction, instrument, opening timestamp or order identities. Do not
+        overwrite the first binding, including after an ambiguous broker result.
+        A live adapter needs a separately owner-authenticated broker baseline;
+        this fixture binding is NOT sufficient to release a broker transport.
+        """
+        rows = tuple(sorted(baseline, key=lambda p: p.position_id))
+        if (len(rows) != 4 or
+                {p.position_id for p in rows} != self._protected or
+                {p.order_id for p in rows} != self._protected_orders):
+            raise EtoroDemoBookError("offline original baseline IDs do not match protected lineage")
+        facts = json.dumps([
+            {"position_id": p.position_id, "order_id": p.order_id,
+             "instrument_id": p.instrument_id, "is_buy": p.is_buy,
+             "units": str(p.units), "opened_at": p.opened_at.isoformat()}
+            for p in rows
+        ], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        with self.transaction():
+            saved = self._db.execute(
+                "SELECT facts_json FROM etoro_demo_original_baseline WHERE id=1"
+            ).fetchone()
+            if saved is None:
+                prior_orders = self._db.execute(
+                    "SELECT EXISTS(SELECT 1 FROM etoro_demo_lineage_orders)"
+                ).fetchone()[0]
+                if prior_orders:
+                    raise EtoroDemoBookError(
+                        "cannot establish a new original baseline after an order was reserved")
+                self._db.execute(
+                    "INSERT INTO etoro_demo_original_baseline(id,facts_json) VALUES(1,?)",
+                    (facts,),
+                )
+            elif saved["facts_json"] != facts:
+                raise EtoroDemoBookError(
+                    "protected baseline facts differ from durable original after restart")
 
     def close(self) -> None:
         self._db.close()
