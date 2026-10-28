@@ -223,7 +223,7 @@ def test_sd141_multi_position_fill_fails_closed_before_ownership_registration(en
     assert env.ledger.kill_switch_engaged()
     row = lineage.order(str(UUID(hex=proposal.reference_id)))
     assert row["state"] == "ACCEPTED"
-    assert lineage.owned_positions() == ()
+    assert lineage.owned_positions() == []
     assert [method for method, _ in route.calls].count("POST") == 1
     assert all(path != DEMO_PNL_PATH for _, path in route.calls)
 
