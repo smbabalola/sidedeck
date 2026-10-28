@@ -575,6 +575,133 @@ def test_sd141_unknown_open_404_has_no_orderid_fallback_or_repost(env, tmp_path)
         restarted_lineage.close()
 
 
+def test_sd153_recovery_get_budget_survives_restart_and_never_replays_two_404s(
+    env, tmp_path,
+):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    route.lookup_not_visible = 1
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    lineage.close()
+    reference = str(UUID(hex=proposal.reference_id))
+    recovery_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    route.lookup_not_visible = 2
+    try:
+        restarted = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=recovery_lineage),
+        )
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted.recover_entry(proposal)
+        assert recovery_lineage.offline_recovery_read_stages(reference) == (
+            "REFERENCE", "ACCEPTED_ORDER_ID",
+        )
+        sent = tuple(route.calls)
+        # An additional call, even through another adapter instance, cannot
+        # spend a third broker GET; the cap is durable, not process-local.
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted.recover_entry(proposal)
+        assert tuple(route.calls) == sent
+        assert [method for method, _ in sent].count("POST") == 1
+        assert env.ledger.kill_switch_engaged()
+    finally:
+        recovery_lineage.close()
+    once_more = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    try:
+        second = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=once_more),
+        )
+        sent = tuple(route.calls)
+        with pytest.raises(SD138Refused, match="failed closed"):
+            second.recover_entry(proposal)
+        assert tuple(route.calls) == sent
+        assert once_more.offline_recovery_read_stages(reference) == (
+            "REFERENCE", "ACCEPTED_ORDER_ID",
+        )
+    finally:
+        once_more.close()
+
+
+def test_sd153_recovery_fallback_after_deadline_does_not_send_second_get(env, tmp_path):
+    gateway, quote, _signer, route, lineage, path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    route.lookup_not_visible = 1
+    with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+        adapter.submit_entry(proposal, quote=quote)
+    lineage.close()
+    recovery_lineage = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    try:
+        restarted = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=recovery_lineage),
+        )
+        send = route.send
+        route.lookup_not_visible = 1
+
+        def expire_after_reference_get(method, request_path, **kwargs):
+            try:
+                return send(method, request_path, **kwargs)
+            except TransportNotFound:
+                env.clock.now = env.clock.now + timedelta(seconds=121)
+                raise
+
+        route.send = expire_after_reference_get
+        before = len(route.calls)
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted.recover_entry(proposal)
+        assert route.calls[before:] == [("GET", DEMO_ORDER_LOOKUP_PATH)]
+        assert recovery_lineage.offline_recovery_read_stages(
+            str(UUID(hex=proposal.reference_id))) == ("REFERENCE",)
+        assert [m for m, _ in route.calls].count("POST") == 1
+        assert env.ledger.kill_switch_engaged()
+    finally:
+        recovery_lineage.close()
+
+
+def test_sd153_recovery_reservation_rejects_duplicate_and_regressing_clock(env, tmp_path):
+    _gate, _quote, _signer, route, lineage, path, _adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    reference = str(UUID(hex=proposal.reference_id))
+    lineage.record_pending(
+        reference_id=reference, kind="OPEN", intent_id=proposal.reference_id,
+        book_id="etoro-demo:tradingagents",
+        instrument_id=proposal.etoro_instrument_id, units=proposal.units,
+        limit_rate=proposal.limit_price, position_id=None,
+    )
+    lineage.set_state(reference, "ACCEPTED", order_id=770001)
+    lineage.reserve_offline_recovery_read(
+        order_reference=reference, stage="REFERENCE", at=env.clock.now,
+    )
+    sibling = EtoroDemoLineage(
+        str(path), baseline_position_ids=(11, 12, 13, 14),
+        baseline_order_ids=(9011, 9012, 9013, 9014),
+    )
+    try:
+        with pytest.raises(EtoroDemoOrderError, match="already reserved"):
+            sibling.reserve_offline_recovery_read(
+                order_reference=reference, stage="REFERENCE", at=env.clock.now)
+        with pytest.raises(EtoroDemoOrderError, match="deadline or clock"):
+            sibling.reserve_offline_recovery_read(
+                order_reference=reference, stage="ACCEPTED_ORDER_ID",
+                at=env.clock.now - timedelta(seconds=1),
+            )
+        assert sibling.offline_recovery_read_stages(reference) == ("REFERENCE",)
+        assert route.calls == []
+    finally:
+        sibling.close()
+
+
 def test_sd138_final_pnl_baseline_drift_keeps_close_unresolved_and_halts(env, tmp_path):
     gateway, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
     proposal = env.entry()
