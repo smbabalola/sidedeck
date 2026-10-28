@@ -204,6 +204,11 @@ def collect_signed_spy_five_minute(
         raise AuthorizationRefused("SPY 5Min acquisition requires a separate bounded grant")
     if not key_id or not secret:
         raise AuthorizationRefused("missing intraday data credentials")
+    begin = datetime.fromisoformat(auth.scope["start"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(auth.scope["end"].replace("Z", "+00:00"))
+    if (begin.tzinfo is None or end.tzinfo is None
+            or begin.utcoffset() is None or end.utcoffset() is None):
+        raise AuthorizationRefused("signed intraday range must be timezone-aware")
     token: str | None = None
     seen: set[str] = set()
     bars: list[dict[str, str]] = []
@@ -252,8 +257,10 @@ def collect_signed_spy_five_minute(
             if dt.second or dt.microsecond or dt.minute % 5:
                 raise MarketDataUnavailable("off-grid five-minute timestamp")
             session = session_for(dt.astimezone(NEW_YORK).date())
-            if session is None or not session.open_utc <= dt < session.close_utc:
+            if session is None or not session.open_utc <= dt or dt + timedelta(minutes=5) > session.close_utc:
                 raise MarketDataUnavailable("intraday bar outside regular session")
+            if not begin <= dt < end:
+                raise MarketDataUnavailable("intraday bar outside signed date window")
             numeric = {}
             for key in ("o", "h", "l", "c", "v"):
                 try:
