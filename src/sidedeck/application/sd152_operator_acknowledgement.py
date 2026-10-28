@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from sidedeck.application.sd152_digest_integrity import validate_offline_digest
+
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _ACTOR = re.compile(r"[a-zA-Z0-9_.@-]{1,96}\Z")
 
@@ -37,6 +39,8 @@ class OfflineOperatorAcknowledgements:
                 or not isinstance(at, datetime) or at.tzinfo is None
                 or at.utcoffset() is None):
             raise ValueError("invalid non-executable operator acknowledgement")
+        if not validate_offline_digest(digest_report):
+            raise ValueError("critical alert digest integrity invalid")
         when = at.astimezone(UTC).isoformat()
         with closing(sqlite3.connect(self.path, isolation_level=None, timeout=30)) as db:
             db.execute("BEGIN IMMEDIATE")
