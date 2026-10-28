@@ -95,6 +95,7 @@ def run_day_trader_offline_cycle(
         research_result.signal.generated_at > controller.clock()
         or controller.clock() - research_result.signal.generated_at > timedelta(minutes=15)
         or research_result.signal.data_cutoff > controller.clock()
+        or controller.clock() - research_result.signal.data_cutoff > timedelta(minutes=15)
     ):
         reasons = ("STALE_OR_FUTURE_DAY_TRADER_RESEARCH",)
     elif not native_signals or not admissions:
