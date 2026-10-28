@@ -25,7 +25,7 @@ def test_day_trader_research_without_independent_admission_cannot_order(tmp_path
         )
         result = run_day_trader_offline_cycle(controller, research_result=research)
         assert result.cycle.status == "NO_TRADE"
-        assert result.proposal_reasons == ("EXISTING_POSITION_EXIT_PRIORITY",)
+        assert result.proposal_reasons == ("DAY_TRADER_NO_ENTRY_SIGNAL",)
         assert result.report()["broker_execution"] == "DISABLED"
         assert gateway._simulator.submitted_orders == 0
     finally:
@@ -79,7 +79,7 @@ def test_day_trader_bridge_closes_existing_day_position_without_new_signal(
         )
         assert result.cycle.status == "EXITS_CONFIRMED"
         assert result.cycle.open_positions == 0
-        assert result.proposal_reasons == ("DAY_TRADER_NO_ENTRY_SIGNAL",)
+        assert result.proposal_reasons == ("EXISTING_POSITION_EXIT_PRIORITY",)
         assert not env.ledger.kill_switch_engaged()
     finally:
         gateway._simulator.close_store()
