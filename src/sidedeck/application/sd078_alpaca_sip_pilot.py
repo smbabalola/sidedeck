@@ -375,8 +375,8 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
                 entry = day_bars[next_index].open
                 stop = hit.range_low
                 if entry > stop:
-                    exit_price = day_bars[-1].close
-                    exit_reason = "EOD"
+                    exit_price = day_bars[-1].open
+                    exit_reason = "EOD_LAST_BAR_OPEN_PROXY"
                     for future in day_bars[next_index:]:
                         if future.low <= stop:
                             exit_price = min(stop, future.open)
@@ -409,7 +409,13 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
         equity += result
         peak = max(peak, equity)
         drawdown = max(drawdown, peak - equity)
-    performance = {"completed": len(net), "gross_total_r": str(sum(gross, Decimal(0))),
+    split = max(1, (len(findings) * 3) // 5)
+    oos = [Decimal(d["trade"]["stressed_net_r"]) for d in findings[split:] if d["trade"] is not None]
+    performance = {"train_sessions": split, "oos_sessions": len(findings) - split,
+                   "oos_completed_trades": len(oos),
+                   "oos_stressed_net_total_r": str(sum(oos, Decimal(0))),
+                   "oos_qualification": "INSUFFICIENT_DATA" if len(oos) < 30 else "UNVERIFIED",
+                   "completed": len(net), "gross_total_r": str(sum(gross, Decimal(0))),
                    "stressed_net_total_r": str(sum(net, Decimal(0))),
                    "stressed_max_drawdown_r": str(drawdown),
                    "stressed_average_r": str(sum(net, Decimal(0)) / len(net)) if net else None,
