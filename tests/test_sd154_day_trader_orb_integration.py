@@ -348,9 +348,9 @@ def test_matching_native_metadata_still_requires_authenticated_evidence(tmp_path
         env.ledger.close()
 
 
-@pytest.mark.parametrize("age_minutes", [16, -1])
+@pytest.mark.parametrize("age_minutes, cutoff_age_minutes", [(16, 16), (-1, 10), (0, 16)])
 def test_outdated_or_future_orb_research_never_enters(
-    tmp_path: Path, age_minutes: int,
+    tmp_path: Path, age_minutes: int, cutoff_age_minutes: int,
 ) -> None:
     now = datetime(2026, 11, 27, 15, 0, tzinfo=UTC)
     env = _day_env(tmp_path, now)
@@ -368,7 +368,7 @@ def test_outdated_or_future_orb_research_never_enters(
         assert original is not None
         signal = replace(
             original, generated_at=now - timedelta(minutes=age_minutes),
-            data_cutoff=now - timedelta(minutes=max(age_minutes, 10)),
+            data_cutoff=now - timedelta(minutes=cutoff_age_minutes),
         )
         research = DayResearchResult(
             signal=signal,
