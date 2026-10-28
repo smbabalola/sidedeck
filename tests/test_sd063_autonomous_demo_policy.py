@@ -65,7 +65,8 @@ def _policy(**changes: object) -> AutonomousDemoPolicy:
         not_before=datetime(2026, 11, 2, 14, 0, tzinfo=UTC),
         expires_at=datetime(2026, 11, 6, 21, 0, tzinfo=UTC),
         tracks=(_budget(),),
-        strategies=(StrategyScope("sma_cross", "1.0.0", "SWING", "SD022.md", EVIDENCE_SHA),),
+        strategies=(StrategyScope("sma_cross", "1.0.0", "SWING", "SD022.md", EVIDENCE_SHA,
+                                  "etoro-demo:tradingagents"),),
         instruments=tuple(InstrumentScope(c, i) for c, i in IDS.items()),
         protected_instrument_ids=PROTECTED,
         max_limit_premium_pct=Decimal("0.005"),
@@ -75,6 +76,23 @@ def _policy(**changes: object) -> AutonomousDemoPolicy:
         purpose="SD-063 offline test policy",
     )
     return replace(base, **changes)  # type: ignore[arg-type]
+
+
+def test_signed_strategy_scope_binds_one_separate_book_per_track():
+    first = _policy()
+    other_book = replace(first.strategies[0], book_id="etoro-demo:ai-trading")
+    rebound = replace(first, strategies=(other_book,))
+    assert first.digest() != rebound.digest()
+    assert first.book_for_strategies(("sma_cross@1.0.0",), track="SWING") == \
+        "etoro-demo:tradingagents"
+    assert rebound.book_for_track("SWING") == "etoro-demo:ai-trading"
+    document = rebound.to_document()
+    assert len(document["strategies"][0]) == 6
+    assert AutonomousDemoPolicy.from_document(document).digest() == rebound.digest()
+
+    split_book = replace(first.strategies[0], strategy_id="other", book_id="etoro-demo:ai-trading")
+    with pytest.raises(PolicyRefused, match="all strategies on one track"):
+        replace(first, strategies=(first.strategies[0], split_book))
 
 
 def _fill(reference: str, outcome: str, at: datetime, *, filled_units: Decimal = Decimal(0),
@@ -516,8 +534,12 @@ def test_from_document_is_strict():
     ({"instruments": (InstrumentScope(MSFT, 1004), InstrumentScope(MSFT, 1006))}, "duplicate"),
     ({"instruments": ()}, "at least one instrument"),
     ({"protected_instrument_ids": frozenset()}, "must not be empty"),
-    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "POSITION", "x", SHA),)}, "track"),
-    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "SWING", "x", "nothex"),)}, "SHA-256"),
+    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "POSITION", "x", SHA,
+                                    "etoro-demo:tradingagents"),)}, "track"),
+    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "SWING", "x", "nothex",
+                                    "etoro-demo:tradingagents"),)}, "SHA-256"),
+    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "SWING", "x", SHA,
+                                    "unscoped-book"),)}, "existing SideDeck book"),
     ({"strategies": ()}, "at least one strategy"),
     ({"max_limit_premium_pct": Decimal("0.01")}, "premium"),
     ({"max_quote_age_seconds": 120}, "quote"),
@@ -532,7 +554,8 @@ def test_day_track_is_supported_but_still_requires_independent_admission():
     day = _budget(track="DAY")
     policy = _policy(
         tracks=(day,),
-        strategies=(StrategyScope("day_orb", "1.0.0", "DAY", "SD022.md", EVIDENCE_SHA),),
+        strategies=(StrategyScope("day_orb", "1.0.0", "DAY", "SD022.md", EVIDENCE_SHA,
+                                  "etoro-demo:tradingagents"),),
     )
     assert policy.budget("DAY") == day
 
@@ -612,7 +635,7 @@ def test_f2_evidence_path_traversal_is_refused(tmp_path):
     outside = tmp_path / "SD022.md"
     outside.write_bytes(EVIDENCE)
     policy = _policy(strategies=(StrategyScope("sma_cross", "1.0.0", "SWING", "../SD022.md",
-                                               EVIDENCE_SHA),))
+                                               EVIDENCE_SHA, "etoro-demo:tradingagents"),))
     e = _Env(tmp_path, policy)
     try:
         result = e.entry(admissions=(StrategyAdmission("sma_cross", "1.0.0", "SWING", "ADMITTED",

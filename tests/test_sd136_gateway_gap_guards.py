@@ -66,6 +66,7 @@ def test_supervised_network_factory_refuses_before_reading_credentials() -> None
 
 @pytest.mark.parametrize("name", [
     "sd107_demo_gateway",
+    "sd138_autonomous_order_adapter",
     "sd129_etoro_demo_order_port",
     "sd126_offline_day_controller",
 ])

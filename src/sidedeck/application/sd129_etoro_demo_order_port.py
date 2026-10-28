@@ -16,7 +16,9 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Callable, Protocol
 
-from sidedeck.application.sd036_etoro_demo_desk import EtoroDemoLineage, TransportNotFound
+from sidedeck.application.sd036_etoro_demo_desk import (
+    EtoroDemoLineage, OfflineEtoroDemoSimulator, TransportNotFound,
+)
 
 from sidedeck.domain.etoro_demo_orders import (
     DEMO_CLOSE_INFO_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
@@ -96,6 +98,15 @@ class EtoroDemoOrderPort:
         self._closing_positions: set[int] = set()
         self._accepted_closes: dict[str, CloseAcceptance] = {}
 
+    @property
+    def has_durable_lineage(self) -> bool:
+        return self._lineage is not None
+
+    @property
+    def is_offline_fake_route(self) -> bool:
+        """Only the repository's deterministic fake can enter SD-138 offline wiring."""
+        return type(self._route) is OfflineEtoroDemoSimulator
+
     def submit_open(self, request: DemoOpenRequest, *,
                     intent_id: str | None = None,
                     book_id: str | None = None) -> OpenAcceptance:
@@ -114,10 +125,15 @@ class EtoroDemoOrderPort:
                 units=request.units, limit_rate=request.limit_rate, position_id=None,
             )
         self._open_attempts.add(request.reference_id)
-        payload = self._route.send(
-            "POST", DEMO_OPEN_PATH, reference_id=request.reference_id,
-            body=request.body(),
-        )
+        try:
+            payload = self._route.send(
+                "POST", DEMO_OPEN_PATH, reference_id=request.reference_id,
+                body=request.body(),
+            )
+        except Exception:
+            if self._lineage is not None:
+                self._lineage.set_state(request.reference_id, "OUTCOME_UNKNOWN")
+            raise
         # A 200/echo is ACCEPTANCE, never a fill.
         acceptance = parse_open_acceptance(payload, reference_id=request.reference_id)
         if self._lineage is not None:
@@ -140,6 +156,13 @@ class EtoroDemoOrderPort:
     def lookup_open(
         self, request: DemoOpenRequest, *, order_id: int | None = None,
     ) -> tuple[DemoOrderOutcome, ConfirmedOpen | None]:
+        outcome, position, _payload = self.lookup_open_with_payload(request, order_id=order_id)
+        return outcome, position
+
+    def lookup_open_with_payload(
+        self, request: DemoOpenRequest, *, order_id: int | None = None,
+    ) -> tuple[DemoOrderOutcome, ConfirmedOpen | None, dict[str, Any]]:
+        """Return the exact validated lookup payload for SD-074 evidence sealing."""
         if (request.reference_id in self._accepted_requests and
                 self._accepted_requests[request.reference_id] != request):
             raise DemoLineageRefused("lookup request differs from original signed open")
@@ -178,16 +201,16 @@ class EtoroDemoOrderPort:
         # Even a terminal FILLED lookup cannot modify arbitrary/baseline positions.
         # Each positionId must be from the actual order's openingData.orderId.
         if not outcome.terminal:
-            return outcome, None
+            return outcome, None, payload
         if len(outcome.executions) == 0:
-            return outcome, None
+            return outcome, None, payload
         if len(outcome.executions) != 1:
             raise DemoLineageRefused("multiple broker positions require operator reconciliation")
         opened = outcome.executions[0]
         if opened.state != "open" or opened.remaining_units <= 0:
             # A previously opened position may have been manually closed.
             # Do not assert ownership of a flat broker position.
-            return outcome, None
+            return outcome, None, payload
         confirmed = ConfirmedOpen(
             request=request, order_id=outcome.order_id,
             position_id=opened.position_id, units=opened.units,
@@ -202,7 +225,7 @@ class EtoroDemoOrderPort:
                 remaining=confirmed.remaining_units,
             )
         self._verified_positions[confirmed.position_id] = confirmed
-        return outcome, confirmed
+        return outcome, confirmed, payload
 
     def recover_accepted_open(
         self, request: DemoOpenRequest, acceptance: OpenAcceptance, *,

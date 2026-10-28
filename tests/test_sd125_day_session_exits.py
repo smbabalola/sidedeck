@@ -23,7 +23,8 @@ def _day_env(tmp_path: Path, when: datetime) -> _Env:
         expires_at=datetime(2026, 11, 30, 21, 30, tzinfo=UTC),
         tracks=(_budget(track="DAY"),),
         strategies=(StrategyScope("native_orb", "test-v1", "DAY",
-                                  "SD022.md", EVIDENCE_SHA),),
+                                  "SD022.md", EVIDENCE_SHA,
+                                  "etoro-demo:tradingagents"),),
     )
     env = _Env(tmp_path, policy)
     env.clock.now = when

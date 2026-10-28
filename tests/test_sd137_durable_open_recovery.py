@@ -125,7 +125,7 @@ def test_crash_after_unknown_post_preserves_reservation_and_read_only_recovery(
         EtoroDemoOrderPort(first, lineage=original).submit_open(
             open_request(), intent_id="intent-1", book_id=BOOK,
         )
-    assert original.order(REF)["state"] == "PENDING_SUBMIT"
+    assert original.order(REF)["state"] == "OUTCOME_UNKNOWN"
     original.close()
 
     restarted = store(db)

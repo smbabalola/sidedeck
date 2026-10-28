@@ -388,6 +388,10 @@ class OfflineDemoGateway:
         current = quotes.get(proposal.canonical_id)
         if current is None or current.ask > proposal.limit_price:
             raise GatewayRefused("fresh sealed ask is absent or above the proposal limit")
+        if any(item.quote_time > now or
+               (now - item.quote_time).total_seconds() > self._policy.max_quote_age_seconds
+               for item in quotes.values()):
+            raise GatewayRefused("send-time quote or risk mark is stale/future-dated under policy")
         budget = self._policy.budget(proposal.track)
         if budget is None or entry.units * entry.limit > budget.max_position_notional:
             raise GatewayRefused("per-position notional cap exceeded")
@@ -502,8 +506,9 @@ class OfflineDemoGateway:
         self._publish_before_send(self._clock())
         return envelope
 
-    def submit_exit(self, proposal: ExitProposal, *, quote: Envelope) -> Envelope:
-        """Simulate a lineage-verified full close."""
+    def validate_exit_at_send(self, proposal: ExitProposal, *, quote: Envelope
+                              ) -> tuple[DemoCloseRequest, bool]:
+        """Shared send-time validation for offline simulation and SD-138 fake transport."""
         now = self._clock()
         try:
             fresh = self._runtime.verified_quote(quote)
@@ -519,6 +524,9 @@ class OfflineDemoGateway:
             raise GatewayRefused("exit proposal is outside its policy scope")
         if fresh.canonical_id != proposal.canonical_id or fresh.bid <= 0:
             raise GatewayRefused("fresh sealed bid does not match the exit instrument")
+        if (fresh.quote_time > now or
+                (now - fresh.quote_time).total_seconds() > self._policy.max_quote_age_seconds):
+            raise GatewayRefused("send-time bid is stale or future-dated under policy")
         state = self._runtime.ledger.state()
         exit_row = state.exits.get(proposal.reference_id)
         entry = state.entries.get(proposal.entry_reference)
@@ -557,8 +565,14 @@ class OfflineDemoGateway:
             raise GatewayRefused("daily order cap exceeded at close send time")
 
         request = DemoCloseRequest(str(uuid.UUID(hex=proposal.reference_id)),
-                                    int(position.broker_position_id),
-                                    proposal.etoro_instrument_id, proposal.units)
+                                   int(position.broker_position_id),
+                                   proposal.etoro_instrument_id, None)
+        return request, protective
+
+    def submit_exit(self, proposal: ExitProposal, *, quote: Envelope) -> Envelope:
+        """Simulate a lineage-verified full close."""
+        now = self._clock()
+        request, protective = self.validate_exit_at_send(proposal, quote=quote)
         self._authorize(write=True, reference_id=proposal.reference_id, protective=protective)
         try:
             self._audit("ORDER_RESERVATION", proposal.reference_id,

@@ -64,7 +64,7 @@ from sidedeck.application.sd072_track_risk_limits import (
     TrackLimits, TrackRiskState, evaluate_track_risk,
 )
 
-SCHEMA = "sidedeck-autonomous-demo-policy/2"
+SCHEMA = "sidedeck-autonomous-demo-policy/3"
 BROKER = "etoro-demo"
 OWNER_PRINCIPAL = "owner@sidedeck"
 AUTONOMOUS_TRACKS = ("DAY", "SWING", "POSITION")
@@ -151,6 +151,7 @@ class StrategyScope:
     track: str
     evidence_ref: str                     # path relative to the runtime's evidence_root
     evidence_sha256: str                  # owner-signed digest of that evidence file
+    book_id: str                          # signed SideDeck portfolio ownership boundary
 
 
 @dataclass(frozen=True)
@@ -284,6 +285,11 @@ class AutonomousDemoPolicy:
                 raise PolicyRefused("strategy evidence needs a lower-case SHA-256 digest")
             if s.track not in tracks:
                 raise PolicyRefused("strategy track is not a policy track")
+            if s.book_id not in {"etoro-demo:tradingagents", "etoro-demo:ai-trading"}:
+                raise PolicyRefused("strategy scope must name one existing SideDeck book")
+        for track in tracks:
+            if len({s.book_id for s in self.strategies if s.track == track}) > 1:
+                raise PolicyRefused("all strategies on one track must share one SideDeck book")
 
     def _check_instruments(self) -> None:
         if not self.instruments:
@@ -311,6 +317,27 @@ class AutonomousDemoPolicy:
     def instrument(self, canonical_id: str) -> InstrumentScope | None:
         return next((i for i in self.instruments if i.canonical_id == canonical_id), None)
 
+    def book_for_strategies(self, strategies: Sequence[str], *, track: str) -> str:
+        """Resolve one immutable SideDeck book from signed strategy scopes."""
+        if not strategies:
+            raise PolicyRefused("an order must name at least one signed strategy")
+        scopes = {(scope.strategy_id + "@" + scope.version): scope
+                  for scope in self.strategies if scope.track == track}
+        selected = [scopes.get(strategy) for strategy in strategies]
+        if any(scope is None for scope in selected):
+            raise PolicyRefused("proposal strategy is outside the signed track scope")
+        books = {scope.book_id for scope in selected if scope is not None}
+        if len(books) != 1:
+            raise PolicyRefused("one order cannot cross SideDeck portfolio books")
+        return next(iter(books))
+
+    def book_for_track(self, track: str) -> str:
+        """Resolve a unique signed portfolio for durable position exits."""
+        books = {scope.book_id for scope in self.strategies if scope.track == track}
+        if len(books) != 1:
+            raise PolicyRefused("track has no unique signed SideDeck book")
+        return next(iter(books))
+
     def active(self, now: datetime) -> bool:
         return self.not_before <= now < self.expires_at
 
@@ -326,7 +353,8 @@ class AutonomousDemoPolicy:
             "tracks": [{name: (str(getattr(b, name)) if isinstance(getattr(b, name), Decimal)
                                else getattr(b, name)) for name in sorted(_TRACK_FIELDS)}
                        for b in sorted(self.tracks, key=lambda b: b.track)],
-            "strategies": [[s.strategy_id, s.version, s.track, s.evidence_ref, s.evidence_sha256]
+            "strategies": [[s.strategy_id, s.version, s.track, s.evidence_ref,
+                            s.evidence_sha256, s.book_id]
                            for s in sorted(self.strategies,
                                            key=lambda s: (s.strategy_id, s.version, s.track))],
             "instruments": [[i.canonical_id, i.etoro_instrument_id]
