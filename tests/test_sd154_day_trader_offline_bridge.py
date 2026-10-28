@@ -1,5 +1,5 @@
 """Day Trader research is integrated without granting entry authority."""
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sidedeck.application.sd071_decision_engine import StrategyAdmission
@@ -8,7 +8,7 @@ from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleCon
 from sidedeck.application.sd154_day_trader_offline_bridge import run_day_trader_offline_cycle
 
 from test_sd063_autonomous_demo_policy import _offline_gateway
-from test_sd125_day_session_exits import _day_env
+from test_sd125_day_session_exits import _day_env, _day_entry
 
 
 def test_day_trader_research_without_independent_admission_cannot_order(tmp_path: Path):
@@ -44,3 +44,42 @@ def test_bridge_rejects_substituted_execution_controller():
         assert "exact offline DAY controller" in str(exc)
     else:
         raise AssertionError("substituted controller unexpectedly accepted")
+
+
+def test_day_trader_bridge_closes_existing_day_position_without_new_signal(
+    tmp_path: Path,
+):
+    """Research outage cannot prevent an already-owned DAY position's exit."""
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 0, tzinfo=UTC))
+    gateway, open_quote, signer = _offline_gateway(
+        env, fill_price="500", close_price="490",
+        storage_path=tmp_path / "simulator.sqlite3",
+    )
+    try:
+        controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+        proposal = _day_entry(env)
+        assert controller.tick(entry=proposal, entry_quote=open_quote).status == "ENTRY_CONFIRMED"
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        research = DayResearchResult(
+            signal=None,
+            admission=StrategyAdmission("day_trader_skill.orb", "dts-2.0.0-native.1",
+                                        "DAY", "RESEARCH_ONLY", "no-live-research", 0, False),
+            metadata={}, status="NO_SIGNAL",
+        )
+        def fresh_quote():
+            return signer.seal({
+                "canonical_id": "US:MSFT", "bid": "499", "ask": "500",
+                "quote_time": (env.clock.now - timedelta(seconds=5)).isoformat(),
+            })
+        result = run_day_trader_offline_cycle(
+            controller, research_result=research,
+            planning_bids=(fresh_quote(),),
+            execution_bids={"US:MSFT": fresh_quote()},
+        )
+        assert result.cycle.status == "EXITS_CONFIRMED"
+        assert result.cycle.open_positions == 0
+        assert result.proposal_reasons == ("DAY_TRADER_NO_ENTRY_SIGNAL",)
+        assert not env.ledger.kill_switch_engaged()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
