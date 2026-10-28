@@ -432,8 +432,18 @@ class OfflineSwingScheduledService:
                                 or policy_entry.broker_position_id !=
                                     str(positions[0]["position_id"])
                                 or policy_entry.instrument != row["instrument_id"]
+                                or positions[0]["instrument_id"] != row["instrument_id"]
+                                or positions[0]["reference_id"] != ref
+                                or positions[0]["book_id"] != row["book_id"]
+                                or row["book_id"] !=
+                                    self.controller.adapter._gate._policy.book_for_track(
+                                        policy_entry.track)
+                                or policy_entry.filled !=
+                                    Decimal(str(positions[0]["units"]))
                                 or policy_entry.filled - policy_entry.exited !=
-                                    Decimal(str(positions[0]["remaining_units"]))):
+                                    Decimal(str(positions[0]["remaining_units"]))
+                                or policy_entry.filled >
+                                    Decimal(str(row["units"]))):
                             action = "DURABLE_OPEN_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
             elif kind == "CLOSE":
                 if status in {"PENDING_SUBMIT", "OUTCOME_UNKNOWN"}:
@@ -455,6 +465,17 @@ class OfflineSwingScheduledService:
                             or policy_exit is None or policy_exit.outcome != "FILLED"
                             or policy_entry is None
                             or policy_entry.broker_position_id != str(position_id)
+                            or policy_entry.instrument != row["instrument_id"]
+                            or owned[int(position_id)]["instrument_id"] != row["instrument_id"]
+                            or owned[int(position_id)]["book_id"] != row["book_id"]
+                            or row["book_id"] !=
+                                self.controller.adapter._gate._policy.book_for_track(
+                                    policy_entry.track)
+                            or policy_exit.units != Decimal(str(row["units"]))
+                            or policy_exit.units != Decimal(str(row["filled_units"]))
+                            or policy_exit.units !=
+                                Decimal(str(owned[int(position_id)]["units"]))
+                            or Decimal(str(owned[int(position_id)]["remaining_units"])) != 0
                             or policy_entry.filled != policy_entry.exited):
                         action = "DURABLE_CLOSE_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
             else:
