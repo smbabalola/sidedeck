@@ -249,6 +249,9 @@ def test_unpinned_day_research_method_cannot_enter(
     ("canonical_id", "US:XNAS:QQQ"),
     ("track", "SWING"),
     ("direction", "SHORT"),
+    ("source_kind", "DAY_TRADER_METHOD"),
+    ("data_cutoff", "2026-11-27T14:40:00+00:00"),
+    ("data_cutoff", "invalid"),
 ])
 def test_orb_rejects_unrelated_native_signal_before_entry(
     tmp_path: Path, field: str, value: str,
@@ -276,7 +279,11 @@ def test_orb_rejects_unrelated_native_signal_before_entry(
             ),
             metadata={"data_basis": "SYNTHETIC_FIXTURE"}, status="RESEARCH_ONLY",
         )
-        payload = {"canonical_id": MSFT, "track": "DAY", "direction": "LONG"}
+        payload = {
+            "source_kind": "NATIVE_STRATEGY",
+            "canonical_id": MSFT, "track": "DAY", "direction": "LONG",
+            "data_cutoff": signal.data_cutoff.isoformat(),
+        }
         payload[field] = value
         # Deliberately untrusted envelope: mismatch must be refused even before
         # SD-074 verifies authentic signatures and independent OOS admission.
@@ -292,6 +299,50 @@ def test_orb_rejects_unrelated_native_signal_before_entry(
         assert result.cycle.status == "NO_TRADE"
         assert gateway._simulator.submitted_orders == 0
         assert not env.ledger.open_positions()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_matching_native_metadata_still_requires_authenticated_evidence(tmp_path: Path):
+    """Matching strings alone cannot issue a proposal or place an order."""
+    now = datetime(2026, 11, 27, 15, 0, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env, fill_price="500")
+    try:
+        bars = tuple(
+            IntradayBar(
+                start=now - timedelta(minutes=30 - 5 * i),
+                open=Decimal("500"), high=Decimal("502") if i < 3 else Decimal("505"),
+                low=Decimal("499"), close=Decimal("501") if i < 3 else Decimal("504"),
+                volume=Decimal("10000"),
+            ) for i in range(4)
+        )
+        signal = orb_signal(MSFT, bars, now)
+        assert signal is not None
+        research = DayResearchResult(
+            signal=signal,
+            admission=StrategyAdmission(
+                signal.source_id, METHOD_VERSION, "DAY", "RESEARCH_ONLY",
+                "fixture-chart-not-oos", 0, False,
+            ),
+            metadata={"data_basis": "SYNTHETIC_FIXTURE"}, status="RESEARCH_ONLY",
+        )
+        native = Envelope("signal", "fixture", now.isoformat(), "test", {
+            "source_kind": "NATIVE_STRATEGY",
+            "canonical_id": MSFT, "track": "DAY", "direction": "LONG",
+            "data_cutoff": signal.data_cutoff.isoformat(),
+        }, "unsealed")
+        result = run_day_trader_offline_cycle(
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            research_result=research, native_signals=(native,),
+            admissions=(StrategyAdmission(
+                "independent.fixture", "1", "DAY", "ADMITTED", "fixture-only", 30, True,
+            ),),
+        )
+        assert result.proposal_reasons == ("TRUSTED_ENTRY_INPUTS_REQUIRED",)
+        assert result.cycle.status == "NO_TRADE"
+        assert gateway._simulator.submitted_orders == 0
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
