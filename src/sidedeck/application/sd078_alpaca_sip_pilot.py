@@ -284,14 +284,15 @@ def collect_signed_spy_five_minute(
             bars.append({"timestamp_utc": dt.isoformat(),
                          **{key: str(value) for key, value in numeric.items()}})
         page_counts.append({"page": pages, "raw_bars": len(payload["bars"]),
-                            "accepted_regular_bars": len(bars)})
+                            "accepted_regular_bars": len(bars) - page_first})
         if checkpoint_dir is not None:
             page_file = checkpoint_dir / f"page-{pages:03d}.json"
             page_bytes = json.dumps(bars[page_first:], sort_keys=True).encode("utf-8")
             page_file.write_bytes(page_bytes)
             checkpoint = {"pages": pages, "raw_count": len(payload["bars"]),
                           "page_sha256": hashlib.sha256(page_bytes).hexdigest(),
-                          "accepted_count": len(bars), "complete": False,
+                          "accepted_count": len(bars), "page_accepted_count": len(bars) - page_first,
+                          "complete": False,
                           "strategy_admission_eligible": False}
             pending = checkpoint_dir / "progress.tmp"
             pending.write_text(json.dumps(checkpoint), encoding="utf-8")
