@@ -1,6 +1,6 @@
 # SD-140 / SD-152 — first offline SWING service slice and recovery runbook
 
-**As of 28 October 2026**. Initial implementation `fbd992a` passed [CI 40654151962](https://github.com/smbabalola/sidedeck/actions/runs/40654151962) (1,888 passed / 2 skipped). Subsequent SD-141 adversarial tests exposed a missing protective-monitoring HALT; fix `2353635` passed [exact-head CI 40654988053](https://github.com/smbabalola/sidedeck/actions/runs/40654988053): **1,892 passed / 2 skipped**, Ruff, mypy (206 files), Alembic, frontend and browser E2E. **Not a release approval.**
+**As of 28 October 2026**. Initial implementation `fbd992a` passed [CI 40654151962](https://github.com/smbabalola/sidedeck/actions/runs/40654151962) (1,888 passed / 2 skipped). Subsequent SD-141 adversarial tests exposed a missing protective-monitoring HALT; fix `2353635` passed [exact-head CI 40654988053](https://github.com/smbabalola/sidedeck/actions/runs/40654988053): **1,892 passed / 2 skipped**, Ruff, mypy (206 files), Alembic, frontend and browser E2E. **28 October continuation:** SD-152 durable heartbeat, read-only local incident inspection and corrupt-fence refusal through code/test `d0f36af97b5d718a3755cc7eb1f2c06e9cea0bf6` passed [exact-head CI 40656371495](https://github.com/smbabalola/sidedeck/actions/runs/40656371495): **1,899 passed / 2 skipped**, Ruff, mypy (206 files), Alembic and browser E2E. **Not a release approval.**
 
 ## Boundary
 
