@@ -214,6 +214,7 @@ def collect_signed_spy_five_minute(
     bars: list[dict[str, str]] = []
     excluded_extended_hours = 0
     pages = 0
+    page_counts: list[dict[str, int]] = []
     while pages < auth.max_requests:
         params = dict(auth.scope)
         if token is not None:
@@ -278,6 +279,8 @@ def collect_signed_spy_five_minute(
                 raise MarketDataUnavailable("inconsistent five-minute OHLC")
             bars.append({"timestamp_utc": dt.isoformat(),
                          **{key: str(value) for key, value in numeric.items()}})
+        page_counts.append({"page": pages, "raw_bars": len(payload["bars"]),
+                            "accepted_regular_bars": len(bars)})
         nxt = payload.get("next_page_token")
         if nxt is None:
             break
