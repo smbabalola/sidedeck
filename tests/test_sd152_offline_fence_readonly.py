@@ -50,3 +50,38 @@ def test_corrupt_fence_and_symlink_are_unverified(tmp_path):
         result = readonly_fence_status(str(path), now=datetime.now(UTC))
         assert "OFFLINE_FENCE_EVIDENCE_INVALID" in result["incidents"]
         assert result["fence_state"] == "UNVERIFIED"
+
+
+def test_repeated_readonly_observations_preserve_database_and_detect_new_stale_age(tmp_path):
+    path = tmp_path / "worker.sqlite3"
+    start = datetime.now(UTC)
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE offline_swing_single_writer (id integer, state text, token text, slot text, updated_at text)")
+        db.execute("CREATE TABLE offline_swing_runs (slot text, token text, state text)")
+        db.execute("INSERT INTO offline_swing_single_writer VALUES(1,'RUNNING','worker-token','slot',?)",
+                   (start.isoformat(),))
+        db.execute("INSERT INTO offline_swing_runs VALUES ('slot','worker-token','RUNNING')")
+    before = path.read_bytes()
+    for offset in range(0, 360, 15):
+        result = readonly_fence_status(str(path), now=start + timedelta(seconds=offset))
+        assert not result["safe_to_trade"]
+        assert not result["automatic_post_allowed"]
+        assert not result["clear_halt_allowed"]
+        assert result["fence_state"] == "RUNNING"
+        assert ("STALE_RUNNING_HEARTBEAT_RECONCILIATION_REQUIRED" in result["incidents"]) == (offset > 120)
+    assert path.read_bytes() == before
+
+
+def test_future_clock_and_inconsistent_restart_worker_fail_closed(tmp_path):
+    path = tmp_path / "worker.sqlite3"
+    now = datetime.now(UTC)
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE offline_swing_single_writer (id integer, state text, token text, slot text, updated_at text)")
+        db.execute("CREATE TABLE offline_swing_runs (slot text, token text, state text)")
+        db.execute("INSERT INTO offline_swing_single_writer VALUES (1,'RUNNING','token','slot',?)",
+                   ((now + timedelta(seconds=5)).isoformat(),))
+        db.execute("INSERT INTO offline_swing_runs VALUES ('slot','other-token','RUNNING')")
+    result = readonly_fence_status(str(path), now=now)
+    assert result["fence_state"] == "UNVERIFIED"
+    assert "OFFLINE_FENCE_EVIDENCE_INVALID" in result["incidents"]
+    assert result["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
