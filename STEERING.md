@@ -84,3 +84,11 @@ Codex must progress **all dependency-ready offline lanes in parallel** (without 
 - Do not merge default branches, touch other worktrees, or run destructive changes on personal/broker account databases.
 
 **Start with Bundle R's unclosed work, not another SD-138 rebuild.** The basic fake broker round trip and SD-140/152 offline SWING first slice have already passed tests. Next complete the *remaining* SD-141 recovery budgets, operator-only dry-run evidence and independent-review finding register; then advance Bundle O's missing multi-track operations and Bundle D's lawful evidence in parallel as interfaces permit. [Bundled engineering queue](docs/SD153_BUNDLED_ENGINEERING_QUEUE.md) and [critical-path plan](docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md) govern scope, with current truth in TODO. No outside I/O, owner release, signed recovery action or HALT reset is authorised. Follow charter §§20–21, run exact-head CI, document evidence and continue through unblocked grouped slices during an active Codex session.
+
+## ORB research batch acceptance (28 October 2026)
+
+- Keep all verified SPY 5Min SIP files immutable and bound to their SHA-256; no synthetic bars may substitute for actual research performance.
+- Existing `sd078` inspector checks exact NYSE session grids, executes existing native ORB rule, reports conservative next-bar entries, last-bar-open EOD proxy, range-low stop, stressed slippage/fees, R outcomes and chronological 60/40 holdout.
+- A 5-session sample (4 completed historical trades) remains INSUFFICIENT_DATA; neither this sample nor gross-positive results authorize auto trading. Require at least 30 **out-of-sample** completed trades and independent validation of execution assumptions before reconsidering admission.
+- Acquire larger sample only through new owner-signed, exact-scope, single-use Alpaca data authorization. Keep used authorization markers untouched; do not make unapproved requests. Existing eToro Demo execution stays DISABLED.
+- Work in integrated batches (implementation, focused regression, full CI, evidence) and only request human input for the signing/external-account boundary.
