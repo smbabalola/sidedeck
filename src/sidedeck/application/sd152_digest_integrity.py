@@ -6,6 +6,7 @@ signature or evidence of an authoritative upstream incident source.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 from collections.abc import Mapping
@@ -37,5 +38,5 @@ def validate_offline_digest(report: Mapping[str, Any]) -> bool:
         and report.get("execution_release") == "ETORO_DEMO_NOT_RELEASED"
         and report.get("safe_to_trade") is False
         and report.get("clear_halt_allowed") is False
-        and __import__('hmac').compare_digest(expected, claimed)
+        and hmac.compare_digest(expected, claimed)
     )
