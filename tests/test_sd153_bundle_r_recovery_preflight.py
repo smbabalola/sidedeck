@@ -147,3 +147,18 @@ def test_sd153_recovery_preflight_does_not_accept_naive_time(recovery_env):
     with pytest.raises(OfflineRunnerRefused, match="timezone-aware"):
         service.recovery_read_preflight(now=(NOW + timedelta(hours=1)).replace(tzinfo=None))
     assert route.calls == []
+
+
+def test_sd153_recovery_plan_refuses_to_reoffer_consumed_reference_get(recovery_env):
+    _env, _quote, _signer, route, lineage, _controller, _scheduler, _fence, service = recovery_env
+    ref = _pending(lineage)
+    lineage.reserve_offline_recovery_read(
+        order_reference=ref, stage="REFERENCE", at=NOW,
+    )
+    before = tuple(route.calls)
+    result = service.recovery_read_preflight(now=NOW)
+    assert result["status"] == "BLOCKED_MANUAL_REVIEW"
+    assert "DURABLE_RECOVERY_GET_ALREADY_RESERVED_MANUAL_REVIEW" in result["failure_reasons"]
+    assert result["planned_get_count"] == 0
+    assert result["safe_to_send"] is False
+    assert tuple(route.calls) == before
