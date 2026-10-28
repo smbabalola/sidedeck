@@ -422,5 +422,9 @@ class AuthenticatedRuntime:
     def resolve(self, fill: Envelope) -> None:
         self.ledger.resolve(self._verifier.fill(fill))
 
+    def verified_fill(self, fill: Envelope) -> FillEvidence:
+        """Verify broker fill evidence without applying a second ledger resolution."""
+        return self._verifier.fill(fill)
+
     def reconcile_unknown(self, fill: Envelope) -> None:
         self.ledger.reconcile_unknown(self._verifier.fill(fill))

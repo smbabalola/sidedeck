@@ -87,6 +87,39 @@ export function isReleaseGate(d: unknown): d is ReleaseGate {
     && d.broker_execution === "DISABLED" && isArr(d.blocking_controls) && d.blocking_controls.every(isStr) && isObj(d.rehearsal);
 }
 
+// --- /api/ops/offline-operator-status (SD-152 read-only local diagnostics) -----------
+export type OfflineOperatorStatus = {
+  schema: "sidedeck.sd152.operator-status/1";
+  source: "LOCAL_OFFLINE_DIAGNOSTICS_ONLY";
+  status: "ACTION_REQUIRED";
+  incidents: string[];
+  fence_state: "IDLE" | "RUNNING" | "UNRESOLVED" | "UNVERIFIED";
+  heartbeat_age_seconds: number | null;
+  incident_digest_sha256: string | null;
+  delivery_status: "NOT_CONFIGURED";
+  recovery: "SEPARATELY_AUTHORISED_MANUAL_REVIEW_ONLY";
+  broker_account_verified: false;
+  safe_to_trade: false;
+  automatic_get_allowed: false;
+  automatic_post_allowed: false;
+  clear_halt_allowed: false;
+  execution_release: "ETORO_DEMO_NOT_RELEASED";
+};
+export function isOfflineOperatorStatus(d: unknown): d is OfflineOperatorStatus {
+  return isObj(d) && d.schema === "sidedeck.sd152.operator-status/1"
+    && d.source === "LOCAL_OFFLINE_DIAGNOSTICS_ONLY" && d.status === "ACTION_REQUIRED"
+    && isArr(d.incidents) && d.incidents.every(isStr)
+    && ["IDLE", "RUNNING", "UNRESOLVED", "UNVERIFIED"].includes(String(d.fence_state))
+    && (d.heartbeat_age_seconds === null || isCount(d.heartbeat_age_seconds))
+    && (d.incident_digest_sha256 === null || (isStr(d.incident_digest_sha256)
+      && /^[a-f0-9]{64}$/.test(d.incident_digest_sha256)))
+    && d.delivery_status === "NOT_CONFIGURED"
+    && d.recovery === "SEPARATELY_AUTHORISED_MANUAL_REVIEW_ONLY"
+    && d.broker_account_verified === false && d.safe_to_trade === false
+    && d.automatic_get_allowed === false && d.automatic_post_allowed === false
+    && d.clear_halt_allowed === false && d.execution_release === "ETORO_DEMO_NOT_RELEASED";
+}
+
 export type DayReadinessGate = {
   id: "research" | "market_data" | "strategy" | "offline_cycle" | "broker";
   label: string;

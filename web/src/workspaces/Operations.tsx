@@ -1,5 +1,5 @@
 import { useResource } from "../lib/api";
-import { isAuthorizationLedger, isDemoSummary, isMarketTracks, isReleaseGate, isTrackLedgers, TRACKS } from "../lib/contracts";
+import { isAuthorizationLedger, isDemoSummary, isMarketTracks, isOfflineOperatorStatus, isReleaseGate, isTrackLedgers, TRACKS } from "../lib/contracts";
 import { ago, price, tone, when, words } from "../lib/format";
 import { Badge, KeyValues, Metric, Panel, StateBlock } from "../components/ui";
 
@@ -60,6 +60,7 @@ export function Operations() {
   const gate = useResource("/api/research/release-gate", isReleaseGate);
   const tracks = useResource("/api/market/tracks", isMarketTracks);
   const auths = useResource("/api/ops/authorizations", isAuthorizationLedger);
+  const operator = useResource("/api/ops/offline-operator-status", isOfflineOperatorStatus);
   return <div className="space-y-4">
     <div className="grid gap-4 xl:grid-cols-2">
       <Panel title="Release gate" provenance={null} subtitle="Fail-closed; the browser cannot change it.">
@@ -91,6 +92,26 @@ export function Operations() {
         </>}</StateBlock>
       </Panel>
     </div>
+    <Panel title="Offline worker diagnostics"
+      subtitle="Local fence evidence only. This panel does not verify broker holdings, grant validity or account state.">
+      <StateBlock resource={operator}>{o => <>
+        <dl className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <Metric label="Worker fence" value={words(o.fence_state)} tone={o.fence_state === "IDLE" ? "attention" : "loss"}/>
+          <Metric label="Safe to trade" value="No" tone="loss"/>
+          <Metric label="Execution release" value="Not released" tone="loss"/>
+          <Metric label="Alert delivery" value="Not configured" tone="attention"/>
+        </dl>
+        <div className="mt-4"><KeyValues rows={[
+          ["Evidence source", words(o.source)], ["Broker account verified", "No"],
+          ["Recovery", words(o.recovery)], ["Heartbeat age", o.heartbeat_age_seconds === null ? "Unavailable" : `${o.heartbeat_age_seconds} seconds`],
+          ["Automatic broker reads or writes", "Disabled"], ["Historical HALT clear", "Disabled"],
+        ]}/></div>
+        <h3 className="mt-4 text-xs font-semibold text-muted">Local incidents</h3>
+        <div className="mt-2 flex flex-wrap gap-1.5">{o.incidents.length
+          ? o.incidents.map(item => <Badge key={item} tone="attention">{words(item)}</Badge>)
+          : <span className="text-xs text-muted">No local fence incident recorded</span>}</div>
+      </>}</StateBlock>
+    </Panel>
     <div className="grid gap-4 xl:grid-cols-2">
       <Panel title="Scheduler" provenance={null} subtitle="Planned runs in your local time. Broker reconciliation stays disabled until a request budget is approved.">
         <StateBlock resource={tracks}>{t => <ul className="divide-y divide-rule/60 text-xs">

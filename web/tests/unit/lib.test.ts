@@ -5,7 +5,8 @@ import releaseGate from "../fixtures/release-gate.json";
 import demo from "../fixtures/demo-summary.json";
 import dayReadiness from "../fixtures/day-trader-readiness.json";
 import marketUk from "../fixtures/market-uk.json";
-import { isDayTraderReadiness, isDayTraderSummary, isDemoSummary, isMarketTracks, isReleaseGate, isScanSnapshot, isUkMarkets } from "../../src/lib/contracts";
+import offlineOperatorStatus from "../fixtures/offline-operator-status.json";
+import { isDayTraderReadiness, isDayTraderSummary, isDemoSummary, isMarketTracks, isOfflineOperatorStatus, isReleaseGate, isScanSnapshot, isUkMarkets } from "../../src/lib/contracts";
 import { compactUsd, gbp, pct, plainPct, tone, words } from "../../src/lib/format";
 import { href, parseRoute } from "../../src/lib/router";
 
@@ -25,6 +26,14 @@ describe("contracts accept real backend payloads and reject unsafe ones", () => 
     const tracks = structuredClone(marketTracks);
     tracks.tracks[0].execution = "ENABLED";
     expect(isMarketTracks(tracks)).toBe(false);
+  });
+  it("accepts only fail-closed local worker diagnostics", () => {
+    expect(isOfflineOperatorStatus(offlineOperatorStatus)).toBe(true);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, safe_to_trade: true })).toBe(false);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, automatic_get_allowed: true })).toBe(false);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, clear_halt_allowed: true })).toBe(false);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, broker_account_verified: true })).toBe(false);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, incident_digest_sha256: "not-a-digest" })).toBe(false);
   });
   it("rejects unknown provenance and non-numeric values", () => {
     expect(isScanSnapshot({ ...marketScan, provenance: "LIVE" })).toBe(false);

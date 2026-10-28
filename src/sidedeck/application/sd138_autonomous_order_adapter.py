@@ -234,6 +234,18 @@ class AutonomousEtoroDemoOrderAdapter:
                         "AUTONOMOUS_OPEN_RECOVERY_UNRESOLVED", self._gate._clock())
                 else:
                     self._gate._runtime.reconcile_unknown(envelope)
+            elif entry.outcome is not None:
+                # A cold-start GET may rehydrate this adapter's broker-position
+                # identity after SD-063 already committed the fill. Verify the
+                # evidence against that durable resolution; never append a second
+                # ENTRY_RESOLVED event or alter accounted units/cost basis.
+                observed = self._gate._runtime.verified_fill(envelope)
+                if (observed.reference, observed.outcome, observed.units, observed.price,
+                        observed.broker_order_id, observed.broker_position_id) != (
+                        proposal.reference_id, entry.outcome, entry.filled, entry.avg_price,
+                        entry.broker_order_id, entry.broker_position_id):
+                    raise SD138Refused(
+                        "restart broker evidence differs from durable policy fill")
             else:
                 self._gate._runtime.resolve(envelope)
             self._record_reconciliation(proposal.reference_id, "OPEN_RECOVERY", envelope)

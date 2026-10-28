@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -21,7 +22,12 @@ from sidedeck.application.sd152_offline_swing_runner import (
 )
 
 from test_sd063_autonomous_demo_policy import _Env, MSFT, NOW
-from test_sd138_autonomous_order_adapter import _composed
+from test_sd138_autonomous_order_adapter import _composed, _offline_protective_grant
+from sidedeck.application.sd036_etoro_demo_desk import EtoroDemoLineage
+from sidedeck.application.sd129_etoro_demo_order_port import EtoroDemoOrderPort
+from sidedeck.application.sd138_autonomous_order_adapter import (
+    AutonomousEtoroDemoOrderAdapter, SD138Refused,
+)
 
 
 @pytest.fixture
@@ -103,6 +109,173 @@ def test_sd140_sd152_two_sessions_open_and_close_via_real_fake_adapter(setup):
     assert fence.state() == "IDLE"
     assert [status for _, status in fence.history()] == ["ENTRY_CONFIRMED", "EXITS_CONFIRMED"]
     assert not env.ledger.kill_switch_engaged()
+
+
+def test_sd148_multisession_partial_restart_protective_expiry_and_final_reconciliation(tmp_path):
+    """Compose scheduled partial OPEN, cold service reconstruction and protected CLOSE."""
+    env = _Env(tmp_path)
+    protective = _offline_protective_grant(env)
+    gateway, quote, signer, route, lineage, lineage_path, adapter = _composed(
+        env, tmp_path, protective_grant=protective,
+    )
+    scheduler = SchedulerStore(tmp_path / "schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "single-writer.sqlite3")
+    allow_fake_schedule(scheduler)
+    controller = OfflineSwingCycleController(gateway._runtime, adapter, clock=env.clock)
+    service = OfflineSwingScheduledService(scheduler, fence, controller, clock=env.clock)
+    try:
+        proposal = env.entry()
+        assert isinstance(proposal, EntryProposal)
+        route.mode = "PARTIAL"
+        first = service.run_due(owner="soak-day-1", entry=proposal, entry_quote=quote)
+        assert first.status == "ENTRY_CONFIRMED"
+        assert env.ledger.open_positions()[0].units == proposal.units / 2
+        assert lineage.owned(880_001)["state"] == "OPEN"
+        assert service.recovery_dossier(now=env.clock.now)["uncertain_orders"] == []
+        posts_after_entry = [call for call in route.calls if call[0] == "POST"]
+        assert len(posts_after_entry) == 1
+
+        # Reopen durable lineage, scheduler and worker fence as a fresh process would.
+        lineage.close()
+        restarted_lineage = EtoroDemoLineage(
+            str(lineage_path), baseline_position_ids=(11, 12, 13, 14),
+            baseline_order_ids=(9011, 9012, 9013, 9014),
+        )
+        restarted_adapter = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage),
+        )
+        restarted_controller = OfflineSwingCycleController(
+            gateway._runtime, restarted_adapter, clock=env.clock,
+        )
+        restarted_scheduler = SchedulerStore(tmp_path / "schedule.sqlite3")
+        restarted_fence = OfflineSwingRunFence(tmp_path / "single-writer.sqlite3")
+        restarted = OfflineSwingScheduledService(
+            restarted_scheduler, restarted_fence, restarted_controller, clock=env.clock,
+        )
+        allow_fake_schedule(restarted_scheduler)
+        recovered = restarted_adapter.recover_entry(proposal)
+        assert recovered.position is not None
+        assert recovered.position.position_id == 880_001
+
+        # Next session: monitor the owned partial fill without sending another entry.
+        env.clock.now = datetime(2026, 11, 3, 15, 0, tzinfo=UTC)
+        monitor_bid = seal_bid(signer, env, "499")
+        monitor = restarted.run_due(
+            owner="soak-day-2", planning_bids=(monitor_bid,), entry=proposal,
+        )
+        assert monitor.status == "MONITORING"
+        assert [call for call in route.calls if call[0] == "POST"] == posts_after_entry
+        assert len(env.ledger.open_positions()) == 1
+
+        # After signed policy expiry, the independently scoped protective grant permits only
+        # the reduce-only close; final whole-account P&L GET confirms local baseline fidelity.
+        env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+        planning = seal_bid(signer, env, "498")
+        execution = seal_bid(signer, env, "498")
+        closed = restarted.run_due(
+            owner="soak-protective-close",
+            planning_bids=(planning,), execution_bids={MSFT: execution},
+            entry=proposal,
+        )
+        assert closed.status == "EXITS_CONFIRMED", closed.report()
+        assert closed.cycle is not None and closed.cycle.open_positions == 0
+        assert closed.cycle.entry_reference is None
+        assert env.ledger.open_positions() == ()
+        assert restarted_lineage.owned(880_001)["state"] == "CLOSED"
+        assert len([call for call in route.calls if call[0] == "POST"]) == 2
+        assert route.calls[-1][0] == "GET"
+        assert route.calls[-1][1].endswith("/pnl")
+        assert restarted.recovery_dossier(now=env.clock.now)["uncertain_orders"] == []
+        assert [status for _, status in restarted_fence.history()] == [
+            "ENTRY_CONFIRMED", "MONITORING", "EXITS_CONFIRMED",
+        ]
+        assert closed.execution_release == "ETORO_DEMO_NOT_RELEASED"
+        assert env.ledger.kill_switch_engaged() is False
+    finally:
+        try:
+            lineage.close()
+        except Exception:
+            pass
+        env.ledger.close()
+
+
+def test_sd148_restart_fill_mismatch_halts_without_duplicate_resolution(tmp_path):
+    """Cold-start lookup cannot rewrite an already-resolved SD-063 fill."""
+    env = _Env(tmp_path)
+    gateway, quote, _signer, route, lineage, lineage_path, adapter = _composed(env, tmp_path)
+    try:
+        proposal = env.entry()
+        assert isinstance(proposal, EntryProposal)
+        adapter.submit_entry(proposal, quote=quote)
+        before_posts = len([call for call in route.calls if call[0] == "POST"])
+        reference = str(UUID(hex=proposal.reference_id))
+        lineage.close()
+        restarted_lineage = EtoroDemoLineage(
+            str(lineage_path), baseline_position_ids=(11, 12, 13, 14),
+            baseline_order_ids=(9011, 9012, 9013, 9014),
+        )
+        restarted_adapter = AutonomousEtoroDemoOrderAdapter(
+            policy_gateway=gateway,
+            order_port=EtoroDemoOrderPort(route, lineage=restarted_lineage),
+        )
+        route._orders[reference]["positionExecutions"][0]["openingData"]["avgPrice"] = 501
+        with pytest.raises(SD138Refused, match="failed closed"):
+            restarted_adapter.recover_entry(proposal)
+        durable = env.ledger.state().entries[proposal.reference_id]
+        assert durable.outcome == "FILLED"
+        assert durable.filled == proposal.units
+        assert durable.avg_price == Decimal("500")
+        assert env.ledger.kill_switch_engaged()
+        assert len([call for call in route.calls if call[0] == "POST"]) == before_posts
+        assert route.calls[-1][0] == "GET"
+        assert restarted_lineage.owned(880_001)["state"] == "OPEN"
+    finally:
+        try:
+            lineage.close()
+        except Exception:
+            pass
+        env.ledger.close()
+
+
+def test_sd148_revoked_protective_authority_creates_incident_without_replay(tmp_path):
+    """A revoked expiry grant becomes a durable incident and never reaches close POST."""
+    env = _Env(tmp_path)
+    protective = _offline_protective_grant(env)
+    gateway, quote, signer, route, lineage, _lineage_path, adapter = _composed(
+        env, tmp_path, protective_grant=protective,
+    )
+    controller = OfflineSwingCycleController(gateway._runtime, adapter, clock=env.clock)
+    scheduler = SchedulerStore(tmp_path / "schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "single-writer.sqlite3")
+    allow_fake_schedule(scheduler)
+    service = OfflineSwingScheduledService(scheduler, fence, controller, clock=env.clock)
+    try:
+        proposal = env.entry()
+        assert isinstance(proposal, EntryProposal)
+        opened = service.run_due(owner="incident-open", entry=proposal, entry_quote=quote)
+        assert opened.status == "ENTRY_CONFIRMED"
+        env.authority.revoke(protective[0]["grant_id"], "fixture protective authority revoked")
+        env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+        calls_before = tuple(route.calls)
+        result = service.run_due(owner="incident-close", entry=proposal)
+        assert result.status == "HALTED"
+        assert result.cycle is not None and result.cycle.open_positions == 1
+        assert any("PROTECTION" in alert or "PROTECTIVE" in alert
+                   for alert in result.cycle.alerts)
+        assert env.ledger.kill_switch_engaged()
+        assert fence.state() == "UNRESOLVED"
+        assert tuple(route.calls) == calls_before
+        restarted = OfflineSwingScheduledService(
+            SchedulerStore(tmp_path / "schedule.sqlite3"),
+            OfflineSwingRunFence(tmp_path / "single-writer.sqlite3"),
+            controller, clock=env.clock,
+        )
+        assert restarted.run_due(owner="incident-restart").status == "RECOVERY_REQUIRED"
+        assert tuple(route.calls) == calls_before
+    finally:
+        lineage.close()
+        env.ledger.close()
 
 
 def test_sd152_crash_and_second_process_do_not_take_over_or_repost(setup):

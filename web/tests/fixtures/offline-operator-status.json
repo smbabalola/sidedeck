@@ -5,6 +5,8 @@
   "incidents": [
     "OPERATOR_EVIDENCE_UNAVAILABLE"
   ],
+  "fence_state": "UNVERIFIED",
+  "heartbeat_age_seconds": null,
   "incident_digest_sha256": null,
   "delivery_status": "NOT_CONFIGURED",
   "recovery": "SEPARATELY_AUTHORISED_MANUAL_REVIEW_ONLY",

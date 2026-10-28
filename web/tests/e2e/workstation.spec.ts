@@ -122,6 +122,29 @@ test("simulated ledgers are labelled simulation and the saved baseline is not ca
   await expect(books.getByText("Demo broker")).toHaveCount(0);
 });
 
+test("operations exposes only fail-closed local runner diagnostics", async ({ page, pageErrors }) => {
+  void pageErrors;
+  await page.goto("/#/operations");
+  const panel = page.getByRole("region", { name: "Offline worker diagnostics" });
+  await expect(panel.getByText("Local offline diagnostics only", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Simulation", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("Unverified", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Safe to trade", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Not released", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Operator evidence unavailable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Broker account verified", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /buy|sell|order|close position|submit|execute|reset/i })).toHaveCount(0);
+});
+
+test("operations rejects a local status payload that claims trade permission", async ({ page, pageErrors }) => {
+  void pageErrors;
+  const status = fixture("offline-operator-status");
+  await mockApi(page, { "/api/ops/offline-operator-status": { ...status, safe_to_trade: true } });
+  await page.goto("/#/operations");
+  await expect(page.getByRole("alert").filter({ hasText: /did not match the expected contract/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /buy|sell|order|close position|submit|execute|reset/i })).toHaveCount(0);
+});
+
 test("UK markets tab is read-only with honest provenance", async ({ page, pageErrors }) => {
   await page.goto("/#/markets");
   await page.getByRole("tab", { name: /UK \(LSE\)/ }).click();
