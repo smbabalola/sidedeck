@@ -887,3 +887,29 @@ def test_sd141_orphan_durable_owned_position_cannot_rearm_idle_runner(setup):
     assert fence.state() == "IDLE"
     assert scheduler.history("swing_review") == ()
     assert tuple(route.calls) == before
+
+
+def test_sd152_twenty_restart_attempts_do_not_repeat_simulated_entry(setup):
+    """Crash/restart-style repeated construction cannot replay a consumed slot."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    first = service.run_due(owner="initial-worker", entry=proposal, entry_quote=quote)
+    assert first.status == "ENTRY_CONFIRMED"
+    original_posts = [call for call in route.calls if call[0] == "POST"]
+    assert len(original_posts) == 1
+    for attempt in range(20):
+        restarted = OfflineSwingScheduledService(
+            SchedulerStore(env.tmp / "schedule.sqlite3"),
+            OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+            controller, clock=env.clock,
+        )
+        result = restarted.run_due(
+            owner=f"restart-{attempt}", entry=proposal, entry_quote=quote,
+        )
+        assert result.status == "NO_DUE_SLOT"
+        assert result.execution_release == "ETORO_DEMO_NOT_RELEASED"
+        assert [call for call in route.calls if call[0] == "POST"] == original_posts
+        assert fence.state() == "IDLE"
+    assert len(scheduler.history("swing_review")) == 1
