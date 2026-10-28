@@ -972,3 +972,46 @@ def test_sd152_ambiguous_close_ten_restarts_preserve_single_exit_post(setup):
         assert restarted.fence.state() == "UNRESOLVED"
         assert tuple(route.calls) == expected_calls
     assert env.ledger.kill_switch_engaged()
+
+
+def test_sd152_close_ledger_mismatch_blocks_twelve_restarts_without_replay(setup):
+    """Durable filled close without policy resolution remains review-only."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    entry = env.entry()
+    controller.adapter.submit_entry(entry, quote=quote)
+    plan = controller.runtime.plan_exits(bids=(seal_bid(signer, env, "455"),))
+    assert len(plan.exits) == 1
+    original_resolve = controller.runtime.resolve
+
+    def interrupted_resolution(_evidence):
+        raise RuntimeError("simulated crash between broker ledger and policy ledger")
+
+    controller.runtime.resolve = interrupted_resolution
+    try:
+        from sidedeck.application.sd138_autonomous_order_adapter import SD138Refused
+        with pytest.raises(SD138Refused, match="stopped for reconciliation"):
+            controller.adapter.submit_exit(plan.exits[0], quote=seal_bid(signer, env, "455"))
+    finally:
+        controller.runtime.resolve = original_resolve
+    assert lineage.owned(880_001)["state"] == "CLOSED"
+    assert env.ledger.kill_switch_engaged()
+    original_calls = tuple(route.calls)
+    assert [method for method, _ in original_calls].count("POST") == 2
+    for attempt in range(12):
+        env.clock.now = NOW + timedelta(minutes=attempt)
+        restarted = OfflineSwingScheduledService(
+            SchedulerStore(env.tmp / "schedule.sqlite3"),
+            OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+            controller, clock=env.clock,
+        )
+        dossier = restarted.recovery_dossier(now=env.clock.now)
+        assert any(
+            item["review_action"] == "DURABLE_CLOSE_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+            for item in dossier["uncertain_orders"]
+        )
+        result = restarted.run_due(owner=f"close-mismatch-restart-{attempt}")
+        assert result.status == "RECOVERY_REQUIRED"
+        assert result.execution_release == "ETORO_DEMO_NOT_RELEASED"
+        assert tuple(route.calls) == original_calls
+    assert env.ledger.kill_switch_engaged()
