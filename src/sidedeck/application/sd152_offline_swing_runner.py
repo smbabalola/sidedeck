@@ -298,6 +298,48 @@ class OfflineSwingScheduledService:
         """Read-only health for local operator alerts; never touches a broker."""
         return self.fence.health(now=now)
 
+    def inspect(self, *, now: datetime) -> dict[str, Any]:
+        """Read-only local operations snapshot, not a broker health claim.
+
+        No /pnl, order lookup, quote, credential, POST or grant-use request.
+        It cannot assert that an actual broker is flat, nor release the fence.
+        """
+        fence = self.fence.health(now=now)
+        ledger = self.controller.runtime.ledger
+        state = ledger.state()
+        lineage = self.controller.adapter._port._lineage
+        if lineage is None:
+            raise OfflineRunnerRefused("durable SideDeck order lineage is unavailable")
+        orders = lineage.orders()
+        owned = lineage.owned_positions()
+        unknown = sum(1 for order in orders if order["state"] == "OUTCOME_UNKNOWN")
+        pending = sum(1 for order in orders if order["state"] == "PENDING_SUBMIT")
+        close_pending = sum(1 for order in orders
+                            if order["kind"] == "CLOSE" and order["state"] == "ACCEPTED")
+        alerts = list(fence.alerts)
+        if state.killed:
+            alerts.append("POLICY_KILL_SWITCH_ENGAGED")
+        if unknown or pending or close_pending:
+            alerts.append("ORDER_LINEAGE_RECONCILIATION_REQUIRED")
+        if len(lineage.baseline_position_ids) != 4:
+            alerts.append("PROTECTED_BASELINE_COUNT_MISMATCH")
+        return {
+            "schema": "sidedeck.sd152.offline-ops-status/1",
+            "fence": fence.report(),
+            "policy_kill_switch": bool(state.killed),
+            "policy_open_positions": len(ledger.open_positions()),
+            "durable_owned_open_positions": sum(1 for pos in owned
+                                                if pos["state"] == "OPEN"),
+            "durable_unknown_order_count": unknown,
+            "durable_pending_submit_count": pending,
+            "durable_accepted_close_count": close_pending,
+            "protected_original_positions": len(lineage.baseline_position_ids),
+            "alerts": alerts,
+            "broker_route": "SIMULATED_LOCAL",
+            "broker_account_verified": False,
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+
     def run_due(
         self, *, owner: str,
         planning_bids: Sequence[Envelope] = (),
