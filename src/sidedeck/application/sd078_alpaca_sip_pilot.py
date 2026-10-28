@@ -337,6 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     intraday_draft = sub.add_parser("draft-intraday")
     intraday_draft.add_argument("--out", required=True)
     intraday_draft.add_argument("--owner-confirms-terms-reviewed", action="store_true")
+    intraday_draft.add_argument("--short-probe", action="store_true", help="one-week 5-request SPY evidence probe")
     intraday = sub.add_parser("run-intraday")
     intraday.add_argument("--authorization", required=True)
     intraday.add_argument("--signature", required=True)
@@ -373,11 +374,12 @@ def main(argv: list[str] | None = None) -> int:
             provider="ALPACA_SIP_INTRADAY",
             purpose="One-year SPY five-minute SIP historical research collection only",
             urls=(ENDPOINT.format(symbol="SPY"),),
-            max_requests=20, max_retries=0, credentials_required=True,
+            max_requests=5 if args.short_probe else 20, max_retries=0, credentials_required=True,
             issued_at=issued, expires_at=issued + timedelta(hours=24),
             owner_terms_reviewed=True,
             scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
-                   "start": "2025-10-27T00:00:00Z", "end": "2026-10-24T00:00:00Z",
+                   "start": "2026-10-19T00:00:00Z" if args.short_probe else "2025-10-27T00:00:00Z",
+                   "end": "2026-10-24T00:00:00Z",
                    "limit": "10000"},
             notes="research only, no data purchase or broker orders",
         )
