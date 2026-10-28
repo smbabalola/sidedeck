@@ -61,3 +61,32 @@ def evaluate_offline_alerts(
         "clear_halt_allowed": False,
         "execution_release": "ETORO_DEMO_NOT_RELEASED",
     }
+
+
+def offline_operator_snapshot(service: Any, *, now: Any) -> dict[str, Any]:
+    """Read-only bridge for a future operator dashboard.
+
+    Reads existing offline diagnostics, converting any unavailable dependency
+    into an explicit incident. Never starts a scheduled cycle.
+    """
+    from datetime import datetime
+
+    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("timezone-aware snapshot time required")
+    try:
+        health = service.health(now=now).report()
+        dossier = service.recovery_dossier(now=now)
+        if not isinstance(dossier, dict):
+            raise ValueError("invalid recovery dossier")
+        alerts = evaluate_offline_alerts(health, dossier)
+    except Exception:
+        return {
+            "schema": "sidedeck.sd152.offline-operator-alerts/1",
+            "status": "ATTENTION_REQUIRED",
+            "incidents": ["OPERATOR_EVIDENCE_UNAVAILABLE"],
+            "safe_to_trade": False,
+            "automatic_recovery_allowed": False,
+            "clear_halt_allowed": False,
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+    return alerts
