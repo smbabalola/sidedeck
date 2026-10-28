@@ -1076,3 +1076,64 @@ def test_sd152_inconsistent_remaining_units_never_rearms_synthetic_entry(setup):
         assert restarted.run_due(owner=f"remaining-units-{attempt}").status == "RECOVERY_REQUIRED"
         assert tuple(route.calls) == before
     assert [method for method, _ in before].count("POST") == 1
+
+
+def test_sd152_partial_entry_then_full_reduce_across_two_slots(setup):
+    """Real fake adapter tracks filled rather than requested quantity."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    route.mode = "PARTIAL"
+    opened = service.run_due(owner="partial-open", entry=proposal, entry_quote=quote)
+    assert opened.status == "ENTRY_CONFIRMED"
+    assert opened.cycle is not None
+    assert opened.cycle.open_positions == 1
+    assert env.ledger.open_positions()[0].units == proposal.units / 2
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    route.mode = "FILLED"
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    closed = service.run_due(
+        owner="full-reduce", planning_bids=(seal_bid(signer, env, "455"),),
+        execution_bids={MSFT: seal_bid(signer, env, "455")},
+    )
+    assert closed.status == "EXITS_CONFIRMED"
+    assert closed.cycle is not None
+    assert closed.cycle.open_positions == 0
+    assert env.ledger.open_positions() == ()
+    assert lineage.owned(880_001)["state"] == "CLOSED"
+    assert [method for method, _ in route.calls].count("POST") == 2
+    assert service.recovery_dossier(now=env.clock.now)["uncertain_orders"] == []
+
+
+def test_sd152_partial_close_ten_restarts_never_infer_flat_or_repost(setup):
+    """A partial broker-shaped CLOSE response cannot be treated as a final fill."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert service.run_due(owner="entry", entry=proposal, entry_quote=quote).status == "ENTRY_CONFIRMED"
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    route.close_mode = "PARTIAL"
+    attempted = service.run_due(
+        owner="partial-exit", planning_bids=(seal_bid(signer, env, "455"),),
+        execution_bids={MSFT: seal_bid(signer, env, "455")},
+    )
+    assert attempted.status == "HALTED"
+    assert env.ledger.kill_switch_engaged()
+    assert fence.state() == "UNRESOLVED"
+    assert env.ledger.open_positions()
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    before = tuple(route.calls)
+    assert [method for method, _ in before].count("POST") == 2
+    for attempt in range(10):
+        env.clock.now = NOW + timedelta(hours=2, minutes=35 + attempt)
+        restarted = OfflineSwingScheduledService(
+            SchedulerStore(env.tmp / "schedule.sqlite3"),
+            OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+            controller, clock=env.clock,
+        )
+        assert restarted.run_due(owner=f"partial-close-restart-{attempt}").status == "RECOVERY_REQUIRED"
+        assert tuple(route.calls) == before
+        assert env.ledger.open_positions()
+        assert restarted.fence.state() == "UNRESOLVED"
+    assert env.ledger.kill_switch_engaged()
