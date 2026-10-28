@@ -566,10 +566,19 @@ class OfflineSwingScheduledService:
         if dossier["protected_original_positions"] != 4:
             failures.append("ORIGINAL_BASELINE_COUNT_NOT_VERIFIED")
         steps: list[dict[str, Any]] = []
+        lineage = self.controller.adapter._port._lineage
+        if lineage is None:
+            raise OfflineRunnerRefused("durable recovery lineage is unavailable")
         for item in dossier["uncertain_orders"]:
             ref = str(item["reference_id"])
             action = str(item["review_action"])
             kind = str(item["kind"])
+            # Conservative after crash: once a recovery GET stage was reserved,
+            # never propose a fresh request for the same original OPEN intent.
+            # A separate signed operator investigation is then required.
+            if kind == "OPEN" and lineage.offline_recovery_read_stages(ref):
+                failures.append("DURABLE_RECOVERY_GET_ALREADY_RESERVED_MANUAL_REVIEW")
+                continue
             def add_step(operation: str, lookup: str) -> None:
                 steps.append({
                     "reference_id": ref, "order_kind": kind,
