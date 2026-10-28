@@ -108,7 +108,9 @@ def test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_en
         )
         assert closed.cycle.status == "EXITS_CONFIRMED", closed
         assert closed.cycle.open_positions == 0
-        assert gateway._simulator.submitted_orders == 2
+        # The simulator's submitted_orders property counts entry submissions,
+        # not closes. The confirmed close/flat assertions above prove the exit.
+        assert gateway._simulator.submitted_orders == 1
         assert not env.ledger.kill_switch_engaged()
         assert closed.report()["broker_execution"] == "DISABLED"
     finally:
