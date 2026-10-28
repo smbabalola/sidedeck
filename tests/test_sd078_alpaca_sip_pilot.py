@@ -303,3 +303,40 @@ def test_intraday_draft_requires_explicit_owner_terms_and_is_network_free(tmp_pa
         main(["draft-intraday", "--out", str(target),
               "--owner-confirms-terms-reviewed"])
 
+
+def test_intraday_accepts_alpaca_base64_page_token_and_paginates(tmp_path):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import collect_signed_spy_five_minute
+    from urllib.parse import parse_qs, urlsplit
+
+    auth = DataAuthorization(
+        authorization_id="sd156-base64", provider="ALPACA_SIP_INTRADAY",
+        purpose="mock historical pagination", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=2, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "base64.sqlite3", auth)
+    cursor = "QUFQTHxNfDIwMjItMDEtMDNUMDk6MDA6MDAuMDAwMDAwMDAwWg=="
+    calls = []
+    def opener(request, timeout=20):
+        calls.append(request.full_url)
+        query = parse_qs(urlsplit(request.full_url).query)
+        assert query.get("page_token") == ([cursor] if len(calls) == 2 else None)
+        stamp = "2026-10-22T13:30:00Z" if len(calls) == 1 else "2026-10-22T13:35:00Z"
+        return _Resp(json.dumps({
+            "bars": [{"t": stamp, "o": 100, "h": 101, "l": 99, "c": 100, "v": 500}],
+            "next_page_token": cursor if len(calls) == 1 else None,
+        }).encode())
+    result = collect_signed_spy_five_minute(
+        auth, ledger, key_id="fixture", secret="fixture",
+        now=lambda: NOW, opener=opener,
+    )
+    assert result["pages"] == 2
+    assert len(result["bars"]) == 2
+    assert ledger.used() == 2
+    assert result["strategy_admission_eligible"] is False
+
