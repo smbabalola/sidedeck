@@ -122,8 +122,13 @@ class OfflineDayCycleController:
         if self.runtime.ledger.kill_switch_engaged():
             return self._result("HALTED", None, exits, alerts + ["KILL_SWITCH_ENGAGED"])
         if alerts:
-            # Missing/stale marks, pending or quarantined exits and protective
-            # exceptions all block the entry path until reconciled.
+            # An unattended DAY position cannot merely wait for attention
+            # when protective quote/exit monitoring has become unavailable.
+            # Stop further trading until the position is reconciled.
+            if self.runtime.ledger.open_positions():
+                self._halt("DAY_POSITION_PROTECTION_UNVERIFIED")
+                return self._result("HALTED", None, exits,
+                                    alerts + ["POSITION_PROTECTION_UNVERIFIED"])
             return self._result("ATTENTION_REQUIRED", None, exits, alerts)
         if entry is None:
             return self._result("NO_TRADE", None, exits, alerts)
