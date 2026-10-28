@@ -2,7 +2,7 @@
 
 **Active workstream:** build and verify the complete **autonomous eToro Demo trading application** in an iterative engineering loop. This is the concise entry point requested by the owner on **27 October 2026**.
 
-**Authoritative policy:** [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md), in particular **§20 — Continuous engineering loop** and **§21 — Demo GO-LIVE delivery contract**, together with [AGENTS.md](AGENTS.md). **Live task assignments:** the top **Autonomous eToro Demo delivery loop** block of [TODO.md](TODO.md). This entry point does not replace those documents or dilute their security rules.
+**Authoritative policy:** [SIDEDECK_STEERING.md](SIDEDECK_STEERING.md), in particular **§20 — Continuous engineering loop** and **§21 — Demo GO-LIVE delivery contract**, together with [AGENTS.md](AGENTS.md). **Critical-path implementation plan:** [docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md](docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md) — deliver one complete offline broker-shaped SWING round trip before feature expansion. **Live task assignments:** the top **Autonomous eToro Demo delivery loop** block of [TODO.md](TODO.md). This entry point does not replace those documents or dilute their security rules.
 
 ## Mission
 
@@ -52,4 +52,4 @@ Codex must progress **all dependency-ready offline lanes in parallel** (without 
 - No duplicate writes, no simulated closing prices presented as broker P&L, no synthetic data silently promoted to strategy qualification, no grants signed by Codex.
 - Do not merge default branches, touch other worktrees, or run destructive changes on personal/broker account databases.
 
-**Start now with the first eligible `NEXT_READY` items in TODO** (currently finish SD-137; parallel SD-142 and SD-145, then SD-152 when its prerequisites are ready). Follow charter §§20–21 and the five-lane launch matrix. Do not stop after writing plans: in each active Codex session carry out the offline build/test/fix/commit/push/TODO loop until genuine external/owner gates or a session limit is reached.
+**Start now with SD-138:** implement a real offline-only SD-063/064/074/145-to-SD-129/036 autonomous adapter plus one end-to-end, broker-shaped **fake** entry → identified position → reduce-only exit → final /pnl reconciliation, with exact grant/quote/audit checks and negative tests. **Then SD-139/140/141/152** as dependencies clear; progress SD-143/144, SD-146/147/148 in parallel. See [critical-path plan](docs/AUTONOMOUS_DEMO_EXECUTION_PLAN.md), which does not authorize data access or broker execution. Follow charter §§20–21, commit/test/verify CI/update TODO, and continue implementation without routine prompts while the Codex session is active.
