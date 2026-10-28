@@ -162,3 +162,43 @@ def test_sd153_recovery_plan_refuses_to_reoffer_consumed_reference_get(recovery_
     assert result["planned_get_count"] == 0
     assert result["safe_to_send"] is False
     assert tuple(route.calls) == before
+
+
+def test_sd153_unsigned_manifest_is_stable_and_binds_original_local_facts(recovery_env):
+    _env, _quote, _signer, route, lineage, _controller, _scheduler, _fence, service = recovery_env
+    ref = _pending(lineage)
+    before = tuple(route.calls)
+    first = service.recovery_evidence_manifest(now=NOW, max_gets=1)
+    repeated = service.recovery_evidence_manifest(now=NOW, max_gets=1)
+    assert first == repeated
+    assert len(first["manifest_sha256"]) == 64
+    assert len(first["local_order_lineage_sha256"]) == 64
+    assert first["original_offline_baseline_sha256"] == \
+        lineage.offline_original_baseline_sha256()
+    assert first["status"] == "AWAITING_INDEPENDENT_OWNER_REVIEW"
+    assert first["owner_signature"] == "NOT_PROVIDED"
+    assert first["evidence_origin"] == "LOCAL_OFFLINE_FIXTURE_ONLY"
+    assert first["automatic_get_allowed"] is False
+    assert first["clear_halt_allowed"] is False
+    assert tuple(route.calls) == before
+    lineage.reserve_offline_recovery_read(
+        order_reference=ref, stage="REFERENCE", at=NOW)
+    changed = service.recovery_evidence_manifest(now=NOW, max_gets=1)
+    assert changed["manifest_sha256"] != first["manifest_sha256"]
+    assert changed["status"] == "UNRESOLVED"
+    assert changed["read_preflight"]["planned_get_count"] == 0
+    assert tuple(route.calls) == before
+
+
+def test_sd153_manifest_cannot_claim_verified_external_audit_when_unavailable(recovery_env):
+    env, _quote, _signer, route, _lineage, _controller, _scheduler, _fence, service = recovery_env
+    env.gateway_audit_anchor.unavailable = True
+    before = tuple(route.calls)
+    report = service.recovery_evidence_manifest(now=NOW)
+    assert report["status"] == "UNRESOLVED"
+    assert report["audit_journal"]["head"] == "UNVERIFIED"
+    assert "EXTERNAL_AUDIT_CHECKPOINT_UNVERIFIED" in report["errors"]
+    assert report["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    assert report["owner_signature"] == "NOT_PROVIDED"
+    assert report["broker_account_verified"] is False
+    assert tuple(route.calls) == before
