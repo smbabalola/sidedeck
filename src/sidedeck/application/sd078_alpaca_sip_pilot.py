@@ -14,6 +14,8 @@ import argparse
 import hashlib
 import json
 import time
+import urllib.parse
+import urllib.request
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -179,6 +181,103 @@ def run_pilot(
     (out_dir / f"summary-{auth.authorization_id}.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     return summary
+
+
+
+def collect_signed_spy_five_minute(
+    auth: DataAuthorization, ledger: DataRequestLedger, *, key_id: str,
+    secret: str, now: Callable[[], datetime], opener: Opener = _safe_urlopen,
+) -> dict[str, Any]:
+    """Offline-testable historical collection; caller must verify owner signature.
+
+    This function never grants research admission or execution permission.
+    It requires the separate ALPACA_SIP_INTRADAY scope and reserves each page
+    before network access. The existing DAILY pilot is unaffected.
+    """
+    import re
+    from sidedeck.application.sd068_track_scheduler import NEW_YORK, session_for
+
+    url = ENDPOINT.format(symbol="SPY")
+    if (auth.provider != "ALPACA_SIP_INTRADAY" or auth.urls != (url,)
+            or auth.max_retries != 0 or auth.max_requests > 20
+            or auth.scope.get("timeframe") != "5Min"):
+        raise AuthorizationRefused("SPY 5Min acquisition requires a separate bounded grant")
+    if not key_id or not secret:
+        raise AuthorizationRefused("missing intraday data credentials")
+    token: str | None = None
+    seen: set[str] = set()
+    bars: list[dict[str, str]] = []
+    pages = 0
+    while pages < auth.max_requests:
+        params = dict(auth.scope)
+        if token is not None:
+            params["page_token"] = token
+        request = urllib.request.Request(
+            url + "?" + urllib.parse.urlencode(params),
+            headers={"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret,
+                     "Accept": "application/json"},
+        )
+        ledger.reserve(request.full_url, now())
+        pages += 1
+        try:
+            with opener(request, timeout=20) as response:
+                if getattr(response, "status", 200) != 200:
+                    raise MarketDataUnavailable("Alpaca intraday HTTP status not OK")
+                raw = response.read(8_000_001)
+                if len(raw) > 8_000_000:
+                    raise MarketDataUnavailable("Alpaca intraday response exceeds limit")
+                payload = json.loads(raw)
+        except Exception:
+            raise MarketDataUnavailable("Alpaca intraday request failed") from None
+        if not isinstance(payload, dict) or not isinstance(payload.get("bars"), list):
+            raise MarketDataUnavailable("invalid Alpaca intraday response")
+        for row in payload["bars"]:
+            if not isinstance(row, dict) or not isinstance(row.get("t"), str):
+                raise MarketDataUnavailable("invalid five-minute timestamp")
+            stamp = row["t"]
+            try:
+                dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            except ValueError:
+                raise MarketDataUnavailable("invalid five-minute timestamp") from None
+            if dt.tzinfo is None or dt.utcoffset() is None:
+                raise MarketDataUnavailable("naive five-minute timestamp")
+            dt = dt.astimezone(UTC)
+            if dt.second or dt.microsecond or dt.minute % 5:
+                raise MarketDataUnavailable("off-grid five-minute timestamp")
+            session = session_for(dt.astimezone(NEW_YORK).date())
+            if session is None or not session.open_utc <= dt < session.close_utc:
+                raise MarketDataUnavailable("intraday bar outside regular session")
+            numeric = {}
+            for key in ("o", "h", "l", "c", "v"):
+                try:
+                    val = Decimal(str(row[key]))
+                except (KeyError, ValueError, ArithmeticError):
+                    raise MarketDataUnavailable("invalid five-minute OHLCV") from None
+                if not val.is_finite() or val <= 0:
+                    raise MarketDataUnavailable("invalid five-minute OHLCV")
+                numeric[key] = val
+            if (numeric["h"] < max(numeric["o"], numeric["c"])
+                    or numeric["l"] > min(numeric["o"], numeric["c"])):
+                raise MarketDataUnavailable("inconsistent five-minute OHLC")
+            bars.append({"timestamp_utc": dt.isoformat(),
+                         **{key: str(value) for key, value in numeric.items()}})
+        nxt = payload.get("next_page_token")
+        if nxt is None:
+            break
+        if not isinstance(nxt, str) or not re.fullmatch(r"[A-Za-z0-9_\\-]{1,512}", nxt) or nxt in seen:
+            raise MarketDataUnavailable("invalid intraday pagination token")
+        seen.add(nxt)
+        token = nxt
+    else:
+        raise MarketDataUnavailable("intraday page budget exhausted")
+    stamps = [bar["timestamp_utc"] for bar in bars]
+    if not stamps or stamps != sorted(set(stamps)):
+        raise MarketDataUnavailable("missing, duplicate or out-of-order intraday bars")
+    return {"schema": "sidedeck-alpaca-five-minute-raw/1",
+            "symbol": "SPY", "feed": "sip", "timeframe": "5Min",
+            "authorization_digest": auth.digest, "pages": pages,
+            "bars": bars, "data_rights": "UNVERIFIED",
+            "strategy_admission_eligible": False, "broker_execution": "DISABLED"}
 
 
 def main(argv: list[str] | None = None) -> int:
