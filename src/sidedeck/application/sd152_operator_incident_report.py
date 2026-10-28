@@ -57,6 +57,8 @@ def report_offline_incident(
         "status": "ESCALATION_REQUIRED" if issues else "OBSERVATION_ONLY",
         "incidents": sorted(set(issues)),
         "operator_acknowledged": bool(present and valid),
+        "operator_identity_verified": False,
+        "acknowledgement_provenance": "LOCAL_UNVERIFIED",
         "notification_intent_recorded": bool(notification_present and valid_notification),
         "incident_resolved": False,
         "external_notification_confirmed": False,
