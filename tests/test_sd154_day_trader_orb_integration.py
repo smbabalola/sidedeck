@@ -2,6 +2,7 @@
 
 Fixture chart bars exercise methodology, not genuine data or executable admission.
 """
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -196,6 +197,48 @@ def test_mismatched_research_admission_cannot_enter(
         assert result.cycle.status == "NO_TRADE"
         assert gateway._simulator.submitted_orders == 0
         assert not env.ledger.open_positions()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+@pytest.mark.parametrize("field, value", [
+    ("source_id", "impersonating-orb-method"),
+    ("source_version", "unverified-future-version"),
+])
+def test_unpinned_day_research_method_cannot_enter(
+    tmp_path: Path, field: str, value: str,
+):
+    now = datetime(2026, 11, 27, 15, 0, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env, fill_price="500")
+    try:
+        bars = tuple(
+            IntradayBar(
+                start=now - timedelta(minutes=30 - 5 * i),
+                open=Decimal("500"), high=Decimal("502") if i < 3 else Decimal("505"),
+                low=Decimal("499"), close=Decimal("501") if i < 3 else Decimal("504"),
+                volume=Decimal("10000"),
+            ) for i in range(4)
+        )
+        original = orb_signal(MSFT, bars, now)
+        assert original is not None
+        signal = replace(original, **{field: value})
+        research = DayResearchResult(
+            signal=signal,
+            admission=StrategyAdmission(
+                signal.source_id, signal.source_version, "DAY", "RESEARCH_ONLY",
+                "fixture-chart-not-oos", 0, False,
+            ),
+            metadata={"data_basis": "SYNTHETIC_FIXTURE"}, status="RESEARCH_ONLY",
+        )
+        result = run_day_trader_offline_cycle(
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            research_result=research,
+        )
+        assert result.proposal_reasons == ("UNTRUSTED_DAY_TRADER_RESEARCH",)
+        assert result.cycle.status == "NO_TRADE"
+        assert gateway._simulator.submitted_orders == 0
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
