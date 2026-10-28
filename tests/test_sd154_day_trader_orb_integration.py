@@ -76,7 +76,7 @@ def test_orb_fixture_and_separately_admitted_native_offline_round_trip(tmp_path:
     try:
         bars = tuple(
             IntradayBar(
-                start=now - timedelta(minutes=30 - i * 5),
+                start=now - timedelta(minutes=30 - 5 * i),
                 open=Decimal("500"), high=Decimal("502") if i < 3 else Decimal("505"),
                 low=Decimal("499"), close=Decimal("501") if i < 3 else Decimal("504"),
                 volume=Decimal("10000"),
