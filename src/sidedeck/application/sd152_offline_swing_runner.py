@@ -7,6 +7,8 @@ a duplicate autonomous send. No background daemon, HTTP, .env or order release.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -634,6 +636,68 @@ class OfflineSwingScheduledService:
             "broker_route": "SIMULATED_LOCAL",
             "execution_release": "ETORO_DEMO_NOT_RELEASED",
         }
+
+    def recovery_evidence_manifest(
+        self, *, now: datetime, max_gets: int = 2,
+    ) -> dict[str, Any]:
+        """Unsigned, non-executable fingerprint of local recovery evidence.
+
+        Caller must independently verify real broker identity and obtain its
+        own signed operator authority. No request reservation, socket, signer,
+        kill reset or release mechanism is available from this method.
+        """
+        preflight = self.recovery_read_preflight(now=now, max_gets=max_gets)
+        gate = self.controller.adapter._gate
+        lineage = self.controller.adapter._port._lineage
+        if lineage is None:
+            raise OfflineRunnerRefused("durable recovery lineage unavailable")
+        errors = list(preflight["failure_reasons"])
+        policy_count, policy_head = self.controller.runtime.ledger._head()
+        grant_count, grant_head = gate._authority._ledger._head()
+        try:
+            audit_count, audit_head = gate._audit_journal.verify()
+        except Exception:
+            errors.append("EXTERNAL_AUDIT_CHECKPOINT_UNVERIFIED")
+            audit_count, audit_head = -1, "UNVERIFIED"
+        try:
+            baseline_hash = lineage.offline_original_baseline_sha256()
+        except Exception:
+            errors.append("LOCAL_ORIGINAL_BASELINE_UNVERIFIED")
+            baseline_hash = "UNVERIFIED"
+        lineage_facts = {
+            "orders": [dict(row) for row in lineage.orders()],
+            "owned_positions": [dict(row) for row in lineage.owned_positions()],
+        }
+        lineage_hash = hashlib.sha256(json.dumps(
+            lineage_facts, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        payload = {
+            "schema": "sidedeck.sd153.offline-recovery-evidence/1",
+            "observed_at": now.astimezone(UTC).isoformat(),
+            "policy_digest": gate._policy.digest(),
+            "policy_ledger": {"count": policy_count, "head": policy_head},
+            "grant_ledger": {"count": grant_count, "head": grant_head},
+            "audit_journal": {"count": audit_count, "head": audit_head},
+            "original_offline_baseline_sha256": baseline_hash,
+            "local_order_lineage_sha256": lineage_hash,
+            "read_preflight": preflight,
+            "errors": sorted(set(errors)),
+            "status": (
+                "UNRESOLVED" if errors or preflight["status"] == "BLOCKED_MANUAL_REVIEW"
+                else "AWAITING_INDEPENDENT_OWNER_REVIEW" if preflight["planned_gets"]
+                else "NO_RECOVERY_READS_NEEDED"
+            ),
+            "evidence_origin": "LOCAL_OFFLINE_FIXTURE_ONLY",
+            "owner_signature": "NOT_PROVIDED",
+            "broker_account_verified": False,
+            "automatic_get_allowed": False,
+            "automatic_post_allowed": False,
+            "clear_halt_allowed": False,
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return {**payload, "manifest_sha256": hashlib.sha256(
+            canonical.encode("utf-8")).hexdigest()}
 
     def run_due(
         self, *, owner: str,
