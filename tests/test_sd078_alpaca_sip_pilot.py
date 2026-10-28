@@ -284,3 +284,22 @@ def test_intraday_excludes_extended_hours_without_losing_opening_bar(tmp_path):
     assert result["bars"][0]["timestamp_utc"] == "2026-10-22T13:30:00+00:00"
     assert result["excluded_extended_hours"] == 2
     assert result["strategy_admission_eligible"] is False
+
+def test_intraday_draft_requires_explicit_owner_terms_and_is_network_free(tmp_path):
+    from sidedeck.application.sd078_alpaca_sip_pilot import main
+    target = tmp_path / "alpaca-5min.json"
+    with pytest.raises(SystemExit):
+        main(["draft-intraday", "--out", str(target)])
+    assert not target.exists()
+    assert main(["draft-intraday", "--out", str(target),
+                 "--owner-confirms-terms-reviewed"]) == 0
+    draft = json.loads(target.read_text(encoding="utf-8"))
+    assert draft["provider"] == "ALPACA_SIP_INTRADAY"
+    assert draft["urls"] == [ENDPOINT.format(symbol="SPY")]
+    assert draft["scope"]["timeframe"] == "5Min"
+    assert draft["scope"]["feed"] == "sip"
+    assert draft["max_retries"] == 0
+    with pytest.raises(SystemExit):
+        main(["draft-intraday", "--out", str(target),
+              "--owner-confirms-terms-reviewed"])
+
