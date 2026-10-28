@@ -19,10 +19,13 @@ def test_acknowledgement_is_visible_but_never_resolves_or_delivers(tmp_path):
     journal = OfflineAlertJournal(tmp_path / "alerts.sqlite3").record(digest, at=at)
     before = report_offline_incident(digest, journal)
     assert before["status"] == "ESCALATION_REQUIRED"
+    assert before["operator_identity_verified"] is False
     assert not before["operator_acknowledged"]
     ack = OfflineOperatorAcknowledgements(tmp_path / "ack.sqlite3").acknowledge(
         digest, actor="operator-1", at=at)
     after = report_offline_incident(digest, journal, ack)
+    assert after["operator_identity_verified"] is False
+    assert after["acknowledgement_provenance"] == "LOCAL_UNVERIFIED"
     assert after["operator_acknowledged"]
     assert after["status"] == "ESCALATION_REQUIRED"
     assert not after["incident_resolved"]
