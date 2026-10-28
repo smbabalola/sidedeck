@@ -26,6 +26,7 @@ from sidedeck.application.sd129_etoro_demo_order_port import (
 from sidedeck.application.sd138_autonomous_order_adapter import (
     AutonomousEtoroDemoOrderAdapter, SD138Refused,
 )
+from sidedeck.application.sd140_offline_swing_controller import OfflineSwingCycleController
 from sidedeck.domain.etoro_demo_orders import (
     DEMO_CLOSE_INFO_PATH, DEMO_CLOSE_PATH, DEMO_OPEN_PATH, DEMO_ORDER_LOOKUP_PATH,
     DEMO_PNL_PATH,
@@ -349,6 +350,57 @@ def test_sd140_policy_expired_without_protective_grant_cannot_close(env, tmp_pat
     assert any(a.startswith("POLICY_EXPIRED_POSITION_OPEN:") for a in plan.alerts)
     assert [method for method, _ in route.calls].count("POST") == 1
     assert lineage.owned(880_001)["state"] == "OPEN"
+
+
+def test_sd140_controller_executes_protective_expiry_close_before_other_entries(env, tmp_path):
+    gateway, quote, signer, route, lineage, _path, adapter = _composed(
+        env, tmp_path, protective_grant=_offline_protective_grant(env))
+    entry = env.entry()
+    adapter.submit_entry(entry, quote=quote)
+    controller = OfflineSwingCycleController(gateway._runtime, adapter, clock=env.clock)
+    env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=timezone.utc)
+    planning = signer.seal({
+        "canonical_id": entry.canonical_id, "bid": "498", "ask": "499",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    send_quote = signer.seal({
+        "canonical_id": entry.canonical_id, "bid": "498", "ask": "499",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    result = controller.tick(
+        planning_bids=(planning,),
+        execution_bids={entry.canonical_id: send_quote},
+        entry=entry,
+    )
+    assert result.status == "EXITS_CONFIRMED"
+    assert result.entry_reference is None
+    assert result.open_positions == 0
+    assert lineage.owned(880_001)["state"] == "CLOSED"
+    assert [m for m, _ in route.calls].count("POST") == 2
+    assert result.execution_release == "ETORO_DEMO_NOT_RELEASED"
+
+
+def test_sd140_controller_halts_if_protective_grant_revoked_after_expiry(env, tmp_path):
+    protective = _offline_protective_grant(env)
+    gateway, quote, signer, route, lineage, _path, adapter = _composed(
+        env, tmp_path, protective_grant=protective)
+    entry = env.entry()
+    adapter.submit_entry(entry, quote=quote)
+    env.authority.revoke(protective[0]["grant_id"], "fixture owner revoked protective exit")
+    env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=timezone.utc)
+    controller = OfflineSwingCycleController(gateway._runtime, adapter, clock=env.clock)
+    bid = signer.seal({
+        "canonical_id": entry.canonical_id, "bid": "498", "ask": "499",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    result = controller.tick(planning_bids=(bid,))
+    assert result.status == "HALTED"
+    assert "POSITION_PROTECTION_UNVERIFIED" in result.alerts
+    assert env.ledger.kill_switch_engaged()
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    assert [m for m, _ in route.calls].count("POST") == 1
+    assert all(p != DEMO_CLOSE_INFO_PATH.format(order_id=770_002)
+               for _m, p in route.calls)
 
 
 def test_sd138_lost_post_ack_recovers_by_get_after_port_restart(env, tmp_path):
