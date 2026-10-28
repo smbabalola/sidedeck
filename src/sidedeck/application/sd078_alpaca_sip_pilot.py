@@ -382,10 +382,17 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
                             exit_price = min(stop, future.open)
                             exit_reason = "STOP"
                             break
+                    risk = entry - stop
+                    slip = Decimal("0.0002")
+                    fee = Decimal("0.0001")
+                    stressed_entry = entry * (1 + slip)
+                    stressed_exit = exit_price * (1 - slip)
+                    stressed_net_r = (stressed_exit - stressed_entry - fee * (stressed_entry + stressed_exit)) / risk
                     trade = {"entry_at": day_bars[next_index].start.isoformat(),
                              "entry": str(entry), "stop": str(stop),
                              "exit": str(exit_price), "exit_reason": exit_reason,
-                             "gross_r": str((exit_price - entry) / (entry - stop))}
+                             "gross_r": str((exit_price - entry) / risk),
+                             "stressed_net_r": str(stressed_net_r)}
         findings.append({
             "trade": trade,
             "date": day.isoformat(), "bars": len(actual),
@@ -394,7 +401,22 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
             "orb_breakout": hit is not None,
             "first_hit_at": hit.hit_at.isoformat() if hit else None,
         })
+    trades = [d["trade"] for d in findings if d["trade"] is not None]
+    gross = [Decimal(t["gross_r"]) for t in trades]
+    net = [Decimal(t["stressed_net_r"]) for t in trades]
+    equity = peak = drawdown = Decimal(0)
+    for result in net:
+        equity += result
+        peak = max(peak, equity)
+        drawdown = max(drawdown, peak - equity)
+    performance = {"completed": len(net), "gross_total_r": str(sum(gross, Decimal(0))),
+                   "stressed_net_total_r": str(sum(net, Decimal(0))),
+                   "stressed_max_drawdown_r": str(drawdown),
+                   "stressed_average_r": str(sum(net, Decimal(0)) / len(net)) if net else None,
+                   "cost_model": "2 bps adverse slippage each side; 1 bp fee each side",
+                   "qualification": "INSUFFICIENT_DATA" if len(net) < 30 else "UNVERIFIED"}
     return {
+        "performance": performance,
         "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "sessions": len(findings), "total_bars": len(rows),
         "orb_breakout_sessions": sum(1 for finding in findings if finding["orb_breakout"]),
