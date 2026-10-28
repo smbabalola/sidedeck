@@ -53,3 +53,37 @@ def test_missing_or_forged_inputs_fail_closed():
         assert result["status"] == "ATTENTION_REQUIRED"
         assert result["incidents"]
         assert not result["safe_to_trade"]
+
+
+def test_snapshot_reads_offline_diagnostics_without_running_cycle():
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+    from sidedeck.application.sd152_offline_operator_alerts import offline_operator_snapshot
+
+    class OfflineService:
+        def health(self, *, now):
+            return SimpleNamespace(report=lambda: healthy())
+
+        def recovery_dossier(self, *, now):
+            return dossier()
+
+        def run_due(self, **kwargs):
+            raise AssertionError("dashboard must not execute runner")
+
+    result = offline_operator_snapshot(OfflineService(), now=datetime.now(UTC))
+    assert result["status"] == "OBSERVATION_ONLY"
+    assert result["safe_to_trade"] is False
+
+
+def test_snapshot_unavailable_evidence_is_attention_required():
+    from datetime import UTC, datetime
+    from sidedeck.application.sd152_offline_operator_alerts import offline_operator_snapshot
+
+    class BrokenService:
+        def health(self, *, now):
+            raise RuntimeError("unavailable")
+
+    result = offline_operator_snapshot(BrokenService(), now=datetime.now(UTC))
+    assert result["status"] == "ATTENTION_REQUIRED"
+    assert result["incidents"] == ["OPERATOR_EVIDENCE_UNAVAILABLE"]
+    assert result["clear_halt_allowed"] is False
