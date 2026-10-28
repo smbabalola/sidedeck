@@ -297,6 +297,14 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--key-id-env", required=True)
     run.add_argument("--secret-env", required=True)
     run.add_argument("--out-dir", default="data/sd075b")
+    intraday = sub.add_parser("run-intraday")
+    intraday.add_argument("--authorization", required=True)
+    intraday.add_argument("--signature", required=True)
+    intraday.add_argument("--allowed-signers", default="data/approval_allowed_signers")
+    intraday.add_argument("--env-file", default=".env")
+    intraday.add_argument("--key-id-env", required=True)
+    intraday.add_argument("--secret-env", required=True)
+    intraday.add_argument("--out-dir", default="data/sd156")
     args = parser.parse_args(argv)
     if args.command == "proposal":
         print(json.dumps(proposal(), indent=2))
@@ -324,17 +332,36 @@ def main(argv: list[str] | None = None) -> int:
                          verifier=verifier, principal=PRINCIPAL, now=datetime.now(UTC))
     # Scope and credentials are checked before the single-use claim, so a misscoped
     # authorization or a missing/misnamed variable never burns it.
-    check_scope(auth)
+    if args.command == "run-intraday":
+        if (auth.provider != "ALPACA_SIP_INTRADAY"
+                or auth.urls != (ENDPOINT.format(symbol="SPY"),)
+                or auth.max_requests > 20 or auth.max_retries != 0):
+            raise AuthorizationRefused("intraday SPY authorization scope refused")
+    else:
+        check_scope(auth)
     key_id = _credential(args.env_file, args.key_id_env)
     secret = _credential(args.env_file, args.secret_env)
     claim_authorization(Path(args.authorization), auth)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     DEFAULT_LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    summary = run_pilot(auth, DataRequestLedger(DEFAULT_LEDGER, auth), out, key_id=key_id,
-                        secret=secret, now=lambda: datetime.now(UTC))
-    print(json.dumps({k: summary[k] for k in ("requests_used", "stopped_early", "coverage_counts",
-                                              "benchmark_status")}, indent=2))
+    if args.command == "run-intraday":
+        target = out / f"raw-spy-5min-{auth.authorization_id}.json"
+        if target.exists():
+            raise AuthorizationRefused("intraday raw output already exists")
+        summary = collect_signed_spy_five_minute(
+            auth, DataRequestLedger(DEFAULT_LEDGER, auth),
+            key_id=key_id, secret=secret, now=lambda: datetime.now(UTC),
+        )
+        target.write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
+        print(json.dumps({"bars": len(summary["bars"]), "pages": summary["pages"],
+                          "strategy_admission_eligible": False,
+                          "broker_execution": "DISABLED"}, indent=2))
+    else:
+        summary = run_pilot(auth, DataRequestLedger(DEFAULT_LEDGER, auth), out, key_id=key_id,
+                            secret=secret, now=lambda: datetime.now(UTC))
+        print(json.dumps({k: summary[k] for k in ("requests_used", "stopped_early", "coverage_counts",
+                                                  "benchmark_status")}, indent=2))
     print("BROKER_REQUESTS=0; ORDERS=0")
     return 0
 
