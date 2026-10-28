@@ -101,10 +101,14 @@ class OfflineSwingRunFence:
     def state(self) -> str:
         with closing(self._conn()) as conn:
             row = conn.execute(
-                "SELECT state FROM offline_swing_single_writer WHERE id=1"
+                "SELECT state,token,slot FROM offline_swing_single_writer WHERE id=1"
             ).fetchone()
         if row is None or row[0] not in {"IDLE", "RUNNING", "UNRESOLVED"}:
             raise OfflineRunnerRefused("single-writer durable fence is missing or corrupt")
+        if (row[0] == "IDLE" and row[1]
+                or row[0] in {"RUNNING", "UNRESOLVED"} and not row[2]
+                or row[0] == "RUNNING" and not row[1]):
+            raise OfflineRunnerRefused("durable fence state and worker identity conflict")
         return str(row[0])
 
     def health(self, *, now: datetime, stale_after_seconds: int = 120) -> OfflineFenceHealth:
@@ -123,6 +127,10 @@ class OfflineSwingRunFence:
             if row is None or row[0] not in {"IDLE", "RUNNING", "UNRESOLVED"}:
                 raise OfflineRunnerRefused("durable fence state missing or invalid")
             state, token, slot, updated_at = map(str, row)
+            if (state == "IDLE" and token
+                    or state in {"RUNNING", "UNRESOLVED"} and not slot
+                    or state == "RUNNING" and not token):
+                raise OfflineRunnerRefused("durable fence state and worker identity conflict")
             owner: str | None = None
             if state in {"RUNNING", "UNRESOLVED"}:
                 if not token and state == "RUNNING":
