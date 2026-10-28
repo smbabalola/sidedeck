@@ -1168,3 +1168,27 @@ def test_sd152_partial_open_forged_ownership_quantities_remain_blocked(setup, fi
     env.clock.now = NOW + timedelta(hours=2, minutes=35)
     assert service.run_due(owner="attempt-after-tamper").status == "RECOVERY_REQUIRED"
     assert tuple(route.calls) == before
+
+
+def test_sd152_scheduler_finish_failure_keeps_durable_fence_unresolved(setup, monkeypatch):
+    """No second-slot send after schedule bookkeeping fails post fake fill."""
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+
+    def unavailable(*args, **kwargs):
+        raise OSError("simulated scheduler storage outage")
+
+    monkeypatch.setattr(scheduler, "finish", unavailable)
+    with pytest.raises(OSError, match="scheduler storage outage"):
+        service.run_due(owner="worker-a", entry=proposal, entry_quote=quote)
+    assert fence.state() == "UNRESOLVED"
+    assert [method for method, _ in route.calls].count("POST") == 1
+    restarted = OfflineSwingScheduledService(
+        SchedulerStore(env.tmp / "schedule.sqlite3"),
+        OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+        controller, clock=env.clock,
+    )
+    assert restarted.run_due(owner="worker-b").status == "RECOVERY_REQUIRED"
+    assert [method for method, _ in route.calls].count("POST") == 1
