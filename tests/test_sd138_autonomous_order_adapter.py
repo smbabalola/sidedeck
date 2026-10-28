@@ -247,6 +247,27 @@ def test_sd138_final_pnl_baseline_drift_keeps_close_unresolved_and_halts(env, tm
     assert route.calls[-1] == ("GET", DEMO_PNL_PATH)
 
 
+def test_sd138_final_pnl_detects_changed_baseline_facts_with_same_ids(env, tmp_path):
+    gateway, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
+    proposal = env.entry()
+    adapter.submit_entry(proposal, quote=quote)
+    plan = env.rt.plan_exits(bids=env.bids("455"))
+    close_quote = signer.seal({
+        "canonical_id": proposal.canonical_id, "bid": "455", "ask": "456",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    route.baseline_rows[0]["units"] = 2
+    with pytest.raises(SD138Refused, match="stopped for reconciliation") as refused:
+        adapter.submit_exit(plan.exits[0], quote=close_quote)
+    assert isinstance(refused.value.__cause__, SD138Refused)
+    assert "protected four-position baseline" in str(refused.value.__cause__)
+    close_ref = str(UUID(hex=plan.exits[0].reference_id))
+    assert lineage.order(close_ref)["state"] == "ACCEPTED"
+    assert lineage.owned(880_001)["state"] == "OPEN"
+    assert env.ledger.kill_switch_engaged()
+    assert route.calls[-1] == ("GET", DEMO_PNL_PATH)
+
+
 def test_sd138_missing_audit_anchor_blocks_final_pnl_get_after_close(env, tmp_path):
     gateway, quote, signer, route, lineage, _path, adapter = _composed(env, tmp_path)
     proposal = env.entry()

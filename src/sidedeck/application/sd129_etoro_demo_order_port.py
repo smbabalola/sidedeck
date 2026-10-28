@@ -114,6 +114,18 @@ class EtoroDemoOrderPort:
             raise DemoLineageRefused("durable protected baseline is unavailable")
         return self._lineage.baseline_position_ids
 
+    @property
+    def baseline_order_ids(self) -> frozenset[int]:
+        if self._lineage is None:
+            raise DemoLineageRefused("durable protected baseline is unavailable")
+        return self._lineage.baseline_order_ids
+
+    def offline_baseline_payload(self) -> dict[str, Any]:
+        """Fixture-only capture of original baseline facts; never available to a live route."""
+        if not self.is_offline_fake_route:
+            raise DemoLineageRefused("baseline fixture is available only on the offline simulator")
+        return cast(OfflineEtoroDemoSimulator, self._route).offline_baseline_payload()
+
     def reconcile_full_close(self, *, reference_id: str, order_id: int,
                              position_id: int, closed_units: Decimal) -> None:
         if self._lineage is None:

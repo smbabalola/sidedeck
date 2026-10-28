@@ -22,6 +22,7 @@ from sidedeck.application.sd129_etoro_demo_order_port import (
 from sidedeck.domain.etoro_demo_orders import CloseOutcome, DemoCloseRequest, DemoOpenRequest
 from sidedeck.application.sd074_trusted_inputs import Envelope
 from sidedeck.domain.etoro_demo import parse_demo_portfolio
+from sidedeck.domain.etoro_demo_books import BaselinePosition, baseline_from, reconcile_demo
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,19 @@ class AutonomousEtoroDemoOrderAdapter:
         self._gate = policy_gateway
         self._port = order_port
         self._owners: dict[str, ConfirmedOpen] = {}
+        now = self._gate._clock()
+        try:
+            baseline_snapshot = parse_demo_portfolio(
+                self._port.offline_baseline_payload(), observed_at=now)
+            baseline_snapshot.require_fresh(now)
+            baseline = baseline_from(baseline_snapshot)
+        except Exception as exc:
+            raise SD138Refused("original protected baseline facts are unavailable") from exc
+        if (len(baseline) != 4
+                or {row.position_id for row in baseline} != set(self._port.baseline_position_ids)
+                or {row.order_id for row in baseline} != set(self._port.baseline_order_ids)):
+            raise SD138Refused("fixture baseline does not match configured protected lineage")
+        self._baseline: tuple[BaselinePosition, ...] = baseline
 
     def _book_for(self, proposal: EntryProposal) -> str:
         try:
@@ -254,13 +268,12 @@ class AutonomousEtoroDemoOrderAdapter:
             observed_at = self._gate._clock()
             snapshot = parse_demo_portfolio(payload, observed_at=observed_at)
             snapshot.require_fresh(observed_at)
-            baseline = self._port.baseline_position_ids
-            observed_ids = {position.position_id for position in snapshot.positions}
-            if (len(baseline) != 4 or observed_ids != set(baseline)
-                    or request.position_id in observed_ids or snapshot.pending_orders
+            reconciliation = reconcile_demo(snapshot, baseline=self._baseline,
+                                            attributions=(), now=observed_at)
+            if (reconciliation.status != "MATCHED" or snapshot.pending_orders
                     or snapshot.mirror_count != 0):
                 raise SD138Refused(
-                    "final fake portfolio does not show exactly the protected four-position baseline")
+                    "final fake portfolio does not show the protected four-position baseline")
 
             # Only the exact offline simulator exposes fixture economics; the typed
             # production-shaped close-info response itself has no execution price.
@@ -277,7 +290,7 @@ class AutonomousEtoroDemoOrderAdapter:
                 "RECONCILIATION", proposal.reference_id,
                 payload={"action": "FINAL_PNL_SIMULATION",
                          "snapshot_sha256": snapshot.payload_sha256,
-                         "baseline_position_ids": sorted(baseline),
+                         "baseline_position_ids": sorted(row.position_id for row in self._baseline),
                          "close_order_id": accepted.order_id,
                          "simulated_close_price": str(simulated_price)},
             )
@@ -288,7 +301,7 @@ class AutonomousEtoroDemoOrderAdapter:
             )
             self._gate._runtime.resolve(evidence)
             return AutonomousCloseResult(result, snapshot.payload_sha256,
-                                         tuple(sorted(baseline)))
+                                         tuple(sorted(row.position_id for row in self._baseline)))
         except Exception as exc:
             self._halt_ambiguous("AUTONOMOUS_CLOSE_UNRESOLVED")
             raise SD138Refused("autonomous close stopped for reconciliation") from exc
@@ -346,9 +359,10 @@ class AutonomousEtoroDemoOrderAdapter:
             observed_at = self._gate._clock()
             snapshot = parse_demo_portfolio(payload, observed_at=observed_at)
             snapshot.require_fresh(observed_at)
-            baseline = self._port.baseline_position_ids
-            if ({p.position_id for p in snapshot.positions} != set(baseline)
-                    or len(baseline) != 4 or snapshot.pending_orders or snapshot.mirror_count):
+            reconciliation = reconcile_demo(snapshot, baseline=self._baseline,
+                                            attributions=(), now=observed_at)
+            if (reconciliation.status != "MATCHED" or snapshot.pending_orders
+                    or snapshot.mirror_count):
                 raise SD138Refused("recovery snapshot differs from the protected baseline")
             simulated_price = self._port.simulated_close_fill_price(
                 close_read.acceptance.order_id)
@@ -362,7 +376,8 @@ class AutonomousEtoroDemoOrderAdapter:
                               payload={"action": "FINAL_PNL_RECOVERY_SIMULATION",
                                        "snapshot_sha256": snapshot.payload_sha256,
                                        "close_order_id": close_read.acceptance.order_id,
-                                       "baseline_position_ids": sorted(baseline),
+                                       "baseline_position_ids": sorted(
+                                           row.position_id for row in self._baseline),
                                        "simulated_close_price": str(simulated_price)})
             self._gate._publish_before_send(self._gate._clock())
             self._port.reconcile_full_close(
@@ -373,7 +388,7 @@ class AutonomousEtoroDemoOrderAdapter:
             else:
                 self._gate._runtime.resolve(evidence)
             return AutonomousCloseResult(close_read, snapshot.payload_sha256,
-                                         tuple(sorted(baseline)))
+                                         tuple(sorted(row.position_id for row in self._baseline)))
         except Exception as exc:
             self._halt_ambiguous("AUTONOMOUS_CLOSE_RECOVERY_UNRESOLVED")
             raise SD138Refused("close recovery failed closed; no POST was repeated") from exc

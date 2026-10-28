@@ -232,6 +232,11 @@ class EtoroDemoLineage:
         """Configured protected IDs, exposed read-only for whole-account checks."""
         return self._protected
 
+    @property
+    def baseline_order_ids(self) -> frozenset[int]:
+        """Configured protected order IDs, exposed read-only for whole-account checks."""
+        return self._protected_orders
+
     def close(self) -> None:
         self._db.close()
 
@@ -976,9 +981,16 @@ class OfflineEtoroDemoSimulator:
         return {"orderForClose": {"positionID": position_id, "instrumentID": body["InstrumentID"],
                                   "orderID": order_id, "unitsToDeduct": units, "statusID": 1}}
 
-    def pnl_payload(self, baseline_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    def pnl_payload(self, baseline_rows: list[dict[str, Any]], *,
+                    include_simulated: bool = True) -> dict[str, Any]:
         """A synthetic /pnl body: the given baseline rows plus open simulated positions."""
         rows = list(baseline_rows)
+        if not include_simulated:
+            return {"clientPortfolio": {"positions": rows, "credit": 0, "bonusCredit": 0,
+                                         "accountCurrencyId": 1, "mirrors": [], "orders": [],
+                                         "ordersForOpen": [], "ordersForClose": [],
+                                         "ordersForCloseMultiple": [], "entryOrders": [],
+                                         "exitOrders": [], "stockOrders": []}}
         closed: dict[int, Decimal] = {}
         for close in self._close_orders.values():
             for p in close["positions"]:
@@ -999,6 +1011,10 @@ class OfflineEtoroDemoSimulator:
                                     "ordersForOpen": [], "ordersForClose": [],
                                     "ordersForCloseMultiple": [], "entryOrders": [],
                                     "exitOrders": [], "stockOrders": []}}
+
+    def offline_baseline_payload(self) -> dict[str, Any]:
+        """Return only the fixture's immutable pre-SideDeck positions for baseline binding."""
+        return self.pnl_payload(self.baseline_rows, include_simulated=False)
 
 
 SYNTHETIC_BASELINE_ROWS = [
