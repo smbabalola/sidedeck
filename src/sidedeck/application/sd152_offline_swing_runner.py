@@ -739,6 +739,7 @@ class OfflineSwingScheduledService:
             self.fence.finish(token, at=self.clock(), safe=False, outcome="CLAIM_REFUSED")
             return RunnerOutcome("RECOVERY_REQUIRED", slot.isoformat(),
                                  "scheduler claim refused or stale owner; reconcile manually")
+        scheduler_finalized = False
         try:
             self.fence.heartbeat(token, owner=owner, at=self.clock())
             result = self.controller.tick(
@@ -750,6 +751,7 @@ class OfflineSwingScheduledService:
             # worker. A crash between these writes must leave RUNNING (manual
             # reconciliation), never IDLE with an unfinished scheduler claim.
             self.scheduler.finish(SWING_JOB, slot, owner, self.clock(), ok=success)
+            scheduler_finalized = True
             self.fence.finish(token, at=self.clock(), safe=success, outcome=result.status)
             return RunnerOutcome(
                 result.status, slot.isoformat(), "OFFLINE_SIMULATOR_ONLY", result,
@@ -757,11 +759,12 @@ class OfflineSwingScheduledService:
         except Exception:
             # Do not retry this cycle or automatically take over an unknown
             # state; a crash before this block also leaves RUNNING durable.
-            # Any failure leaves the durable worker unresolved. Avoid
-            # assuming the scheduler transaction succeeded or retrying a send.
-            if self.fence.state() == "IDLE":
-                raise OfflineRunnerRefused(
-                    "worker fence released before scheduler confirmation"
-                ) from None
+            # Preserve the original failure, but do not silently leave the
+            # scheduler lease active if it can be marked failed safely.
+            if not scheduler_finalized:
+                try:
+                    self.scheduler.finish(SWING_JOB, slot, owner, self.clock(), ok=False)
+                except Exception:
+                    pass  # The RUNNING fence still blocks automatic takeover.
             self.fence.finish(token, at=self.clock(), safe=False, outcome="EXCEPTION")
             raise
