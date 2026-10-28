@@ -55,3 +55,14 @@ def test_rejected_mismatched_digest_does_not_consume_nonce(tmp_path):
     with pytest.raises(ValueError, match="evidence invalid"):
         a.record(digest, _auth("b" * 64), nonce=nonce, at=at)
     assert a.record(digest, _auth(digest["dedup_sha256"]), nonce=nonce, at=at)["nonce_reserved"]
+
+
+def test_forged_digest_rejected_without_consuming_nonce(tmp_path):
+    store = AtomicOfflineAcknowledgement(tmp_path / "ack.sqlite3")
+    now = datetime(2026, 10, 28, 16, tzinfo=UTC)
+    digest = _digest("a" * 64)
+    nonce = "fixture-nonce-123456789"
+    forged = {**digest, "dedup_sha256": "a" * 64}
+    with pytest.raises(ValueError, match="evidence invalid"):
+        store.record(forged, _auth(forged["dedup_sha256"]), nonce=nonce, at=now)
+    assert store.record(digest, _auth(digest["dedup_sha256"]), nonce=nonce, at=now)["nonce_reserved"]
