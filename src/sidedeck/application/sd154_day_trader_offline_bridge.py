@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal, Refusal
@@ -36,6 +37,17 @@ class DayTraderBridgeResult:
             "broker_execution": "DISABLED",
             "execution_release": "ETORO_DEMO_NOT_RELEASED",
         }
+
+
+def _cutoff_covers_orb(value: Any, orb_cutoff: datetime) -> bool:
+    """Require native evidence to cover the completed ORB, without trusting it as proof."""
+    if type(value) is not str:
+        return False
+    try:
+        timestamp = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return timestamp.tzinfo is not None and orb_cutoff <= timestamp
 
 
 def run_day_trader_offline_cycle(
@@ -82,10 +94,15 @@ def run_day_trader_offline_cycle(
     elif not native_signals or not admissions:
         reasons = ("INDEPENDENT_NATIVE_STRATEGY_ADMISSION_REQUIRED",)
     elif any(
-        signal.kind != "signal"
+        type(signal) is not Envelope
+        or signal.kind != "signal"
+        or type(signal.payload) is not dict
+        or signal.payload.get("source_kind") != "NATIVE_STRATEGY"
         or signal.payload.get("canonical_id") != research_result.signal.canonical_id
         or signal.payload.get("track") != "DAY"
         or signal.payload.get("direction") != research_result.signal.direction
+        or not _cutoff_covers_orb(signal.payload.get("data_cutoff"),
+                                 research_result.signal.data_cutoff)
         for signal in native_signals
     ):
         # The independent native runner must describe the *same* opportunity;
