@@ -74,6 +74,11 @@ test("Day Trader readiness has five explicit gates and no broker unlock buttons"
   await expect(page.getByText("Autonomous eToro Demo execution")).toBeVisible();
   await expect(page.getByText("Not released", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("region", { name: "Readiness limits" })).toBeVisible();
+  const operator = page.getByRole("region", { name: "Offline operator diagnostics" });
+  await expect(operator).toBeVisible();
+  await expect(operator.getByText("Evidence unavailable")).toBeVisible();
+  await expect(operator.getByText("NOT CONFIGURED")).toBeVisible();
+  await expect(operator.getByText("Not available")).toBeVisible();
   await expect(page.getByRole("button", { name: /unlock|approve|buy|sell|order|close position|submit|execute/i })).toHaveCount(0);
 });
 
