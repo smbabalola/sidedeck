@@ -570,3 +570,52 @@ def test_sd141_normal_open_and_close_recovery_dossier_has_no_ledger_discrepancie
     assert service.recovery_dossier(now=NOW)["uncertain_orders"] == []
     assert "CROSS_LEDGER_RECONCILIATION_REQUIRED" not in service.inspect(now=NOW)["alerts"]
     assert [method for method, _ in route.calls].count("POST") == 2
+
+
+def test_sd140_expiry_alerts_with_open_position_never_authorize_a_close(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    proposal = env.entry()
+    controller.adapter.submit_entry(proposal, quote=quote)
+    before = tuple(route.calls)
+    env.clock.now = datetime(2026, 11, 6, 15, 0, tzinfo=UTC)
+    status = service.inspect(now=env.clock.now)
+    assert "SWING_POLICY_EXPIRY_WITHIN_24H_OPEN_POSITION" in status["alerts"]
+    assert "PROTECTIVE_GRANT_NOT_CONFIGURED_OPEN_POSITION" in status["alerts"]
+    assert status["broker_account_verified"] is False
+    env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+    overdue = service.inspect(now=env.clock.now)
+    assert "SWING_POLICY_EXPIRED_WITH_OPEN_POSITION" in overdue["alerts"]
+    assert "PROTECTIVE_GRANT_NOT_CONFIGURED_OPEN_POSITION" in overdue["alerts"]
+    assert tuple(route.calls) == before
+    assert lineage.owned(880_001)["state"] == "OPEN"
+
+
+def test_sd140_protective_grant_expiry_alert_is_unverified_and_read_only(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    proposal = env.entry()
+    controller.adapter.submit_entry(proposal, quote=quote)
+    from test_sd063_autonomous_demo_policy import _grant
+    from sidedeck.application.sd063_autonomous_demo_policy import protective_subject
+    import json
+    import uuid
+    grant = _grant(
+        env.policy, grant_id=str(uuid.uuid4()),
+        subject_digest=protective_subject(env.policy),
+        not_before=NOW, expires_at=datetime(2026, 11, 6, 20, 30, tzinfo=UTC),
+        purpose="offline expiry visibility; no authorised broker calls",
+    )
+    gateway = controller.adapter._gate
+    gateway._protective_grant = (json.loads(grant.canonical()), f"sig:{grant.digest()}")
+    env.clock.now = datetime(2026, 11, 6, 15, 0, tzinfo=UTC)
+    before = tuple(route.calls)
+    status = service.inspect(now=env.clock.now)
+    assert "SWING_POLICY_EXPIRY_WITHIN_24H_OPEN_POSITION" in status["alerts"]
+    assert "PROTECTIVE_GRANT_EXPIRY_WITHIN_24H_UNVERIFIED" in status["alerts"]
+    assert "PROTECTIVE_GRANT_SIGNATURE_AND_REVOCATION_CHECK_REQUIRED" in status["alerts"]
+    assert status["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    assert tuple(route.calls) == before
+    gateway._protective_grant = ({"expires_at": "not-a-time"}, "untrusted-signature")
+    malformed = service.inspect(now=env.clock.now)
+    assert "PROTECTIVE_GRANT_EXPIRY_DOCUMENT_UNREADABLE" in malformed["alerts"]
+    assert "PROTECTIVE_GRANT_SIGNATURE_AND_REVOCATION_CHECK_REQUIRED" in malformed["alerts"]
+    assert tuple(route.calls) == before
