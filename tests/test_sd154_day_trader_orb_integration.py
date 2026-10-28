@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from sidedeck.application.sd069_day_trader_methods import IntradayBar, orb_signal, METHOD_VERSION
 from sidedeck.application.sd071_decision_engine import StrategyAdmission
 from sidedeck.application.sd123_day_demo_integration import DayResearchResult
@@ -154,9 +156,6 @@ def test_inconsistent_research_result_status_cannot_open_day_position(tmp_path: 
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
-
-
-import pytest
 
 
 @pytest.mark.parametrize("strategy_id, version, track", [
