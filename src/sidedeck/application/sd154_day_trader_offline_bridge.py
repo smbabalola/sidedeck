@@ -61,7 +61,11 @@ def run_day_trader_offline_cycle(
         raise TypeError("requires Day Trader research result")
     proposal: EntryProposal | Refusal | None = None
     reasons: tuple[str, ...] = ()
-    if research_result.signal is None:
+    # Never reserve a new entry ahead of exit planning for an open DAY book.
+    # The controller must get the entire cycle to manage existing exposure first.
+    if controller.runtime.ledger.open_positions():
+        reasons = ("EXISTING_POSITION_EXIT_PRIORITY",)
+    elif research_result.signal is None:
         reasons = ("DAY_TRADER_NO_ENTRY_SIGNAL",)
     elif (research_result.signal.track != "DAY"
           or research_result.signal.source_kind != "DAY_TRADER_METHOD"
