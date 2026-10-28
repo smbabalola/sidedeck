@@ -393,3 +393,34 @@ def test_short_probe_is_bounded_and_not_a_full_year_grant(tmp_path):
     assert draft["scope"]["end"] == "2026-10-24T00:00:00Z"
     assert draft["scope"]["timeframe"] == "5Min"
 
+
+def test_inspect_saved_spy_orb_uses_native_scanner_and_refuses_gaps(tmp_path):
+    from datetime import timedelta
+    from sidedeck.application.sd078_alpaca_sip_pilot import inspect_saved_spy_orb
+    from sidedeck.application.p5_alpaca_history import MarketDataUnavailable
+
+    start = datetime(2026, 10, 22, 13, 30, tzinfo=UTC)
+    bars = []
+    for i in range(78):
+        value = 100 if i < 3 else 102
+        bars.append({
+            "timestamp_utc": (start + timedelta(minutes=i * 5)).isoformat(),
+            "o": str(value), "h": str(value + 1),
+            "l": str(value - 1), "c": str(value), "v": "500",
+        })
+    file = tmp_path / "spy.json"
+    document = {"schema": "sidedeck-alpaca-five-minute-raw/1",
+                "symbol": "SPY", "feed": "sip", "timeframe": "5Min",
+                "strategy_admission_eligible": False, "bars": bars}
+    file.write_text(json.dumps(document))
+    result = inspect_saved_spy_orb(file)
+    assert result["sessions"] == 1
+    assert result["total_bars"] == 78
+    assert result["orb_breakout_sessions"] == 1
+    assert result["strategy_admission_eligible"] is False
+    document["bars"].pop(4)
+    file.write_text(json.dumps(document))
+    with pytest.raises(MarketDataUnavailable, match="incomplete or nonconsecutive"):
+        inspect_saved_spy_orb(file)
+
+
