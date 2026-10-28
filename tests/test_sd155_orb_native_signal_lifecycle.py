@@ -113,6 +113,14 @@ def test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_en
         assert gateway._simulator.submitted_orders == 1
         assert not env.ledger.kill_switch_engaged()
         assert closed.report()["broker_execution"] == "DISABLED"
+        # A second scheduler observation cannot re-submit the historical ORB
+        # entry or re-close an already reconciled flat DAY position.
+        replay = run_day_trader_offline_cycle(
+            controller, research_result=research,
+        )
+        assert replay.cycle.open_positions == 0
+        assert gateway._simulator.submitted_orders == 1
+        assert replay.report()["broker_execution"] == "DISABLED"
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
