@@ -227,7 +227,6 @@ def test_signed_spy_five_minute_collects_real_timestamp_shape_offline(tmp_path):
 @pytest.mark.parametrize("stamp, expected", [
     ("2026-10-21T13:30:00Z", "outside signed date window"),
     ("2026-10-22T13:31:00Z", "off-grid"),
-    ("2026-10-22T20:00:00Z", "outside regular session"),
 ])
 def test_signed_five_minute_rejects_invalid_bar_time(tmp_path, stamp, expected):
     from sidedeck.application.sd077_data_authorization import DataAuthorization
@@ -256,3 +255,32 @@ def test_signed_five_minute_rejects_invalid_bar_time(tmp_path, stamp, expected):
     assert ledger.used() == 1
 
 
+
+def test_intraday_excludes_extended_hours_without_losing_opening_bar(tmp_path):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import collect_signed_spy_five_minute
+
+    auth = DataAuthorization(
+        authorization_id="sd156-extended", provider="ALPACA_SIP_INTRADAY",
+        purpose="fixture", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=1, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "extended.sqlite3", auth)
+    def opener(request, timeout=20):
+        rows = [{"t": t, "o": 100, "h": 101, "l": 99, "c": 100, "v": 500}
+                for t in ("2026-10-22T12:30:00Z", "2026-10-22T13:30:00Z",
+                          "2026-10-22T20:00:00Z")]
+        return _Resp(json.dumps({"bars": rows, "next_page_token": None}).encode())
+    result = collect_signed_spy_five_minute(
+        auth, ledger, key_id="fixture", secret="fixture",
+        now=lambda: NOW, opener=opener,
+    )
+    assert len(result["bars"]) == 1
+    assert result["bars"][0]["timestamp_utc"] == "2026-10-22T13:30:00+00:00"
+    assert result["excluded_extended_hours"] == 2
+    assert result["strategy_admission_eligible"] is False
