@@ -7,7 +7,7 @@ from sidedeck.application.sd123_day_demo_integration import DayResearchResult
 from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
 from sidedeck.application.sd154_day_trader_offline_bridge import run_day_trader_offline_cycle
 
-from test_sd063_autonomous_demo_policy import _offline_gateway
+from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
 from test_sd125_day_session_exits import _day_env, _day_entry
 
 
@@ -68,13 +68,13 @@ def test_day_trader_bridge_closes_existing_day_position_without_new_signal(
         )
         def fresh_quote():
             return signer.seal({
-                "canonical_id": "US:MSFT", "bid": "499", "ask": "500",
+                "canonical_id": MSFT, "bid": "499", "ask": "500",
                 "quote_time": (env.clock.now - timedelta(seconds=5)).isoformat(),
             })
         result = run_day_trader_offline_cycle(
             controller, research_result=research,
             planning_bids=(fresh_quote(),),
-            execution_bids={"US:MSFT": fresh_quote()},
+            execution_bids={MSFT: fresh_quote()},
         )
         assert result.cycle.status == "EXITS_CONFIRMED"
         assert result.cycle.open_positions == 0
