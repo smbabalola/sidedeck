@@ -6,6 +6,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+from uuid import UUID
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -722,4 +723,69 @@ os._exit(78)
     assert restarted.run_due(owner="replacement").status == "RECOVERY_REQUIRED"
     assert restarted.fence.state() == "IDLE"
     assert route.calls == []
+    assert scheduler.history("swing_review") == ()
+
+
+def test_sd141_actual_child_exit_after_durable_close_before_policy_resolution(setup):
+    """Hard-exit a child after SD-036 close settlement, before SD-063 result.
+
+    The close is synthetic persisted lineage, not broker execution evidence.
+    After termination the parent must detect the mismatch and refuse to send.
+    """
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    entry = env.entry()
+    controller.adapter.submit_entry(entry, quote=quote)
+    exit_plan = controller.runtime.plan_exits(bids=(seal_bid(signer, env, "455"),))
+    assert len(exit_plan.exits) == 1
+    close = exit_plan.exits[0]
+    parent_requests = tuple(route.calls)
+    child_code = """
+import os
+import sys
+sys.path.insert(0, sys.argv.pop(1))
+from decimal import Decimal
+from sidedeck.application.sd036_etoro_demo_desk import EtoroDemoLineage
+db, ref, intent, instrument, units = sys.argv[1:]
+lineage = EtoroDemoLineage(
+    db, baseline_position_ids=(11, 12, 13, 14),
+    baseline_order_ids=(9011, 9012, 9013, 9014),
+)
+lineage.record_pending(
+    reference_id=ref, kind="CLOSE", intent_id=intent,
+    book_id="etoro-demo:tradingagents", instrument_id=int(instrument),
+    units=Decimal(units), limit_rate=None, position_id=880001,
+)
+lineage.set_state(ref, "ACCEPTED", order_id=770002)
+lineage.reconcile_full_close(
+    reference_id=ref, order_id=770002, position_id=880001,
+    closed_units=Decimal(units),
+)
+os._exit(79)
+"""
+    child = subprocess.run(
+        [sys.executable, "-c", child_code,
+         str(Path(__file__).resolve().parents[1] / "src"),
+         str(env.tmp / "sd138-lineage.sqlite3"),
+         str(UUID(hex=close.reference_id)), close.reference_id,
+         str(close.etoro_instrument_id), str(close.units)],
+        check=False, capture_output=True, text=True, timeout=15,
+    )
+    assert child.returncode == 79, child.stderr
+    assert lineage.owned(880001)["state"] == "CLOSED"
+    assert env.ledger.state().exits[close.reference_id].outcome is None
+    resumed = OfflineSwingScheduledService(
+        SchedulerStore(env.tmp / "schedule.sqlite3"),
+        OfflineSwingRunFence(env.tmp / "single-writer.sqlite3"),
+        controller, clock=env.clock,
+    )
+    dossier = resumed.recovery_dossier(now=NOW)
+    assert any(
+        item["review_action"] == "DURABLE_CLOSE_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+        for item in dossier["uncertain_orders"]
+    )
+    assert resumed.run_due(owner="replacement").status == "RECOVERY_REQUIRED"
+    assert resumed.fence.state() == "IDLE"
+    assert tuple(route.calls) == parent_requests
+    assert [method for method, _ in route.calls].count("POST") == 1
     assert scheduler.history("swing_review") == ()
