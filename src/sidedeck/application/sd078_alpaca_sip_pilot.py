@@ -377,7 +377,7 @@ def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
                 if entry > stop:
                     exit_price = day_bars[-1].open
                     exit_reason = "EOD_LAST_BAR_OPEN_PROXY"
-                    for future in day_bars[next_index:]:
+                    for future in day_bars[next_index:-1]:
                         if future.low <= stop:
                             exit_price = min(stop, future.open)
                             exit_reason = "STOP"
