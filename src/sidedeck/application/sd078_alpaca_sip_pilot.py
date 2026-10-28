@@ -315,6 +315,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--key-id-env", required=True)
     run.add_argument("--secret-env", required=True)
     run.add_argument("--out-dir", default="data/sd075b")
+    intraday_draft = sub.add_parser("draft-intraday")
+    intraday_draft.add_argument("--out", required=True)
+    intraday_draft.add_argument("--owner-confirms-terms-reviewed", action="store_true")
     intraday = sub.add_parser("run-intraday")
     intraday.add_argument("--authorization", required=True)
     intraday.add_argument("--signature", required=True)
@@ -337,6 +340,30 @@ def main(argv: list[str] | None = None) -> int:
         target.write_text(draft_authorization(datetime.now(UTC),
                                               owner_terms_reviewed=True).canonical(),
                           encoding="utf-8")
+        print(f"DRAFT_WRITTEN={target}; NETWORK_REQUESTS=0")
+        return 0
+    if args.command == "draft-intraday":
+        if not args.owner_confirms_terms_reviewed:
+            parser.error("owner must review data-use terms before preparing intraday grant")
+        target = Path(args.out)
+        if target.exists():
+            parser.error("refusing to overwrite intraday draft")
+        issued = datetime.now(UTC)
+        auth = DataAuthorization(
+            authorization_id=f"sd156-spy-5min-{issued:%Y%m%d%H%M%S}",
+            provider="ALPACA_SIP_INTRADAY",
+            purpose="One-year SPY five-minute SIP historical research collection only",
+            urls=(ENDPOINT.format(symbol="SPY"),),
+            max_requests=20, max_retries=0, credentials_required=True,
+            issued_at=issued, expires_at=issued + timedelta(hours=24),
+            owner_terms_reviewed=True,
+            scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+                   "start": "2025-10-27T00:00:00Z", "end": "2026-10-24T00:00:00Z",
+                   "limit": "10000"},
+            notes="research only, no data purchase or broker orders",
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(auth.canonical(), encoding="utf-8")
         print(f"DRAFT_WRITTEN={target}; NETWORK_REQUESTS=0")
         return 0
     from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifier
