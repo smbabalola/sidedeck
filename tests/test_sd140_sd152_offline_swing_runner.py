@@ -300,3 +300,52 @@ def test_sd152_successful_tick_reports_heartbeat_without_new_network_capability(
     assert service.health(now=NOW).state == "IDLE"
     assert len(fence.history()) == 1
     assert route.calls == []
+
+
+def test_sd152_inspection_uses_only_durable_local_evidence(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    before = service.inspect(now=NOW)
+    assert before["policy_open_positions"] == 0
+    assert before["durable_owned_open_positions"] == 0
+    assert before["protected_original_positions"] == 4
+    assert before["broker_account_verified"] is False
+    assert before["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    assert route.calls == []
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert service.run_due(owner="worker-a", entry=proposal,
+                           entry_quote=quote).status == "ENTRY_CONFIRMED"
+    post_count = [method for method, _ in route.calls].count("POST")
+    observed = service.inspect(now=NOW + timedelta(seconds=1))
+    assert observed["policy_open_positions"] == 1
+    assert observed["durable_owned_open_positions"] == 1
+    assert observed["durable_unknown_order_count"] == 0
+    assert observed["durable_pending_submit_count"] == 0
+    assert observed["policy_kill_switch"] is False
+    assert observed["fence"]["state"] == "IDLE"
+    assert [method for method, _ in route.calls].count("POST") == post_count
+
+
+def test_sd152_inspection_surfaces_ambiguous_close_without_broker_calls(setup):
+    env, quote, signer, route, lineage, controller, scheduler, fence, service = setup
+    allow_fake_schedule(scheduler)
+    proposal = env.entry()
+    assert service.run_due(owner="worker-a", entry=proposal,
+                           entry_quote=quote).status == "ENTRY_CONFIRMED"
+    env.clock.now = NOW + timedelta(hours=2, minutes=35)
+    route.lose_next_response = True
+    result = service.run_due(
+        owner="worker-b",
+        planning_bids=(seal_bid(signer, env, "455"),),
+        execution_bids={MSFT: seal_bid(signer, env, "455")},
+    )
+    assert result.status == "HALTED"
+    call_count = len(route.calls)
+    observed = service.inspect(now=env.clock.now + timedelta(seconds=1))
+    assert observed["policy_kill_switch"] is True
+    assert observed["fence"]["state"] == "UNRESOLVED"
+    assert observed["durable_unknown_order_count"] == 1
+    assert "ORDER_LINEAGE_RECONCILIATION_REQUIRED" in observed["alerts"]
+    assert "MANUAL_RECONCILIATION_REQUIRED_NO_AUTOMATIC_TAKEOVER" in observed["alerts"]
+    assert "POLICY_KILL_SWITCH_ENGAGED" in observed["alerts"]
+    assert len(route.calls) == call_count
