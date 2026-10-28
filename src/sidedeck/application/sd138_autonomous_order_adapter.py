@@ -91,6 +91,9 @@ class AutonomousEtoroDemoOrderAdapter:
                 self._port.offline_baseline_payload(), observed_at=now)
             baseline_snapshot.require_fresh(now)
             baseline = baseline_from(baseline_snapshot)
+            # First binding occurs only before any reserved order. After restart,
+            # changed fixture holdings must not become a new trusted baseline.
+            self._port.bind_offline_original_baseline(baseline)
         except Exception as exc:
             raise SD138Refused("original protected baseline facts are unavailable") from exc
         if (len(baseline) != 4
