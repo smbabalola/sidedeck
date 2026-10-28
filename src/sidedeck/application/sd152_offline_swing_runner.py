@@ -491,6 +491,27 @@ class OfflineSwingScheduledService:
                     "signed_read_and_audit_required": True,
                     "automatic_post_allowed": False,
                 })
+        # An extra locally "owned" position with no opening order is never
+        # evidence of valid SideDeck ownership.  Fail closed even when all
+        # previously known OPEN/CLOSE rows appear fully settled.
+        for pos in owned.values():
+            linked = [
+                row for row in orders if row["kind"] == "OPEN"
+                and row["state"] == "ACCEPTED"
+                and row["reference_id"] == pos["reference_id"]
+                and row["order_id"] == pos["order_id"]
+            ]
+            if len(linked) != 1:
+                items.append({
+                    "reference_id": str(pos["reference_id"]),
+                    "kind": "OWNED_POSITION",
+                    "durable_state": str(pos["state"]),
+                    "accepted_order_id": int(pos["order_id"]),
+                    "owned_position_id": int(pos["position_id"]),
+                    "review_action": "ORPHAN_OWNED_POSITION_MANUAL_REVIEW",
+                    "signed_read_and_audit_required": True,
+                    "automatic_post_allowed": False,
+                })
         if state.killed:
             status = "HALTED_REVIEW_REQUIRED"
         elif fence.state != "IDLE" or items:
