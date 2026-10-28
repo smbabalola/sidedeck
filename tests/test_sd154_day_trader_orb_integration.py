@@ -154,3 +154,49 @@ def test_inconsistent_research_result_status_cannot_open_day_position(tmp_path: 
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+import pytest
+
+
+@pytest.mark.parametrize("strategy_id, version, track", [
+    ("unrelated.method", METHOD_VERSION, "DAY"),
+    ("day_trader_skill.orb", "forged-method-version", "DAY"),
+    ("day_trader_skill.orb", METHOD_VERSION, "SWING"),
+])
+def test_mismatched_research_admission_cannot_enter(
+    tmp_path: Path, strategy_id: str, version: str, track: str,
+):
+    now = datetime(2026, 11, 27, 15, 0, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env, fill_price="500")
+    try:
+        bars = tuple(
+            IntradayBar(
+                start=now - timedelta(minutes=30 - 5 * i),
+                open=Decimal("500"), high=Decimal("502") if i < 3 else Decimal("505"),
+                low=Decimal("499"), close=Decimal("501") if i < 3 else Decimal("504"),
+                volume=Decimal("10000"),
+            ) for i in range(4)
+        )
+        signal = orb_signal(MSFT, bars, now)
+        assert signal is not None
+        research = DayResearchResult(
+            signal=signal,
+            admission=StrategyAdmission(
+                strategy_id, version, track, "RESEARCH_ONLY",
+                "fixture-chart-not-oos", 0, False,
+            ),
+            metadata={"data_basis": "SYNTHETIC_FIXTURE"}, status="RESEARCH_ONLY",
+        )
+        result = run_day_trader_offline_cycle(
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            research_result=research,
+        )
+        assert result.proposal_reasons == ("UNTRUSTED_DAY_TRADER_RESEARCH",)
+        assert result.cycle.status == "NO_TRADE"
+        assert gateway._simulator.submitted_orders == 0
+        assert not env.ledger.open_positions()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
