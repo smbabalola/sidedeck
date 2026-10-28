@@ -19,6 +19,17 @@
 4. This slice **intentionally provides no automatic recovery/clear-unresolved action**. A future independently reviewed operator-only reconciliation + signed recovery protocol is required before safe unattended restart/deployment; hand-editing the SQLite fence is prohibited as an operational procedure.
 5. Do not interpret a green offline run as a genuine strategy qualification, real broker economics or a live pilot.
 
+## SD-141 read-only recovery dossier and bounded 404 fallback (28 October 2026)
+
+**Verified code/test:** `8d520419404b1d43f99e9c098ad837a3cc4bb2e1`, [exact-head CI 40658060978 PASS](https://github.com/smbabalola/sidedeck/actions/runs/40658060978): **1,907 passed / 2 skipped**, Ruff, mypy (206 files), SQLite Alembic, dashboard and browser E2E. Earlier dossier slice `00321f5` passed [CI 40657613794](https://github.com/smbabalola/sidedeck/actions/runs/40657613794) (1,904 passed / 2 skipped).
+
+- `OfflineSwingScheduledService.recovery_dossier(now)` reads only SD-036 persisted order lineage and the local SD-063 policy/SD-152 fence. It returns **zero broker requests**, no grants, no recovery authority and no release/reset action; its `broker_account_verified` field is **false**. This is an operator *request plan*, never a brokerage source of truth.
+- An `OPEN` with no trusted accepted orderId: request a separately signed, audited **GET by the original order reference**. Never infer order failure from a 404 and never repeat POST. An accepted opening with a durable orderId can be independently checked by reference and, after an initial 404, by that saved orderId.
+- The SD-138 offline fake recovery path now reauthorises a **separate read reference** for exactly one follow-up GET by durable accepted orderId if the first GET returned a simulated 404. Neither GET reopens the position or clears owner HALT; if both return 404, state remains unresolved and no third GET/POST is sent. This offline fixture currently has no audited wall-clock wait interval; real HTTP timing/backoff and provider rate limits **remain blocked for future review**, and cannot be inferred from these fixtures.
+- A `CLOSE` with `OUTCOME_UNKNOWN` or `PENDING_SUBMIT` and **no accepted close orderId** must receive separately authorised, baseline-verified whole-account reconciliation; broker close-info cannot be invented. A persisted accepted CLOSE with orderId requires **signed close-info GET followed by independently authorised /pnl** and matching original four-position baseline before a full close may be classified. Both routes forbid any replacement close POST.
+- `run_due()` checks the durable SD-036 uncertainties **even if the SD-152 singleton fence is IDLE**. An orphaned open reservation, unresolved close or an accepted close awaiting reconciliation returns `RECOVERY_REQUIRED` without consuming a schedule slot or making any simulated broker call. The owner release remains locked.
+- The signed GET operator/reconciliation workflow and any safe eventual recovery of an `UNRESOLVED` worker are still **not implemented or approved**. No manual SQLite edits, no self-grants, no auto-retry, no unlock.
+
 ## Verified test matrix
 
 - Default locked mode cannot start a trading cycle.
@@ -35,7 +46,7 @@
 ## Open engineering work — do not mark SD-140/152 complete
 
 - SD-140: DAY/POSITION scheduling integration, exchange DST/half-day adversity, protective expiry renewal/close continuity and clock-fencing against revoked grants at send time. The SD-125/126 DAY offline logic already exists and must be reused.
-- SD-141: a complete production-shaped fake HTTP threat matrix including mid-cycle worker death, stale leader, accepted->404 delayed recovery, unknown/multi/partial fills, revoked grants, anchor loss and baseline mutation.
+- SD-141: **first accepted-order 404/ref-ID fallback, unknown-close classification and orphan-order fencing pass offline tests**, but a complete production-shaped fake HTTP threat matrix is still required: simulated mid-cycle process death, independently reviewed live-timing/backoff and GET budgets, partial/multi-fill, revocation during fallback, stale leader, anchor loss and cross-ledger race/corruption.
 - SD-152: **heartbeat and local read-only inspection now have first offline implementations**, but still need a continuously supervised service/CLI, independent alert delivery, read-only broker GET recovery protocol, operational dashboard, multi-session soak, independent worker/leader security review and externally immutable anchor deployment. Never auto-clear an uncertain RUNNING or UNRESOLVED fence.
 - SD-143/144: Alpaca lawful historical data and independent true point-in-time swing strategy admission. New authenticated reads and subscriptions still need separate approval.
 - SD-146/149/150/151: independent security/ops review, complete release dossier, signed owner-only Demo canary and observed one-month Demo soak.
