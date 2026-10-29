@@ -47,3 +47,12 @@ Compute signed absolute UTC endpoints from New York calendar sessions at authori
 ## Human decision, only when prerequisites are met
 
 A later authorisation must enumerate the verified account entitlement, terms evidence, exact UTC boundaries, page/retry/GET budget, permitted local storage and cross-broker uses, costs (if any) and expiry. No such authorisation has been made. Until then **zero authenticated Alpaca calls**, zero purchase, eToro Demo `NOT_RELEASED`, historical HALT unchanged.
+
+## Verified offline authorization-contract inspection (29 October)
+
+The current `src/sidedeck/application/sd077_data_authorization.py` already recognises the `ALPACA_SIP_INTRADAY` provider and **only** allows the approved `data.alpaca.markets` HTTPS host. Its `DataAuthorization` type requires all six exact query dimensions: `timeframe=5Min`, `feed=sip`, `adjustment=split`, `start`, `end`, and `limit=10000`; page tokens may vary, but repeated or oversized tokens are rejected. An owner's signed authorization must be short-lived (at most seven days), with a separately persisted request ledger, a bounded request count and retries. The broker/order paths remain disallowed.
+
+**Remaining implementation/evidence split:** This validates only the *local authorization contract*, not a historical SIP collector actually using the scope, complete pagination, immutable persisted provider evidence, account-specific licensing or a genuine strategy result. A fixed `max_requests=3`, `max_retries=0`, and the single SPY URL would be **proposed parameters** for a future signed approval, not an existing grant. The signed `scope.start` and `scope.end` must be calculated using exchange-session UTC boundaries and approved separately.
+
+**No call may be made yet.** The owner's two YES answers describe desired SideDeck functionality and cannot replace the provider's written permission for local archival and eToro-cross-broker automated/non-display use. Do not set `owner_terms_reviewed=True` merely because this review was performed; that flag does not constitute the missing licence.
+
