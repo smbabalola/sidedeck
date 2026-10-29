@@ -888,3 +888,40 @@ def drive_offline_day_sequence(
         if result.get("status") in {"HALTED", "RECOVERY_REQUIRED", "LOCKED"}:
             break
     return tuple(outcomes)
+
+
+def run_offline_day_service_loop(
+    service: OfflineDayScheduledService, *,
+    owner: str,
+    inputs: Callable[[], Mapping[str, Any]],
+    wait: Callable[[], None],
+    stop_requested: Callable[[], bool],
+    max_polls: int = 100,
+) -> tuple[dict[str, Any], ...]:
+    """Bounded simulation-only polling loop over the durable DAY service.
+
+    The host supplies clock progression, validated offline inputs and a wait
+    primitive. No sleeper, daemon, network client or credential reader is
+    constructed here. An unresolved or locked state stops immediately.
+    """
+    if type(service) is not OfflineDayScheduledService or not owner.strip():
+        raise OfflineRunnerRefused("exact offline DAY service and worker required")
+    if not 1 <= max_polls <= 1000:
+        raise OfflineRunnerRefused("bounded DAY poll count required")
+    outcomes: list[dict[str, Any]] = []
+    for index in range(max_polls):
+        if stop_requested():
+            break
+        provided = inputs()
+        if not isinstance(provided, Mapping):
+            raise OfflineRunnerRefused("offline DAY tick inputs must be a mapping")
+        allowed = {"planning_bids", "execution_bids", "entry", "entry_quote", "entry_marks"}
+        if set(provided) - allowed:
+            raise OfflineRunnerRefused("unexpected DAY tick input refused")
+        result = service.run_due(owner=owner, **provided)
+        outcomes.append(result)
+        if result["status"] in {"HALTED", "RECOVERY_REQUIRED", "LOCKED"}:
+            break
+        if index + 1 < max_polls and not stop_requested():
+            wait()
+    return tuple(outcomes)
