@@ -15,6 +15,14 @@ This is a **reviewer handoff**, not an independent security attestation or a tra
 | G4 owner scope / historical HALT | BLOCKED_OWNER | §21 `SIDEDECK_STEERING.md`; old pilot HALTED and 4 protected Demo holdings | Fresh baseline and signed, expiring, bounded owner release plus distinct authorised reset after reconciled state |
 | G5 canary | NOT_RELEASED | Never executed by this workstream | All prior release gates PASS, independently monitored Demo-only open/fill/close and fresh /pnl baseline reconciliation |
 
+## Specific evidence decisions from committed packets (29 October review)
+
+- **Data, SD-143:** `docs/SD143_INTRADAY_SOURCE_DECISION.md` records the owner's Alpaca preference, but no authorisation for new intraday requests. Historical SIP coverage and public provider terms do **not** establish this account's permitted storage, replay, personal/business use, or cross-broker eToro signal rights. The proposed SPY 5m read remains unsigned and unperformed. TradingView chart data is not accepted as an automated feed.
+- **Strategy, Bundle D:** `docs/SD153_BUNDLE_D_SWING_ADMISSION_PACKET.md` explicitly reports no reproducible raw SPY/QQQ/MSFT bars or signed manifests in that checkout. Its reported pooled channel mean reversion was **REJECTED** despite 76 historical OOS trades: PF 1.15, bootstrap lower PF 0.56, PF 0.92 with 2× costs and concentration failure. Liquidity sweep (20 trades) and MA trend (23 trades) were **INSUFFICIENT**. These are previously recorded figures, not a fresh reproduction. **G3 is FAIL/NO_GO for these candidates**, not just pending signatures.
+- **Security, Bundle R:** `docs/SD153_BUNDLE_R_SECURITY_REVIEW.md` reports offline-tested durable per-stage recovery GET fences, bounded transient fake GET retries and unsigned evidence manifests. It explicitly lacks remote immutable anchors, independently signed review, authentic broker evidence and independently authorised operator recovery.
+- **Operations, Bundle O:** `docs/SD152_BUNDLE_O_SECURITY_OPERATIONS_CLOSURE.md` identifies unauthenticated operator identity, unverified alert delivery and no deployed watch/alert service or external anchor. A local outbox record is not a delivered alert.
+- **First external dependency:** a legitimate provider-specific entitlement and data-path decision (e.g. the existing Alpaca candidate) with fresh raw reproducible bars. This alone cannot produce strategy admission; genuine research must still pass. Do not request a Demo order release now.
+
 ## Non-negotiable canary acceptance contract
 1. Only eToro virtual Demo; eToro Real permanently excluded. The existing historical HALT is not reset from engineering authority.
 2. Explicit fixed strategy, immutable digest, symbol and book; hard time, cash, exposure, position, write and request caps. A signer separate from the autonomous strategy/controller approves the digest.
