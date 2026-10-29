@@ -929,3 +929,37 @@ def run_offline_day_service_loop(
         if index + 1 < max_polls and not stop_requested():
             wait()
     return tuple(outcomes)
+
+
+def run_offline_day_process(
+    service: OfflineDayScheduledService, *,
+    owner: str,
+    inputs: Callable[[], Mapping[str, Any]],
+    interval_seconds: float = 1.0,
+    max_polls: int = 100,
+    stop_requested: Callable[[], bool] = lambda: False,
+) -> tuple[dict[str, Any], ...]:
+    """Blocking offline process entrypoint with a real monotonic wait.
+
+    A caller must construct the exact simulator service and an approved local
+    fixture input provider. This cannot instantiate a broker, obtain credentials,
+    auto-recover HALT or widen the release state. Bounded for testability.
+    """
+    import time
+
+    if not 0.01 <= interval_seconds <= 300:
+        raise OfflineRunnerRefused("DAY process interval outside bounded range")
+
+    def wait() -> None:
+        deadline = time.monotonic() + interval_seconds
+        while not stop_requested():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 0.25))
+
+    return run_offline_day_service_loop(
+        service, owner=owner, inputs=inputs, wait=wait,
+        stop_requested=stop_requested, max_polls=max_polls,
+        stop_on_confirmed_flat=True,
+    )
