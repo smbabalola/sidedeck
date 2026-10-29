@@ -796,3 +796,66 @@ def test_day_scheduled_offline_soak_across_sessions_no_reentry(tmp_path):
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_completed_cycle_fence_is_idle_in_new_os_process(tmp_path):
+    """Cold Python process reads committed DAY completion without resetting state."""
+    import json
+    import subprocess
+    import sys
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    now = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, entry_quote, signer = _offline_gateway(
+        env, storage_path=tmp_path / "sim.sqlite3",
+    )
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    scheduler = SchedulerStore(schedule_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    def worker():
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+    try:
+        assert worker().run_due(
+            owner="first-process", entry=_day_entry(env),
+            entry_quote=entry_quote,
+        )["status"] == "ENTRY_CONFIRMED"
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        assert worker().run_due(
+            owner="first-process-close",
+            planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )["status"] == "EXITS_CONFIRMED"
+        script = (
+            "import sys,json;"
+            "sys.path.insert(0,str(__import__('pathlib').Path.cwd()/'src'));"
+            "from pathlib import Path;"
+            "from sidedeck.application.sd152_offline_swing_runner import OfflineSwingRunFence;"
+            "print(json.dumps({'state':OfflineSwingRunFence(Path(sys.argv[1])).state()}))"
+        )
+        child = subprocess.run(
+            [sys.executable, "-c", script, str(fence_path)],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert child.returncode == 0, child.stderr
+        assert json.loads(child.stdout) == {"state": "IDLE"}
+        assert worker().run_due(owner="cold-replay")["status"] == "NO_DUE_SLOT"
+        assert gateway._simulator.submitted_orders == 1
+        assert env.ledger.open_positions() == ()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
