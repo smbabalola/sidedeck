@@ -626,3 +626,66 @@ def test_day_polling_loop_completes_entry_monitor_close_without_manual_ticks(tmp
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_timed_process_runner_completes_offline_full_cycle(tmp_path):
+    """Real timed polling, fake clock and signed local fixture inputs; no broker I/O."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence, run_offline_day_process,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    moments = (
+        datetime(2026, 11, 27, 15, 5, tzinfo=UTC),
+        datetime(2026, 11, 27, 15, 10, tzinfo=UTC),
+        datetime(2026, 11, 27, 17, 50, tzinfo=UTC),
+    )
+    env = _day_env(tmp_path, moments[0])
+    gateway, entry_quote, signer = _offline_gateway(env)
+    scheduler = SchedulerStore(tmp_path / "schedule.sqlite3")
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    fence = OfflineSwingRunFence(tmp_path / "fence.sqlite3")
+    service = OfflineDayScheduledService(
+        scheduler, fence,
+        OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+        clock=env.clock,
+    )
+    proposal = _day_entry(env)
+    count = [0]
+
+    def inputs():
+        index = count[0]
+        count[0] += 1
+        env.clock.now = moments[index]
+        if index == 0:
+            return {"entry": proposal, "entry_quote": entry_quote}
+        if index == 1:
+            return {"planning_bids": (_quote(signer, env.clock.now),)}
+        return {
+            "planning_bids": (_quote(signer, env.clock.now),),
+            "execution_bids": {MSFT: _quote(signer, env.clock.now)},
+        }
+
+    try:
+        reports = run_offline_day_process(
+            service, owner="offline-timed-worker", inputs=inputs,
+            interval_seconds=0.01, max_polls=6,
+        )
+        assert [r["status"] for r in reports] == [
+            "ENTRY_CONFIRMED", "NO_TRADE", "EXITS_CONFIRMED",
+        ]
+        assert count[0] == 3
+        assert env.ledger.open_positions() == ()
+        assert gateway._simulator.submitted_orders == 1
+        assert fence.state() == "IDLE"
+        assert not env.ledger.kill_switch_engaged()
+        assert reports[-1]["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
