@@ -56,3 +56,11 @@ The current `src/sidedeck/application/sd077_data_authorization.py` already recog
 
 **No call may be made yet.** The owner's two YES answers describe desired SideDeck functionality and cannot replace the provider's written permission for local archival and eToro-cross-broker automated/non-display use. Do not set `owner_terms_reviewed=True` merely because this review was performed; that flag does not constitute the missing licence.
 
+
+## Revised architecture decision — ephemeral raw-data handling (29 October)
+
+**Permanent retention of raw Alpaca bars is optional, not a release prerequisite.** The preferred acquisition design processes authorised payloads in memory or an access-controlled temporary workspace, computes input hashes and session/corporate-action validation, performs the offline research, then disposes of raw bars and temporary copies after the authorised run. Do not log full payloads, write raw bars into the repo, retain them in backup/cache, or automatically archive them. If a future independent reproducibility review requires an exact raw dataset, arrange a separately licensed archive or a separately authorised re-fetch; a hash and method alone do **not** guarantee reproducibility.
+
+Persist only non-price-bearing metadata *where the licence allows it*: provider/source identity, entitlement decision reference, query bounds, UTC acquisition time, page count, cryptographic payload hashes, transformation code/version, calendar/adjustment declarations, signed research configuration, holdout identity, summary metrics and audit decisions. Store no bar arrays or invertible derived per-bar series under this policy; retain trade/event details only when licensing allows them. Broker/order/position lineage, risk grants, security audit and incident evidence remain durable independently of this feed-lifecycle choice.
+
+**Rights still required:** authorised download and transient processing, any permitted derived metadata/outputs, automated non-display use, and signals intended for eToro Demo. Eliminating permanent storage does not waive those rights or imply that Alpaca has granted them. The previously recorded YES to retention is superseded as a design preference, not as evidence that any terms were accepted. Until provider rights and a signed narrow acquisition are established, send no Alpaca GETs.
