@@ -859,3 +859,66 @@ def test_day_completed_cycle_fence_is_idle_in_new_os_process(tmp_path):
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_open_position_is_readable_from_new_os_process(tmp_path):
+    """The actual SQLite policy ledger can be reopened by a cold Python process."""
+    import subprocess
+    import sys
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    now = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, entry_quote, signer = _offline_gateway(env, storage_path=tmp_path / "sim.sqlite3")
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    scheduler = SchedulerStore(schedule_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def worker():
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    script = (
+        "import sys;"
+        "from pathlib import Path;"
+        "from datetime import datetime;"
+        "sys.path[:0]=[str(Path.cwd()/'src'),str(Path.cwd()/'tests')];"
+        "from test_sd125_day_session_exits import _day_env;"
+        "p=Path(sys.argv[1]);"
+        "e=_day_env(p,datetime.fromisoformat(sys.argv[2]));"
+        "assert len(e.ledger.open_positions())==1;"
+        "e.ledger.close()"
+    )
+    try:
+        assert worker().run_due(
+            owner="open-parent", entry=_day_entry(env), entry_quote=entry_quote,
+        )["status"] == "ENTRY_CONFIRMED"
+        child = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path), now.isoformat()],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert child.returncode == 0, child.stderr
+        assert len(env.ledger.open_positions()) == 1
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        assert worker().run_due(
+            owner="close-parent", planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )["status"] == "EXITS_CONFIRMED"
+        assert env.ledger.open_positions() == ()
+        assert gateway._simulator.submitted_orders == 1
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
