@@ -768,3 +768,95 @@ class OfflineSwingScheduledService:
                     pass  # The RUNNING fence still blocks automatic takeover.
             self.fence.finish(token, at=self.clock(), safe=False, outcome="EXCEPTION")
             raise
+
+
+class OfflineDayScheduledService:
+    """Durably fence SD-126 DAY ticks; never imports a live broker transport.
+
+    Uses the existing SD-068 scheduler and SD-152 cross-process fence.
+    A crash or ambiguous outcome requires operator reconciliation. This is an
+    explicit offline tick entrypoint, NOT a daemon or eToro release.
+    """
+
+    JOB = "day_candidate_scan"
+
+    def __init__(
+        self, scheduler: SchedulerStore, fence: OfflineSwingRunFence,
+        controller: "OfflineDayCycleController", *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+
+        if (type(scheduler) is not SchedulerStore
+                or type(fence) is not OfflineSwingRunFence
+                or type(controller) is not OfflineDayCycleController
+                or self.JOB not in scheduler.jobs):
+            raise OfflineRunnerRefused("DAY requires exact existing offline components")
+        job = scheduler.jobs[self.JOB]
+        if job.track != "DAY" or job.calendar_id != "XNYS":
+            raise OfflineRunnerRefused("DAY requires the XNYS DAY schedule")
+        self.scheduler, self.fence, self.controller, self.clock = (
+            scheduler, fence, controller, clock,
+        )
+
+    def run_due(
+        self, *, owner: str,
+        planning_bids: Sequence[Envelope] = (),
+        execution_bids: Mapping[str, Envelope] | None = None,
+        entry: EntryProposal | Refusal | None = None,
+        entry_quote: Envelope | None = None,
+        entry_marks: Sequence[Envelope] = (),
+    ) -> dict[str, Any]:
+        now = self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise OfflineRunnerRefused("DAY requires timezone-aware time")
+        result: dict[str, Any] = {
+            "schema": "sidedeck.sd152.offline-day-scheduled/1",
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+            "broker_route": "SIMULATED_LOCAL",
+        }
+
+        def outcome(status: str, detail: str, slot: str | None = None,
+                    cycle: Any = None) -> dict[str, Any]:
+            return {**result, "status": status, "detail": detail, "slot": slot,
+                    "cycle": None if cycle is None else cycle.report()}
+
+        if self.fence.state() != "IDLE":
+            return outcome("RECOVERY_REQUIRED", "durable DAY fence not idle")
+        if self.controller.runtime.ledger.kill_switch_engaged():
+            return outcome("HALTED", "policy kill switch engaged")
+        job = self.scheduler.jobs[self.JOB]
+        if self.scheduler.effective_mode(job) != "SIMULATION_ONLY":
+            return outcome("LOCKED", "DAY simulation not explicitly enabled")
+        due = [run for run in self.scheduler.due(now) if run.job_id == self.JOB]
+        if not due:
+            return outcome("NO_DUE_SLOT", "no eligible DAY slot")
+        slot = due[-1].slot
+        iso = slot.isoformat()
+        token = self.fence.acquire(slot, owner=owner, at=now)
+        if token is None:
+            return outcome("RECOVERY_REQUIRED", "DAY slot already fenced", iso)
+        claim = self.scheduler.claim(self.JOB, slot, owner, now)
+        if not claim.claimed or claim.reason == "LEASE_TAKEOVER":
+            self.fence.finish(token, at=self.clock(), safe=False, outcome="CLAIM_REFUSED")
+            return outcome("RECOVERY_REQUIRED", "DAY scheduler refused claim", iso)
+        finalized = False
+        try:
+            self.fence.heartbeat(token, owner=owner, at=self.clock())
+            cycle = self.controller.tick(
+                planning_bids=planning_bids, execution_bids=execution_bids,
+                entry=entry, entry_quote=entry_quote, entry_marks=entry_marks,
+            )
+            safe = cycle.status != "HALTED" and not self.controller.runtime.ledger.kill_switch_engaged()
+            self.scheduler.finish(self.JOB, slot, owner, self.clock(), ok=safe)
+            finalized = True
+            self.fence.finish(token, at=self.clock(), safe=safe, outcome=cycle.status)
+            return outcome(cycle.status, "OFFLINE_SIMULATOR_ONLY", iso, cycle)
+        except Exception:
+            if not finalized:
+                try:
+                    self.scheduler.finish(self.JOB, slot, owner, self.clock(), ok=False)
+                except Exception:
+                    pass
+            self.fence.finish(token, at=self.clock(), safe=False, outcome="EXCEPTION")
+            raise
