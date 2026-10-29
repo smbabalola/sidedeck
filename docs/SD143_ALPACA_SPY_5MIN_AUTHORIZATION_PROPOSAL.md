@@ -1,3 +1,9 @@
+## Owner direction recorded 29 October 2026 — YES to proposed usage
+
+The owner wishes to proceed assuming (1) local retention and repeat backtesting of downloaded bars, and (2) use of resulting signals with **eToro Demo**. This is an owner decision about the **intended workflow**, **not written permission from Alpaca, the exchanges, or any other rights holder**. It does not establish account-specific entitlement, non-display/cross-broker rights, or compliance with data terms; those are still `UNVERIFIED_EXTERNAL`. Avoid misclassifying these responses as provider licensing evidence.
+
+**Engineering authorised now:** continue offline preparation, request construction, expected-session validation, reproducibility and non-executable research using data already lawfully available under confirmed rights. **Not authorised by this statement:** authenticated Alpaca GETs, subscriptions, remote credentials, distribution, activating eToro, order POSTs or historical HALT reset. Before any request, validate the relevant current terms and account-specific permission, then obtain a scoped authorization describing exact parameters, GET cap and expiry. If provider permission cannot be established, the acquisition remains `BLOCKED_EXTERNAL`.
+
 # SD-143 — proposed first Alpaca 5-minute data scope (NOT AUTHORIZED)
 
 Prepared 29 October 2026 as an **unsigned decision packet**, not an API request, entitlement, grant or approval.
