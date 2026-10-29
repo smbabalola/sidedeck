@@ -896,7 +896,7 @@ def run_offline_day_service_loop(
     inputs: Callable[[], Mapping[str, Any]],
     wait: Callable[[], None],
     stop_requested: Callable[[], bool],
-    max_polls: int = 100,
+    max_polls: int = 100, stop_on_confirmed_flat: bool = False,
 ) -> tuple[dict[str, Any], ...]:
     """Bounded simulation-only polling loop over the durable DAY service.
 
@@ -921,6 +921,10 @@ def run_offline_day_service_loop(
         result = service.run_due(owner=owner, **provided)
         outcomes.append(result)
         if result["status"] in {"HALTED", "RECOVERY_REQUIRED", "LOCKED"}:
+            break
+        if (stop_on_confirmed_flat and result["status"] == "EXITS_CONFIRMED"
+                and result.get("cycle", {}).get("open_positions") == 0
+                and result.get("cycle", {}).get("exit_references")):
             break
         if index + 1 < max_polls and not stop_requested():
             wait()
