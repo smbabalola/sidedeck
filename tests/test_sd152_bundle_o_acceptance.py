@@ -744,3 +744,55 @@ def test_day_os_process_crash_fence_survives_cold_worker(tmp_path):
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_scheduled_offline_soak_across_sessions_no_reentry(tmp_path):
+    """Bounded offline soak: full close, next-session no-signal, no duplicate OPEN."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_env, _day_entry
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, quote, signer = _offline_gateway(env, storage_path=tmp_path / "sim.sqlite3")
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    schedule = SchedulerStore(schedule_path)
+    schedule.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    schedule.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def worker():
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    try:
+        proposal = _day_entry(env)
+        assert worker().run_due(owner="soak-open", entry=proposal,
+                                entry_quote=quote)["status"] == "ENTRY_CONFIRMED"
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        assert worker().run_due(
+            owner="soak-close",
+            planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )["status"] == "EXITS_CONFIRMED"
+        # A new regular session after the holiday weekend must not rearm the
+        # historical resolved DAY proposal or infer a new strategy signal.
+        env.clock.now = datetime(2026, 11, 30, 15, 5, tzinfo=UTC)
+        for number in range(5):
+            result = worker().run_due(owner=f"soak-restart-{number}", entry=proposal)
+            assert result["status"] in {"NO_TRADE", "NO_DUE_SLOT"}
+            assert gateway._simulator.submitted_orders == 1
+            assert env.ledger.open_positions() == ()
+            assert OfflineSwingRunFence(fence_path).state() == "IDLE"
+        assert not env.ledger.kill_switch_engaged()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
