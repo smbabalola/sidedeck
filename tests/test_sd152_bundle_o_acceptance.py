@@ -715,6 +715,7 @@ def test_day_os_process_crash_fence_survives_cold_worker(tmp_path):
     # The separate OS process acquires the real SQLite fence and exits without
     # finishing it, simulating termination at an unsafe point.
     script = (
+        "import sys;sys.path.insert(0, str(__import__('pathlib').Path.cwd() / 'src'));"
         "from datetime import datetime;"
         "from pathlib import Path;"
         "from sidedeck.application.sd152_offline_swing_runner import OfflineSwingRunFence;"
