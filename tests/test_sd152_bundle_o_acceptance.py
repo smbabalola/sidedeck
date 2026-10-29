@@ -64,3 +64,36 @@ def test_day_orb_no_self_admission(tmp_path):
     )
 
     test_actual_orb_signal_enters_bridge_but_cannot_self_admit(tmp_path)
+
+
+def test_day_missing_execution_quote_halts_without_simulated_submit(tmp_path):
+    """A DAY proposal may not be sent without its distinct signed send quote."""
+    from datetime import UTC, datetime
+
+    from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 0, tzinfo=UTC))
+    gateway, _planning_quote, _signer = _offline_gateway(env)
+    try:
+        proposal = _day_entry(env)
+        assert isinstance(proposal, EntryProposal)
+        controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+        result = controller.tick(entry=proposal, entry_quote=None)
+        assert result.status == "HALTED"
+        assert "ENTRY_SEND_QUOTE_MISSING" in result.alerts
+        assert gateway._simulator.submitted_orders == 0
+        assert env.ledger.kill_switch_engaged()
+        # Reconstruct the controller over durable state: neither a restart nor
+        # a repeated proposal is authority to send after a missing quote.
+        restarted = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+        replay = restarted.tick(entry=proposal)
+        assert replay.status == "HALTED"
+        assert gateway._simulator.submitted_orders == 0
+        assert restarted.gateway._runtime.ledger.kill_switch_engaged()
+        assert result.execution_release == "ETORO_DEMO_NOT_RELEASED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
