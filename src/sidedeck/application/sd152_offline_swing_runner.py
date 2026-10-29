@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal, Refusal
+from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
 from sidedeck.application.sd068_track_scheduler import SchedulerStore
 from sidedeck.application.sd074_trusted_inputs import Envelope
 from sidedeck.application.sd140_offline_swing_controller import (
@@ -782,11 +783,9 @@ class OfflineDayScheduledService:
 
     def __init__(
         self, scheduler: SchedulerStore, fence: OfflineSwingRunFence,
-        controller: "OfflineDayCycleController", *,
+        controller: OfflineDayCycleController, *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
-
         if (type(scheduler) is not SchedulerStore
                 or type(fence) is not OfflineSwingRunFence
                 or type(controller) is not OfflineDayCycleController
