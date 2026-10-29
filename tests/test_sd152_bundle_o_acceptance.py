@@ -287,3 +287,84 @@ def test_day_scheduled_missing_exit_quote_halts_and_preserves_open_position(tmp_
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_multi_tick_unattended_driver_simulates_open_monitor_close(tmp_path):
+    """A deterministic offline clock drives successive scheduled ticks without trade prompts.
+
+    This exercises the scheduler API, not an installed background daemon.
+    No actual broker route, market data or external trading authority is used.
+    """
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, entry_quote, signer = _offline_gateway(
+        env, fill_price="500", close_price="490",
+        storage_path=tmp_path / "day-sim.sqlite3",
+    )
+    schedule_file, fence_file = (
+        tmp_path / "day-schedule.sqlite3", tmp_path / "day-fence.sqlite3",
+    )
+    scheduler = SchedulerStore(schedule_file)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def worker():
+        # Reconstruct the scheduled worker and durable stores at every tick,
+        # as an independently restarted offline process would.
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule_file), OfflineSwingRunFence(fence_file),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    try:
+        entry = _day_entry(env)
+        opened = worker().run_due(owner="tick-entry", entry=entry, entry_quote=entry_quote)
+        assert opened["status"] == "ENTRY_CONFIRMED", opened
+        assert opened["cycle"]["open_positions"] == 1
+        assert gateway._simulator.submitted_orders == 1
+
+        # Several unattended decision ticks are processed with no new entry.
+        # The position remains owned and actively monitored between ticks.
+        for minute in (10, 15, 20):
+            env.clock.now = datetime(2026, 11, 27, 15, minute, tzinfo=UTC)
+            observed = worker().run_due(
+                owner=f"tick-monitor-{minute}",
+                planning_bids=(_quote(signer, env.clock.now),),
+            )
+            assert observed["status"] == "NO_TRADE", observed
+            assert observed["cycle"]["open_positions"] == 1
+            assert len(env.ledger.open_positions()) == 1
+            assert gateway._simulator.submitted_orders == 1
+            assert not env.ledger.kill_switch_engaged()
+
+        # The real exchange calendar marks this Thanksgiving Friday as an
+        # early close. At T-10 the scheduler must still issue a protective exit.
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        final = worker().run_due(
+            owner="tick-close",
+            planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )
+        assert final["status"] == "EXITS_CONFIRMED", final
+        assert final["cycle"]["open_positions"] == 0
+        assert final["cycle"]["exit_references"]
+        assert env.ledger.open_positions() == ()
+        assert gateway._simulator.submitted_orders == 1
+        assert worker().run_due(owner="replay-after-flat")["status"] == "NO_DUE_SLOT"
+        assert OfflineSwingRunFence(fence_file).state() == "IDLE"
+        assert len([row for row in SchedulerStore(schedule_file).history("day_candidate_scan")
+                    if row[1] == "COMPLETED"]) == 5
+        assert final["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
