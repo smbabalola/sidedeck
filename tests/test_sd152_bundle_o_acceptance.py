@@ -368,3 +368,63 @@ def test_day_multi_tick_unattended_driver_simulates_open_monitor_close(tmp_path)
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_bounded_driver_runs_and_stops_on_unresolved_restart(tmp_path):
+    """One driver call traverses due ticks and stops rather than retrying a failed close."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+        drive_offline_day_sequence,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, entry_quote, signer = _offline_gateway(env)
+    scheduler_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    scheduler = SchedulerStore(scheduler_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def service():
+        return OfflineDayScheduledService(
+            SchedulerStore(scheduler_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    def tick(moment, **kwargs):
+        def action():
+            env.clock.now = moment
+            return service().run_due(owner="bounded-driver", **kwargs)
+        return action
+
+    try:
+        entry = _day_entry(env)
+        monitoring_at = datetime(2026, 11, 27, 15, 10, tzinfo=UTC)
+        exit_at = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        ticks = (
+            tick(datetime(2026, 11, 27, 15, 5, tzinfo=UTC),
+                 entry=entry, entry_quote=entry_quote),
+            tick(monitoring_at, planning_bids=(_quote(signer, monitoring_at),)),
+            tick(exit_at, planning_bids=(_quote(signer, exit_at),)),
+            tick(exit_at),  # Must not run: the previous exit halts the service
+        )
+        outcomes = drive_offline_day_sequence(service, ticks)
+        assert [o["status"] for o in outcomes] == [
+            "ENTRY_CONFIRMED", "NO_TRADE", "HALTED",
+        ]
+        assert "EXIT_SEND_QUOTE_MISSING" in outcomes[-1]["cycle"]["alerts"]
+        assert len(env.ledger.open_positions()) == 1
+        assert env.ledger.kill_switch_engaged()
+        assert OfflineSwingRunFence(fence_path).state() == "UNRESOLVED"
+        assert gateway._simulator.submitted_orders == 1
+        assert service().run_due(owner="after-crash")["status"] == "RECOVERY_REQUIRED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
