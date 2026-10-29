@@ -972,7 +972,7 @@ def test_day_cold_os_worker_independently_closes_persisted_open_position(tmp_pat
         "OfflineDayCycleController(g._runtime,g,clock=e.clock),clock=e.clock);"
         "q=_quote(signer,e.clock.now);"
         "result=w.run_due(owner='fresh-child-close',planning_bids=(q,),execution_bids={MSFT:q});"
-        "print(json.dumps({'status':result['status'],'open':len(e.ledger.open_positions())}));"
+        "print(json.dumps({'status':result['status'],'open':len(e.ledger.open_positions()),'detail':result.get('detail'),'cycle':result.get('cycle'),'kill':e.ledger.kill_switch_engaged()},default=str));"
         "g._simulator.close_store();e.ledger.close()"
     )
     try:
