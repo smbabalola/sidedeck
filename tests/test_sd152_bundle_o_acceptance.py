@@ -398,9 +398,13 @@ def test_day_bounded_driver_runs_and_stops_on_unresolved_restart(tmp_path):
             clock=env.clock,
         )
 
-    def tick(moment, **kwargs):
+    def tick(moment, *, monitor=False, **kwargs):
         def action():
             env.clock.now = moment
+            if monitor:
+                return service().run_due(
+                    owner="bounded-driver", planning_bids=(_quote(signer, moment),),
+                )
             return service().run_due(owner="bounded-driver", **kwargs)
         return action
 
@@ -411,8 +415,8 @@ def test_day_bounded_driver_runs_and_stops_on_unresolved_restart(tmp_path):
         ticks = (
             tick(datetime(2026, 11, 27, 15, 5, tzinfo=UTC),
                  entry=entry, entry_quote=entry_quote),
-            tick(monitoring_at, planning_bids=(_quote(signer, monitoring_at),)),
-            tick(exit_at, planning_bids=(_quote(signer, exit_at),)),
+            tick(monitoring_at, monitor=True),
+            tick(exit_at, monitor=True),
             tick(exit_at),  # Must not run: the previous exit halts the service
         )
         outcomes = drive_offline_day_sequence(service, ticks)
