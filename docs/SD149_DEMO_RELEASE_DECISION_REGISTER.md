@@ -37,3 +37,6 @@ This is a **reviewer handoff**, not an independent security attestation or a tra
 - Request exactly the missing, scoped authorization when an actionable prerequisite is ready (data entitlement or external audit deployment first). Do not solicit premature trading authority.
 
 **Decision: G5 NO-GO / NOT_RELEASED.** SD-DAY-FINAL mechanical acceptance remains PASS in its controlled offline scope. This release register may be revised only with directly linked evidence and independent gate ownership.
+
+## Next bounded external decision packet
+An **unsigned** first-source proposal is prepared at `docs/SD143_ALPACA_SPY_5MIN_AUTHORIZATION_PROPOSAL.md` (SPY only, Alpaca historical 5Min SIP, fixed 2025-10-27–2026-10-23 candidate window, zero automatic retries, no subscription/spend authority). It is **NOT AUTHORIZED**; the account-specific data usage and cross-broker retention rights, exact UTC bounds and approved pagination ceiling must be verified before presenting an executable approval. No automatic provider requests are permitted.
