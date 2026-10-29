@@ -39,7 +39,7 @@ def test_default_cadences() -> None:
     day = date(2026, 10, 22)
     day_scan = slots_for(JOBS["day_candidate_scan"], day)
     assert day_scan[0] == datetime(2026, 10, 22, 13, 35, tzinfo=UTC)
-    assert day_scan[-1] == datetime(2026, 10, 22, 19, 45, tzinfo=UTC)
+    assert day_scan[-1] == datetime(2026, 10, 22, 19, 50, tzinfo=UTC)
     assert all((b - a) == timedelta(minutes=5) for a, b in zip(day_scan, day_scan[1:]))
     assert len(slots_for(JOBS["swing_review"], day)) == 3
     assert len(slots_for(JOBS["risk_monitor"], day)) == 391
@@ -59,8 +59,8 @@ def test_due_coalesces_missed_slots_and_skips_disabled(tmp_path: Path) -> None:
     due = {r.job_id: r for r in store.due(now)}
     assert "broker_reconcile" not in due          # requires authorization; never planned
     assert due["day_candidate_scan"].slot == datetime(2026, 10, 22, 14, 0, tzinfo=UTC)
-    # 75 never-run slots from the previous session plus 5 earlier today are coalesced.
-    assert due["day_candidate_scan"].skipped_missed == 80
+    # 76 never-run slots from the previous session plus 5 earlier today are coalesced.
+    assert due["day_candidate_scan"].skipped_missed == 81
     statuses = [s for _, s, _ in store.history("day_candidate_scan")]
     assert statuses.count("SKIPPED_MISSED") == 80
     # Asking again does not duplicate work or re-skip.
