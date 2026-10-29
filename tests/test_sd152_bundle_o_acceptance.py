@@ -232,3 +232,58 @@ def test_day_scheduled_entry_early_close_exit_and_cold_restart(tmp_path):
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_scheduled_missing_exit_quote_halts_and_preserves_open_position(tmp_path):
+    """A due early-close tick cannot claim flat without an executable close quote."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_env, _day_entry
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, send_quote, signer = _offline_gateway(
+        env, storage_path=tmp_path / "day-sim.sqlite3",
+    )
+    scheduler = SchedulerStore(tmp_path / "day-schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "day-fence.sqlite3")
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    service = OfflineDayScheduledService(
+        scheduler, fence,
+        OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+        clock=env.clock,
+    )
+    try:
+        assert service.run_due(owner="entry", entry=_day_entry(env),
+                               entry_quote=send_quote)["status"] == "ENTRY_CONFIRMED"
+        assert len(env.ledger.open_positions()) == 1
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        failed = service.run_due(
+            owner="exit-without-send-quote",
+            planning_bids=(_quote(signer, env.clock.now),),
+        )
+        assert failed["status"] == "HALTED"
+        assert "EXIT_SEND_QUOTE_MISSING" in failed["cycle"]["alerts"]
+        assert failed["cycle"]["open_positions"] == 1
+        assert len(env.ledger.open_positions()) == 1
+        assert env.ledger.kill_switch_engaged()
+        assert fence.state() == "UNRESOLVED"
+        assert gateway._simulator.submitted_orders == 1
+        restarted = OfflineDayScheduledService(
+            SchedulerStore(tmp_path / "day-schedule.sqlite3"),
+            OfflineSwingRunFence(tmp_path / "day-fence.sqlite3"),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+        assert restarted.run_due(owner="restart")["status"] == "RECOVERY_REQUIRED"
+        assert len(env.ledger.open_positions()) == 1
+        assert gateway._simulator.submitted_orders == 1
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
