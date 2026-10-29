@@ -97,3 +97,79 @@ def test_day_missing_execution_quote_halts_without_simulated_submit(tmp_path):
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_scheduled_service_locked_then_single_slot_no_replay(tmp_path):
+    """One simulated DAY slot is consumed once, even across worker reconstruction."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd125_day_session_exits import _day_env
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, _, _ = _offline_gateway(env)
+    scheduler = SchedulerStore(tmp_path / "day-schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "day-fence.sqlite3")
+    controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+    service = OfflineDayScheduledService(scheduler, fence, controller, clock=env.clock)
+    try:
+        assert service.run_due(owner="worker-one")["status"] == "LOCKED"
+        assert gateway._simulator.submitted_orders == 0
+        scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+        scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+        first = service.run_due(owner="worker-one")
+        assert first["status"] == "NO_TRADE"
+        assert first["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+        assert fence.state() == "IDLE"
+        assert len(scheduler.history("day_candidate_scan")) >= 1
+        reconstructed = OfflineDayScheduledService(
+            SchedulerStore(tmp_path / "day-schedule.sqlite3"),
+            OfflineSwingRunFence(tmp_path / "day-fence.sqlite3"),
+            controller, clock=env.clock,
+        )
+        assert reconstructed.run_due(owner="worker-two")["status"] == "NO_DUE_SLOT"
+        assert gateway._simulator.submitted_orders == 0
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_scheduled_service_crashed_worker_never_auto_takes_over(tmp_path):
+    """An abandoned DAY fence blocks a new process, irrespective of schedule lease."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore, slots_for
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd125_day_session_exits import _day_env
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+
+    now = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env)
+    scheduler = SchedulerStore(tmp_path / "day-schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "day-fence.sqlite3")
+    controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+    try:
+        scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+        scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+        slot = slots_for(scheduler.jobs["day_candidate_scan"], now.date())[0]
+        token = fence.acquire(slot, owner="crashed-worker", at=now)
+        assert token is not None
+        restarted = OfflineDayScheduledService(
+            SchedulerStore(tmp_path / "day-schedule.sqlite3"),
+            OfflineSwingRunFence(tmp_path / "day-fence.sqlite3"),
+            controller, clock=env.clock,
+        )
+        assert restarted.run_due(owner="new-worker")["status"] == "RECOVERY_REQUIRED"
+        fence.finish(token, at=now, safe=False, outcome="CRASH_SIMULATED")
+        assert restarted.run_due(owner="another-worker")["status"] == "RECOVERY_REQUIRED"
+        assert gateway._simulator.submitted_orders == 0
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
