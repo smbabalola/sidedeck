@@ -608,7 +608,8 @@ def test_day_polling_loop_completes_entry_monitor_close_without_manual_ticks(tmp
     try:
         results = run_offline_day_service_loop(
             service, owner="offline-auto-cycle", inputs=inputs,
-            wait=wait, stop_requested=lambda: False, max_polls=3,
+            wait=wait, stop_requested=lambda: False, max_polls=8,
+            stop_on_confirmed_flat=True,
         )
         assert [r["status"] for r in results] == [
             "ENTRY_CONFIRMED", "NO_TRADE", "EXITS_CONFIRMED",
