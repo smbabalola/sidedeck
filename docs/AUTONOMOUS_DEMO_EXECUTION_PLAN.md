@@ -16,6 +16,35 @@ This document records the **original critical path**, including its initial SD-1
 
 Last confirmed code/test evidence at bundle creation: `419e324` [CI 40664791594 PASS](https://github.com/smbabalola/sidedeck/actions/runs/40664791594), 1,932 Python passed / 2 skipped. Do not confuse an offline green test or this work allocation with broker/market-data permission, owner kill-switch reset or autonomous deployment. **Treat the subsequent "Concrete next Codex batch" below as superseded historical instructions**, while retaining its security expectations and lifecycle contract.
 
+## 29 October 2026 — autonomous lifecycle milestone and release-gap decision
+
+**Verified exact-head code:** `4f7022dfa2016774d30d3f09256dff277f00c0d8` — [GitHub CI 40808113134 SUCCESS](https://github.com/smbabalola/sidedeck/actions/runs/40808113134). Its `tests/test_sd152_bundle_o_acceptance.py` consolidates nine existing SWING fake-broker/restart/failure scenarios plus the SD-155 native ORB method -> separate fixture-native admission -> policy-generated entry -> simulated fill -> scheduled exit -> flat and replay/no-reopen DAY scenario and ORB self-admission refusal. This provides **verified test-only offline lifecycle evidence**, not a released eToro Demo service.
+
+**Do not repeat:** the completed fake broker path, the DAY ORB fixture positive/negative tests, or the green combined offline acceptance suite. Do not promote the failed real-data ORB strategy. The user's immediate goal is to show the *mechanical* entry-to-exit lifecycle end to end first; future strategy replacement is permitted without bypassing admission.
+
+### Distinct readiness claims
+
+| Claim | Evidence / remaining test | Current verdict |
+|---|---|---|
+| Native ORB generates a fixture DAY research signal | Existing SD-069/154/155 method and integration tests | VERIFIED_OFFLINE |
+| Separately admitted *fixture* signal drives risk-generated order and fake fill | SD-155 with SD-063/074/126/107 | VERIFIED_OFFLINE, TEST_ONLY |
+| Automatic scheduled early-close exit, final flat, repeat no-reopen | SD-155 and consolidated SD-152 suite | VERIFIED_OFFLINE, TEST_ONLY |
+| SWING persistent/restart/fault handling with fake eToro-shaped adapter | Nine SD-140/152 acceptance scenarios | VERIFIED_OFFLINE for these scenarios |
+| **DAY** unattended multi-session scheduler, crash/restart after ambiguous write, and protected four-position baseline | Need direct integrated DAY service evidence, not inference from separate DAY and SWING tests | OPEN |
+| Durable external audit host, granted budgets, owner-only recovery; independent security review | SD-145/146/149 release dossier and independent evidence | BLOCKED_EXTERNAL |
+| Qualified genuine ORB or replacement strategy plus permitted timely execution prices | SD-071/143/144 evidence, independent locked OOS >=30 qualifying trades | NO_GO |
+| Actual eToro Demo autonomous buy, broker-confirmed full close, fresh /pnl and preserved baseline | SD-150 owner signature/release and SD-151 canary; historical HALT requires separate reset | NOT_RELEASED |
+
+### Next ONE engineering bundle: DAY runtime fault-proof + owner decision dossier
+
+1. Extend the **existing** SD-126 DAY controller and SD-152 single-writer offline runner tests to demonstrate sequential automated ticks across a normal and early-close session, with deterministic restart/leader fencing. No alternate trade engines, strategy grants, or new external transports.
+2. In the same batch, inject stale quotes, unknown/partial fills, close refusal, restart after ambiguous write, authorization expiry, no-signal and baseline mutation. Assert no duplicate order and no false declaration of final flat; retain existing ALREADY_HALTED handling.
+3. Capture a single machine-reproducible test report containing decision IDs, owner-position references, submitted fake broker requests, reconciliation outcomes, protected baseline comparison, and expected incident states. Do not invent simulated broker P&L as real /pnl.
+4. Run full exact-head CI and deliver one consolidated red/green report. If critical negative cases cannot pass without changing policies, stop at NO_GO and log the blocker—not a bypass.
+5. Only after offline DAY service closure, request one **separate** owner decision package for licensed market-data use, independent audit/security proof, Demo-only narrow signed release and explicit HALT recovery. No current approval authorizes broker calls, signatures or reset.
+
+**Release fence:** `ETORO_DEMO=NOT_RELEASED`, historical HALT preserved, original 4 Demo holdings protected, eToro Real NEVER. No authenticated GET or POST under this plan.
+
 ## Decision: deliver ONE vertical slice before broad feature expansion
 
 **First delivery target:** one end-to-end **offline** broker-shaped, automated **SWING** trade (not an intraday scalper): one admitted-strategy fixture → policy and signed-grant test fixtures → *distinct* sealed planning/send quote → durable reserve → exactly one fake eToro Demo OPEN POST → accepted-order lookup and verified owned position → stop/horizon/expiry-driven full reduce-only CLOSE POST → broker close-info plus independent fresh /pnl → flat SideDeck position, original 4/4 baseline positions unchanged, all counters and audit checkpoints verified, and honest simulated economics. Repeat with restarts, 404 fallbacks, revoked grants, partial/unknown fills and audit outages. **This is a simulator acceptance gate, not strategy admission or actual Demo brokerage evidence.**
