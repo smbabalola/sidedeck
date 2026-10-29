@@ -24,6 +24,14 @@ Before any access, an account-specific provider entitlement and permitted person
 
 The nominal `limit=10000` may require pagination. Before a signed request, calculate the maximum pages/request count from the expected sessions and bar count; fix UTC start/end precisely and make any pagination count an explicit hard cap. A missing/looping page token or unexpected number of bars must fail closed. Never silently enlarge symbol, window or budget.
 
+## Pagination calculation and hard request proposal
+
+At most 366 calendar days fall between the proposed bounds. There are at most 262 weekdays in that interval, and a full XNYS regular session has 390/5 = 78 bars (early-close sessions have fewer). A conservative cap is therefore 262 × 78 = 20,436 regular-session bars; a 10,000-bar page size requires at most **three nonempty pages** for the specified regular-session-only window.
+
+**Proposed hard ceiling: 3 successful page GETs, 3 total attempts, 0 retries**, subject to independent verification of Alpaca's boundary semantics and whether any pre/postmarket or extra corrections appear in the response. If a token requests page 4, the request must STOP and produce a new owner-reviewed scope rather than continuing. This estimate is a planning bound, not a licensed entitlement or a substitute for validating each actual exchange session. Non-session bars or provider pagination semantics that invalidate this estimate must be treated as a failure, not silently trimmed to fabricate completeness.
+
+Compute signed absolute UTC endpoints from New York calendar sessions at authorisation time. In particular, do not use naive UTC midnight boundaries and do not infer rights from a successful API response.
+
 ## Acceptance and refusal
 - Validate complete XNYS market sessions including opening range 09:30–09:45 local New York, early closes, DST, duplicate/missing/out-of-order bars and split-adjustment identity through the existing SD-142 pipeline.
 - Independently verify terms, entitlement, raw data integrity, adjustment basis, licensed use, and instrumentation of actual spread/quote delay for future sends. OHLCV alone does not establish execution prices.
