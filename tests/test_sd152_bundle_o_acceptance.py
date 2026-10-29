@@ -39,3 +39,28 @@ def setup(tmp_path):
             next(iterator)
         except StopIteration:
             pass
+
+
+def test_day_orb_test_only_autonomous_entry_to_exit_and_replay(tmp_path):
+    """Run the native ORB fixture lifecycle inside the same acceptance suite.
+
+    Admission is explicitly a synthetic test fixture, never production evidence.
+    eToro transport stays disabled; the scenario itself checks entry, exit,
+    flatness, replay and the no-admission refusal.
+    """
+    from test_sd155_orb_native_signal_lifecycle import (
+        test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_entry_and_exit,
+    )
+
+    test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_entry_and_exit(
+        tmp_path,
+    )
+
+
+def test_day_orb_no_self_admission(tmp_path):
+    """A genuine method invocation on fixture bars cannot grant its own orders."""
+    from test_sd154_day_trader_orb_integration import (
+        test_actual_orb_signal_enters_bridge_but_cannot_self_admit,
+    )
+
+    test_actual_orb_signal_enters_bridge_but_cannot_self_admit(tmp_path)
