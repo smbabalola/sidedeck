@@ -689,3 +689,57 @@ def test_day_timed_process_runner_completes_offline_full_cycle(tmp_path):
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_os_process_crash_fence_survives_cold_worker(tmp_path):
+    """A real child Python process leaves a durable RUNNING fence; restart fails closed."""
+    import subprocess
+    import sys
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_env
+
+    now = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env)
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    scheduler = SchedulerStore(schedule_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    # The separate OS process acquires the real SQLite fence and exits without
+    # finishing it, simulating termination at an unsafe point.
+    script = (
+        "from datetime import datetime;"
+        "from pathlib import Path;"
+        "from sidedeck.application.sd152_offline_swing_runner import OfflineSwingRunFence;"
+        "f=OfflineSwingRunFence(Path(__import__('sys').argv[1]));"
+        "t=datetime.fromisoformat(__import__('sys').argv[2]);"
+        "assert f.acquire(t,owner='crashed-os-process',at=t) is not None;"
+        "assert f.state() == 'RUNNING'"
+    )
+    try:
+        child = subprocess.run(
+            [sys.executable, "-c", script, str(fence_path), now.isoformat()],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert child.returncode == 0, child.stderr
+        assert OfflineSwingRunFence(fence_path).state() == "RUNNING"
+        restarted = OfflineDayScheduledService(
+            SchedulerStore(schedule_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+        result = restarted.run_due(owner="restarted-os-process")
+        assert result["status"] == "RECOVERY_REQUIRED"
+        assert gateway._simulator.submitted_orders == 0
+        assert env.ledger.open_positions() == ()
+        assert restarted.run_due(owner="second-restart")["status"] == "RECOVERY_REQUIRED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
