@@ -1,0 +1,19 @@
+{
+  "schema": "sidedeck.sd152.operator-status/1",
+  "source": "LOCAL_OFFLINE_DIAGNOSTICS_ONLY",
+  "status": "ACTION_REQUIRED",
+  "incidents": [
+    "OPERATOR_EVIDENCE_UNAVAILABLE"
+  ],
+  "fence_state": "UNVERIFIED",
+  "heartbeat_age_seconds": null,
+  "incident_digest_sha256": null,
+  "delivery_status": "NOT_CONFIGURED",
+  "recovery": "SEPARATELY_AUTHORISED_MANUAL_REVIEW_ONLY",
+  "broker_account_verified": false,
+  "safe_to_trade": false,
+  "automatic_get_allowed": false,
+  "automatic_post_allowed": false,
+  "clear_halt_allowed": false,
+  "execution_release": "ETORO_DEMO_NOT_RELEASED"
+}

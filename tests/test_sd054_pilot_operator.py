@@ -103,7 +103,7 @@ class Rig:
     def factory(self, release, ledger):
         return EtoroDemoHttpTransport(api_key=ENV["ETORO_DEMO_TRADE_API_KEY"],
                                       user_key=ENV["ETORO_DEMO_TRADE_USER_KEY"],
-                                      release=release, ledger_path=ledger, opener=self.opener)
+                                      release=release, ledger_path=ledger, opener=self.opener, test_only_opener=True)
 
     def approve(self, label, digest, scope):
         self.prompts.append((label, scope))

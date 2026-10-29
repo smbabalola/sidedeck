@@ -14,6 +14,8 @@ import argparse
 import hashlib
 import json
 import time
+import urllib.parse
+import urllib.request
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -181,10 +183,262 @@ def run_pilot(
     return summary
 
 
+
+def collect_signed_spy_five_minute(
+    auth: DataAuthorization, ledger: DataRequestLedger, *, key_id: str,
+    secret: str, now: Callable[[], datetime], opener: Opener = _safe_urlopen,
+    checkpoint_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Offline-testable historical collection; caller must verify owner signature.
+
+    This function never grants research admission or execution permission.
+    It requires the separate ALPACA_SIP_INTRADAY scope and reserves each page
+    before network access. The existing DAILY pilot is unaffected.
+    """
+    import re
+    from sidedeck.application.sd068_track_scheduler import NEW_YORK, session_for
+
+    url = ENDPOINT.format(symbol="SPY")
+    if (auth.provider != "ALPACA_SIP_INTRADAY" or auth.urls != (url,)
+            or auth.max_retries != 0 or auth.max_requests > 20
+            or auth.scope.get("timeframe") != "5Min"):
+        raise AuthorizationRefused("SPY 5Min acquisition requires a separate bounded grant")
+    if not key_id or not secret:
+        raise AuthorizationRefused("missing intraday data credentials")
+    begin = datetime.fromisoformat(auth.scope["start"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(auth.scope["end"].replace("Z", "+00:00"))
+    if (begin.tzinfo is None or end.tzinfo is None
+            or begin.utcoffset() is None or end.utcoffset() is None):
+        raise AuthorizationRefused("signed intraday range must be timezone-aware")
+    token: str | None = None
+    seen: set[str] = set()
+    bars: list[dict[str, str]] = []
+    excluded_extended_hours = 0
+    pages = 0
+    page_counts: list[dict[str, int]] = []
+    if checkpoint_dir is not None:
+        checkpoint_dir.mkdir(parents=True, exist_ok=False)
+    while pages < auth.max_requests:
+        params = dict(auth.scope)
+        if token is not None:
+            params["page_token"] = token
+        request = urllib.request.Request(
+            url + "?" + urllib.parse.urlencode(params),
+            headers={"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret,
+                     "Accept": "application/json"},
+        )
+        request_id = ledger.reserve(request.full_url, now())
+        pages += 1
+        try:
+            with opener(request, timeout=20) as response:
+                status = getattr(response, "status", 200)
+                ledger.record(request_id, f"SENT_HTTP_{status}_BODY_UNCHECKED")
+                if status != 200:
+                    raise MarketDataUnavailable("Alpaca intraday HTTP status not OK")
+                raw = response.read(8_000_001)
+                if len(raw) > 8_000_000:
+                    raise MarketDataUnavailable("Alpaca intraday response exceeds limit")
+                payload = json.loads(raw)
+        except Exception as exc:
+            if not isinstance(exc, MarketDataUnavailable):
+                try:
+                    ledger.record(request_id, f"FAILED:{type(exc).__name__}")
+                except AuthorizationRefused:
+                    pass  # HTTP status already durably recorded.
+            raise MarketDataUnavailable("Alpaca intraday request failed") from None
+        if not isinstance(payload, dict) or not isinstance(payload.get("bars"), list):
+            raise MarketDataUnavailable("invalid Alpaca intraday response")
+        page_first = len(bars)
+        for row in payload["bars"]:
+            if not isinstance(row, dict) or not isinstance(row.get("t"), str):
+                raise MarketDataUnavailable("invalid five-minute timestamp")
+            stamp = row["t"]
+            try:
+                dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            except ValueError:
+                raise MarketDataUnavailable("invalid five-minute timestamp") from None
+            if dt.tzinfo is None or dt.utcoffset() is None:
+                raise MarketDataUnavailable("naive five-minute timestamp")
+            dt = dt.astimezone(UTC)
+            if dt.second or dt.microsecond or dt.minute % 5:
+                raise MarketDataUnavailable("off-grid five-minute timestamp")
+            if not begin <= dt < end:
+                raise MarketDataUnavailable("intraday bar outside signed date window")
+            session = session_for(dt.astimezone(NEW_YORK).date())
+            if (session is None or dt < session.open_utc
+                    or dt + timedelta(minutes=5) > session.close_utc):
+                excluded_extended_hours += 1
+                continue  # Pre/post-market bars are not part of the ORB session.
+            numeric = {}
+            for key in ("o", "h", "l", "c", "v"):
+                try:
+                    val = Decimal(str(row[key]))
+                except (KeyError, ValueError, ArithmeticError):
+                    raise MarketDataUnavailable("invalid five-minute OHLCV") from None
+                if not val.is_finite() or val <= 0:
+                    raise MarketDataUnavailable("invalid five-minute OHLCV")
+                numeric[key] = val
+            if (numeric["h"] < max(numeric["o"], numeric["c"])
+                    or numeric["l"] > min(numeric["o"], numeric["c"])):
+                raise MarketDataUnavailable("inconsistent five-minute OHLC")
+            bars.append({"timestamp_utc": dt.isoformat(),
+                         **{key: str(value) for key, value in numeric.items()}})
+        page_counts.append({"page": pages, "raw_bars": len(payload["bars"]),
+                            "accepted_regular_bars": len(bars) - page_first})
+        if checkpoint_dir is not None:
+            page_file = checkpoint_dir / f"page-{pages:03d}.json"
+            page_bytes = json.dumps(bars[page_first:], sort_keys=True).encode("utf-8")
+            page_file.write_bytes(page_bytes)
+            checkpoint = {"pages": pages, "raw_count": len(payload["bars"]),
+                          "page_sha256": hashlib.sha256(page_bytes).hexdigest(),
+                          "accepted_count": len(bars), "page_accepted_count": len(bars) - page_first,
+                          "complete": False,
+                          "strategy_admission_eligible": False}
+            pending = checkpoint_dir / "progress.tmp"
+            pending.write_text(json.dumps(checkpoint), encoding="utf-8")
+            pending.replace(checkpoint_dir / "progress.json")
+        nxt = payload.get("next_page_token")
+        if nxt is None:
+            break
+        if not isinstance(nxt, str) or not re.fullmatch(r"[A-Za-z0-9_+/=-]{1,512}", nxt) or nxt in seen:
+            raise MarketDataUnavailable("invalid intraday pagination token")
+        seen.add(nxt)
+        token = nxt
+    else:
+        raise MarketDataUnavailable("intraday page budget exhausted; no completed dataset")
+    stamps = [bar["timestamp_utc"] for bar in bars]
+    if not stamps or stamps != sorted(set(stamps)):
+        raise MarketDataUnavailable("missing, duplicate or out-of-order intraday bars")
+    return {"schema": "sidedeck-alpaca-five-minute-raw/1",
+            "symbol": "SPY", "feed": "sip", "timeframe": "5Min",
+            "authorization_digest": auth.digest, "pages": pages,
+            "bars": bars, "excluded_extended_hours": excluded_extended_hours,
+            "data_rights": "UNVERIFIED",
+            "strategy_admission_eligible": False, "broker_execution": "DISABLED"}
+
+
+def inspect_saved_spy_orb(path: Path) -> dict[str, Any]:
+    """Inspect a saved, real-data five-minute sample offline; NEVER admit signals."""
+    from sidedeck.application.sd068_track_scheduler import NEW_YORK, session_for
+    from sidedeck.application.sd069_day_trader_methods import (
+        IntradayBar, opening_range_breakout,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (payload.get("schema") != "sidedeck-alpaca-five-minute-raw/1"
+            or payload.get("symbol") != "SPY"
+            or payload.get("feed") != "sip"
+            or payload.get("timeframe") != "5Min"
+            or payload.get("strategy_admission_eligible") is not False):
+        raise MarketDataUnavailable("not an unadmitted SPY five-minute research file")
+    rows = payload.get("bars")
+    if not isinstance(rows, list) or not rows:
+        raise MarketDataUnavailable("no saved five-minute bars")
+    by_day: dict[date, list[IntradayBar]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise MarketDataUnavailable("malformed saved bar")
+        try:
+            stamp = datetime.fromisoformat(row["timestamp_utc"])
+            vals = [Decimal(row[key]) for key in ("o", "h", "l", "c", "v")]
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            raise MarketDataUnavailable("malformed saved OHLCV or timestamp") from None
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise MarketDataUnavailable("saved timestamp must be timezone-aware")
+        stamp = stamp.astimezone(UTC)
+        if (stamp.second or stamp.microsecond or stamp.minute % 5
+                or any(not v.is_finite() or v <= 0 for v in vals)
+                or vals[1] < max(vals[0], vals[3])
+                or vals[2] > min(vals[0], vals[3])):
+            raise MarketDataUnavailable("invalid saved five-minute bar")
+        day = stamp.astimezone(NEW_YORK).date()
+        by_day.setdefault(day, []).append(IntradayBar(stamp, *vals))
+    findings: list[dict[str, Any]] = []
+    for day, day_bars in sorted(by_day.items()):
+        session = session_for(day)
+        if session is None:
+            raise MarketDataUnavailable("bars on a non-trading day")
+        expected = [session.open_utc + timedelta(minutes=5 * i)
+                    for i in range(int((session.close_utc - session.open_utc).total_seconds() // 300))]
+        actual = [bar.start for bar in day_bars]
+        if actual != expected:
+            raise MarketDataUnavailable(f"incomplete or nonconsecutive SPY session {day}")
+        hit = opening_range_breakout(day_bars, session.close_utc)
+        # Research-only fill convention: signal is known at the hit bar CLOSE;
+        # enter at the NEXT bar OPEN; stop at the opening-range LOW.
+        # If there is no next regular bar, no trade is counted.
+        trade: dict[str, Any] | None = None
+        if hit is not None:
+            next_index = next((i for i, bar in enumerate(day_bars)
+                               if bar.start == hit.hit_at), None)
+            if next_index is not None:
+                entry = day_bars[next_index].open
+                stop = hit.range_low
+                if entry > stop:
+                    exit_price = day_bars[-1].open
+                    exit_reason = "EOD_LAST_BAR_OPEN_PROXY"
+                    for future in day_bars[next_index:-1]:
+                        if future.low <= stop:
+                            exit_price = min(stop, future.open)
+                            exit_reason = "STOP"
+                            break
+                    risk = entry - stop
+                    slip = Decimal("0.0002")
+                    fee = Decimal("0.0001")
+                    stressed_entry = entry * (1 + slip)
+                    stressed_exit = exit_price * (1 - slip)
+                    stressed_net_r = (stressed_exit - stressed_entry - fee * (stressed_entry + stressed_exit)) / risk
+                    trade = {"entry_at": day_bars[next_index].start.isoformat(),
+                             "entry": str(entry), "stop": str(stop),
+                             "exit": str(exit_price), "exit_reason": exit_reason,
+                             "gross_r": str((exit_price - entry) / risk),
+                             "stressed_net_r": str(stressed_net_r)}
+        findings.append({
+            "trade": trade,
+            "date": day.isoformat(), "bars": len(actual),
+            "opening_high": str(max(b.high for b in day_bars[:3])),
+            "opening_low": str(min(b.low for b in day_bars[:3])),
+            "orb_breakout": hit is not None,
+            "first_hit_at": hit.hit_at.isoformat() if hit else None,
+        })
+    trades = [d["trade"] for d in findings if d["trade"] is not None]
+    gross = [Decimal(t["gross_r"]) for t in trades]
+    net = [Decimal(t["stressed_net_r"]) for t in trades]
+    equity = peak = drawdown = Decimal(0)
+    for result in net:
+        equity += result
+        peak = max(peak, equity)
+        drawdown = max(drawdown, peak - equity)
+    split = max(1, (len(findings) * 3) // 5)
+    oos = [Decimal(d["trade"]["stressed_net_r"]) for d in findings[split:] if d["trade"] is not None]
+    performance = {"train_sessions": split, "oos_sessions": len(findings) - split,
+                   "oos_completed_trades": len(oos),
+                   "oos_stressed_net_total_r": str(sum(oos, Decimal(0))),
+                   "oos_qualification": "INSUFFICIENT_DATA" if len(oos) < 30 else "UNVERIFIED",
+                   "completed": len(net), "gross_total_r": str(sum(gross, Decimal(0))),
+                   "stressed_net_total_r": str(sum(net, Decimal(0))),
+                   "stressed_max_drawdown_r": str(drawdown),
+                   "stressed_average_r": str(sum(net, Decimal(0)) / len(net)) if net else None,
+                   "cost_model": "2 bps adverse slippage each side; 1 bp fee each side",
+                   "qualification": "INSUFFICIENT_DATA" if len(net) < 30 else "UNVERIFIED"}
+    return {
+        "performance": performance,
+        "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "sessions": len(findings), "total_bars": len(rows),
+        "orb_breakout_sessions": sum(1 for finding in findings if finding["orb_breakout"]),
+        "completed_research_trades": sum(1 for finding in findings if finding["trade"] is not None),
+        "assumptions": "next-bar open; opening-range-low stop; EOD exit; gross R excluding costs; research only",
+        "days": findings, "research_only": True,
+        "strategy_admission_eligible": False, "broker_execution": "DISABLED",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="SD-075B Alpaca SIP pilot (owner-signed)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("proposal")
+    inspect = sub.add_parser("inspect-spy-orb")
+    inspect.add_argument("--input", required=True)
     draft = sub.add_parser("draft")
     draft.add_argument("--out", required=True)
     draft.add_argument("--owner-confirms-terms-reviewed", action="store_true",
@@ -198,7 +452,23 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--key-id-env", required=True)
     run.add_argument("--secret-env", required=True)
     run.add_argument("--out-dir", default="data/sd075b")
+    intraday_draft = sub.add_parser("draft-intraday")
+    intraday_draft.add_argument("--out", required=True)
+    intraday_draft.add_argument("--owner-confirms-terms-reviewed", action="store_true")
+    intraday_draft.add_argument("--short-probe", action="store_true", help="one-week 5-request SPY evidence probe")
+    intraday_draft.add_argument("--quarter-probe", action="store_true", help="bounded July-October 10-request SPY research acquisition")
+    intraday = sub.add_parser("run-intraday")
+    intraday.add_argument("--authorization", required=True)
+    intraday.add_argument("--signature", required=True)
+    intraday.add_argument("--allowed-signers", default="data/approval_allowed_signers")
+    intraday.add_argument("--env-file", default=".env")
+    intraday.add_argument("--key-id-env", required=True)
+    intraday.add_argument("--secret-env", required=True)
+    intraday.add_argument("--out-dir", default="data/sd156")
     args = parser.parse_args(argv)
+    if args.command == "inspect-spy-orb":
+        print(json.dumps(inspect_saved_spy_orb(Path(args.input)), indent=2))
+        return 0
     if args.command == "proposal":
         print(json.dumps(proposal(), indent=2))
         return 0
@@ -214,6 +484,34 @@ def main(argv: list[str] | None = None) -> int:
                           encoding="utf-8")
         print(f"DRAFT_WRITTEN={target}; NETWORK_REQUESTS=0")
         return 0
+    if args.command == "draft-intraday":
+        if not args.owner_confirms_terms_reviewed:
+            parser.error("owner must review data-use terms before preparing intraday grant")
+        target = Path(args.out)
+        if target.exists():
+            parser.error("refusing to overwrite intraday draft")
+        if args.short_probe and args.quarter_probe:
+            parser.error("choose at most one intraday probe window")
+        issued = datetime.now(UTC)
+        auth = DataAuthorization(
+            authorization_id=f"sd156-spy-5min-{issued:%Y%m%d%H%M%S}",
+            provider="ALPACA_SIP_INTRADAY",
+            purpose="Bounded SPY five-minute SIP historical research collection only",
+            urls=(ENDPOINT.format(symbol="SPY"),),
+            max_requests=5 if args.short_probe else (10 if args.quarter_probe else 20), max_retries=0, credentials_required=True,
+            issued_at=issued, expires_at=issued + timedelta(hours=24),
+            owner_terms_reviewed=True,
+            scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+                   "start": ("2026-10-19T00:00:00Z" if args.short_probe else
+                             "2026-07-01T00:00:00Z" if args.quarter_probe else "2025-10-27T00:00:00Z"),
+                   "end": "2026-10-24T00:00:00Z",
+                   "limit": "10000"},
+            notes="research only, no data purchase or broker orders",
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(auth.canonical(), encoding="utf-8")
+        print(f"DRAFT_WRITTEN={target}; NETWORK_REQUESTS=0")
+        return 0
     from sidedeck.application.sd045_ssh_approval_verifier import SshSignatureVerifier
     from sidedeck.application.sd064_unlock_grant import require_pinned_signer
     from sidedeck.application.sd077_data_authorization import NAMESPACE
@@ -225,17 +523,37 @@ def main(argv: list[str] | None = None) -> int:
                          verifier=verifier, principal=PRINCIPAL, now=datetime.now(UTC))
     # Scope and credentials are checked before the single-use claim, so a misscoped
     # authorization or a missing/misnamed variable never burns it.
-    check_scope(auth)
+    if args.command == "run-intraday":
+        if (auth.provider != "ALPACA_SIP_INTRADAY"
+                or auth.urls != (ENDPOINT.format(symbol="SPY"),)
+                or auth.max_requests > 20 or auth.max_retries != 0):
+            raise AuthorizationRefused("intraday SPY authorization scope refused")
+    else:
+        check_scope(auth)
     key_id = _credential(args.env_file, args.key_id_env)
     secret = _credential(args.env_file, args.secret_env)
     claim_authorization(Path(args.authorization), auth)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     DEFAULT_LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    summary = run_pilot(auth, DataRequestLedger(DEFAULT_LEDGER, auth), out, key_id=key_id,
-                        secret=secret, now=lambda: datetime.now(UTC))
-    print(json.dumps({k: summary[k] for k in ("requests_used", "stopped_early", "coverage_counts",
-                                              "benchmark_status")}, indent=2))
+    if args.command == "run-intraday":
+        target = out / f"raw-spy-5min-{auth.authorization_id}.json"
+        if target.exists():
+            raise AuthorizationRefused("intraday raw output already exists")
+        summary = collect_signed_spy_five_minute(
+            auth, DataRequestLedger(DEFAULT_LEDGER, auth),
+            key_id=key_id, secret=secret, now=lambda: datetime.now(UTC),
+            checkpoint_dir=out / f"checkpoint-{auth.authorization_id}",
+        )
+        target.write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
+        print(json.dumps({"bars": len(summary["bars"]), "pages": summary["pages"],
+                          "strategy_admission_eligible": False,
+                          "broker_execution": "DISABLED"}, indent=2))
+    else:
+        summary = run_pilot(auth, DataRequestLedger(DEFAULT_LEDGER, auth), out, key_id=key_id,
+                            secret=secret, now=lambda: datetime.now(UTC))
+        print(json.dumps({k: summary[k] for k in ("requests_used", "stopped_early", "coverage_counts",
+                                                  "benchmark_status")}, indent=2))
     print("BROKER_REQUESTS=0; ORDERS=0")
     return 0
 

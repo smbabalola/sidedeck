@@ -1,0 +1,965 @@
+"""SD-152 first slice: restart-safe, single-writer OFFLINE SWING session worker.
+
+Uses SD-068's pre-existing XNYS schedule and SD-140's real policy/SD-138 fake
+order flow. The extra durable singleton fence intentionally has NO timeout
+takeover: a crash or stale worker requires reconciliation rather than risking
+a duplicate autonomous send. No background daemon, HTTP, .env or order release.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import closing
+from dataclasses import dataclass
+from decimal import Decimal
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal, Refusal
+from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+from sidedeck.application.sd068_track_scheduler import SchedulerStore
+from sidedeck.application.sd074_trusted_inputs import Envelope
+from sidedeck.application.sd140_offline_swing_controller import (
+    OfflineSwingCycleController, SwingCycleResult,
+)
+
+SWING_JOB = "swing_review"
+_FENCE_DDL = """
+CREATE TABLE IF NOT EXISTS offline_swing_single_writer (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    state TEXT NOT NULL CHECK(state IN ('IDLE','RUNNING','UNRESOLVED')),
+    token TEXT NOT NULL, slot TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS offline_swing_runs (
+    slot TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE,
+    owner TEXT NOT NULL, state TEXT NOT NULL, started_at TEXT NOT NULL,
+    finished_at TEXT
+);
+"""
+
+
+class OfflineRunnerRefused(PermissionError):
+    pass
+
+
+@dataclass(frozen=True)
+class RunnerOutcome:
+    status: str
+    slot: str | None
+    detail: str
+    cycle: SwingCycleResult | None = None
+    execution_release: str = "ETORO_DEMO_NOT_RELEASED"
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "schema": "sidedeck.sd152.offline-swing-run/1",
+            "status": self.status,
+            "slot": self.slot,
+            "detail": self.detail,
+            "cycle": None if self.cycle is None else self.cycle.report(),
+            "execution_release": self.execution_release,
+        }
+
+
+@dataclass(frozen=True)
+class OfflineFenceHealth:
+    """Read-only, audit-safe view; never grants or recovers trading authority."""
+
+    state: str
+    slot: str | None
+    owner: str | None
+    heartbeat_age_seconds: int | None
+    alerts: tuple[str, ...]
+    execution_release: str = "ETORO_DEMO_NOT_RELEASED"
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "schema": "sidedeck.sd152.offline-fence-health/1",
+            "state": self.state, "slot": self.slot, "owner": self.owner,
+            "heartbeat_age_seconds": self.heartbeat_age_seconds,
+            "alerts": list(self.alerts),
+            "broker_route": "SIMULATED_LOCAL",
+            "execution_release": self.execution_release,
+        }
+
+
+class OfflineSwingRunFence:
+    """Cross-process at-most-once slot fence, fail-closed across process restarts."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        with closing(self._conn()) as conn:
+            conn.executescript(_FENCE_DDL)
+            conn.execute(
+                "INSERT OR IGNORE INTO offline_swing_single_writer "
+                "(id,state,token,slot,updated_at) VALUES(1,'IDLE','','','')",
+            )
+
+    def _conn(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._path, isolation_level=None, timeout=30)
+
+    def state(self) -> str:
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                "SELECT state,token,slot FROM offline_swing_single_writer WHERE id=1"
+            ).fetchone()
+        if row is None or row[0] not in {"IDLE", "RUNNING", "UNRESOLVED"}:
+            raise OfflineRunnerRefused("single-writer durable fence is missing or corrupt")
+        if (row[0] == "IDLE" and row[1]
+                or row[0] in {"RUNNING", "UNRESOLVED"} and not row[2]
+                or row[0] == "RUNNING" and not row[1]):
+            raise OfflineRunnerRefused("durable fence state and worker identity conflict")
+        return str(row[0])
+
+    def health(self, *, now: datetime, stale_after_seconds: int = 120) -> OfflineFenceHealth:
+        """Read durable worker state only; stale RUNNING never becomes available.
+
+        No SDK, credential, network, kill-switch reset or recovery authority.
+        Corrupt state fails closed instead of being described as healthy.
+        """
+        if (now.tzinfo is None or now.utcoffset() is None
+                or stale_after_seconds < 1):
+            raise OfflineRunnerRefused("valid timezone-aware health clock required")
+        with closing(self._conn()) as conn:
+            row = conn.execute(
+                "SELECT state,token,slot,updated_at FROM offline_swing_single_writer WHERE id=1"
+            ).fetchone()
+            if row is None or row[0] not in {"IDLE", "RUNNING", "UNRESOLVED"}:
+                raise OfflineRunnerRefused("durable fence state missing or invalid")
+            state, token, slot, updated_at = map(str, row)
+            if (state == "IDLE" and token
+                    or state in {"RUNNING", "UNRESOLVED"} and not slot
+                    or state == "RUNNING" and not token):
+                raise OfflineRunnerRefused("durable fence state and worker identity conflict")
+            owner: str | None = None
+            if state in {"RUNNING", "UNRESOLVED"}:
+                if not token and state == "RUNNING":
+                    raise OfflineRunnerRefused("RUNNING worker has no durable token")
+                if slot:
+                    worker = conn.execute(
+                        "SELECT owner FROM offline_swing_runs WHERE slot=? AND token=?",
+                        (slot, token),
+                    ).fetchone()
+                    if worker is None and state == "RUNNING":
+                        raise OfflineRunnerRefused("RUNNING worker has no matching run record")
+                    if worker is not None:
+                        owner = str(worker[0])
+            age: float | None
+            try:
+                moment = datetime.fromisoformat(updated_at)
+                if moment.tzinfo is None or moment.utcoffset() is None:
+                    raise ValueError("naive heartbeat")
+                age = (now.astimezone(UTC) - moment.astimezone(UTC)).total_seconds()
+            except ValueError:
+                if state != "IDLE":
+                    raise OfflineRunnerRefused("durable heartbeat cannot be verified") from None
+                age = None
+            alerts: list[str] = []
+            if state == "RUNNING":
+                alerts.append("EXCLUSIVE_WORKER_ACTIVE")
+                if age is None or age < 0:
+                    alerts.append("HEARTBEAT_CLOCK_UNVERIFIED")
+                elif age > stale_after_seconds:
+                    alerts.append("STALE_RUNNING_HEARTBEAT_RECONCILIATION_REQUIRED")
+            if state == "UNRESOLVED":
+                alerts.append("MANUAL_RECONCILIATION_REQUIRED_NO_AUTOMATIC_TAKEOVER")
+            return OfflineFenceHealth(
+                state, slot or None, owner,
+                None if age is None or age < 0 else int(age),
+                tuple(alerts),
+            )
+
+    def heartbeat(self, token: str, *, owner: str, at: datetime) -> None:
+        """Refresh the held worker only; never take over or extend an order grant."""
+        if (not token or not owner or at.tzinfo is None
+                or at.utcoffset() is None):
+            raise OfflineRunnerRefused("heartbeat identity and timezone-aware time required")
+        now = at.astimezone(UTC)
+        with closing(self._conn()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT state,token,slot,updated_at FROM offline_swing_single_writer WHERE id=1"
+                ).fetchone()
+                if row is None or row[0] != "RUNNING" or row[1] != token:
+                    raise OfflineRunnerRefused("worker does not hold the durable fence")
+                worker = conn.execute(
+                    "SELECT owner,state FROM offline_swing_runs WHERE slot=? AND token=?",
+                    (row[2], token),
+                ).fetchone()
+                if worker is None or worker[0] != owner or worker[1] != "RUNNING":
+                    raise OfflineRunnerRefused("heartbeat worker identity or run state differs")
+                previous = datetime.fromisoformat(str(row[3]))
+                if previous.tzinfo is None or now < previous.astimezone(UTC):
+                    raise OfflineRunnerRefused("heartbeat clock regressed")
+                conn.execute(
+                    "UPDATE offline_swing_single_writer SET updated_at=? WHERE id=1",
+                    (now.isoformat(),),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def acquire(self, slot: datetime, *, owner: str, at: datetime) -> str | None:
+        if not owner or not owner.strip() or len(owner) > 128:
+            raise OfflineRunnerRefused("invalid worker identity")
+        if slot.tzinfo is None or at.tzinfo is None:
+            raise OfflineRunnerRefused("timezone-aware slot and clock required")
+        iso_slot = slot.astimezone(UTC).isoformat()
+        now = at.astimezone(UTC).isoformat()
+        token = uuid.uuid4().hex
+        with closing(self._conn()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                state = conn.execute(
+                    "SELECT state,token FROM offline_swing_single_writer WHERE id=1"
+                ).fetchone()
+                if state is None or state[0] != "IDLE" or state[1]:
+                    conn.execute("ROLLBACK")
+                    return None
+                if conn.execute(
+                    "SELECT 1 FROM offline_swing_runs WHERE slot=?", (iso_slot,)
+                ).fetchone():
+                    conn.execute("ROLLBACK")
+                    return None
+                conn.execute(
+                    "INSERT INTO offline_swing_runs VALUES(?,?,?,?,?,NULL)",
+                    (iso_slot, token, owner, "RUNNING", now),
+                )
+                conn.execute(
+                    "UPDATE offline_swing_single_writer SET state='RUNNING',"
+                    "token=?,slot=?,updated_at=? WHERE id=1",
+                    (token, iso_slot, now),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return token
+
+    def finish(self, token: str, *, at: datetime, safe: bool, outcome: str) -> None:
+        if at.tzinfo is None:
+            raise OfflineRunnerRefused("timezone-aware finish required")
+        now = at.astimezone(UTC).isoformat()
+        with closing(self._conn()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT state,token,slot FROM offline_swing_single_writer WHERE id=1"
+                ).fetchone()
+                if row is None or row[0] != "RUNNING" or row[1] != token:
+                    raise OfflineRunnerRefused("worker has lost the durable leader fence")
+                previous = datetime.fromisoformat(str(conn.execute(
+                    "SELECT updated_at FROM offline_swing_single_writer WHERE id=1"
+                ).fetchone()[0]))
+                if previous.tzinfo is None or at.astimezone(UTC) < previous.astimezone(UTC):
+                    raise OfflineRunnerRefused("finish clock regressed")
+                updated = conn.execute(
+                    "UPDATE offline_swing_runs SET state=?,finished_at=? "
+                    "WHERE slot=? AND token=? AND state='RUNNING'",
+                    (outcome, now, row[2], token),
+                ).rowcount
+                if updated != 1:
+                    raise OfflineRunnerRefused("durable run row missing; cannot release fence")
+                conn.execute(
+                    "UPDATE offline_swing_single_writer SET state=?,token='',"
+                    "updated_at=? WHERE id=1",
+                    ("IDLE" if safe else "UNRESOLVED", now),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def history(self) -> tuple[tuple[str, str], ...]:
+        with closing(self._conn()) as conn:
+            rows = conn.execute(
+                "SELECT slot,state FROM offline_swing_runs ORDER BY slot"
+            ).fetchall()
+        return tuple((str(slot), str(state)) for slot, state in rows)
+
+
+class OfflineSwingScheduledService:
+    """An explicit local tick, not an unattended network-capable background task.
+
+    The scheduler must be configured SIMULATION_ONLY by the test/operator;
+    its execution mode can NEVER be switched to broker execution.
+    """
+
+    def __init__(
+        self, scheduler: SchedulerStore, fence: OfflineSwingRunFence,
+        controller: OfflineSwingCycleController, *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        if (type(scheduler) is not SchedulerStore
+                or type(fence) is not OfflineSwingRunFence
+                or type(controller) is not OfflineSwingCycleController
+                or SWING_JOB not in scheduler.jobs):
+            raise OfflineRunnerRefused("requires existing scheduler and exact offline SWING route")
+        job = scheduler.jobs[SWING_JOB]
+        if job.track != "SWING" or job.calendar_id != "XNYS":
+            raise OfflineRunnerRefused("SWING schedule must use the US equity exchange")
+        self.scheduler, self.fence, self.controller = scheduler, fence, controller
+        self.clock = clock
+
+    def health(self, *, now: datetime) -> OfflineFenceHealth:
+        """Read-only health for local operator alerts; never touches a broker."""
+        return self.fence.health(now=now)
+
+    def inspect(self, *, now: datetime) -> dict[str, Any]:
+        """Read-only local operations snapshot, not a broker health claim.
+
+        No /pnl, order lookup, quote, credential, POST or grant-use request.
+        It cannot assert that an actual broker is flat, nor release the fence.
+        """
+        fence = self.fence.health(now=now)
+        ledger = self.controller.runtime.ledger
+        state = ledger.state()
+        lineage = self.controller.adapter._port._lineage
+        if lineage is None:
+            raise OfflineRunnerRefused("durable SideDeck order lineage is unavailable")
+        orders = lineage.orders()
+        owned = lineage.owned_positions()
+        unknown = sum(1 for order in orders if order["state"] == "OUTCOME_UNKNOWN")
+        pending = sum(1 for order in orders if order["state"] == "PENDING_SUBMIT")
+        close_pending = sum(1 for order in orders
+                            if order["kind"] == "CLOSE" and order["state"] == "ACCEPTED")
+        alerts = list(fence.alerts)
+        dossier = self.recovery_dossier(now=now)
+        if state.killed:
+            alerts.append("POLICY_KILL_SWITCH_ENGAGED")
+        if dossier["uncertain_orders"]:
+            alerts.append("ORDER_LINEAGE_RECONCILIATION_REQUIRED")
+        if any("LEDGER_MISMATCH" in item["review_action"]
+               for item in dossier["uncertain_orders"]):
+            alerts.append("CROSS_LEDGER_RECONCILIATION_REQUIRED")
+        if len(lineage.baseline_position_ids) != 4:
+            alerts.append("PROTECTED_BASELINE_COUNT_MISMATCH")
+
+        # This is an advisory on a locally configured grant document, NOT
+        # signature or revocation verification. Only SD-064 can authorise a
+        # protective write; an unverified future expiry is never authority.
+        if ledger.open_positions():
+            policy_expiry = self.controller.adapter._gate._policy.expires_at
+            expiry_window = timedelta(hours=24)
+            if now >= policy_expiry:
+                alerts.append("SWING_POLICY_EXPIRED_WITH_OPEN_POSITION")
+            elif now >= policy_expiry - expiry_window:
+                alerts.append("SWING_POLICY_EXPIRY_WITHIN_24H_OPEN_POSITION")
+            protective = self.controller.adapter._gate._protective_grant
+            if protective is None:
+                alerts.append("PROTECTIVE_GRANT_NOT_CONFIGURED_OPEN_POSITION")
+            else:
+                document = protective[0]
+                try:
+                    if not isinstance(document, dict):
+                        raise ValueError("not a grant document")
+                    until = datetime.fromisoformat(str(document["expires_at"]))
+                    if until.tzinfo is None or until.utcoffset() is None:
+                        raise ValueError("grant expiration is naive")
+                    until = until.astimezone(UTC)
+                except (KeyError, TypeError, ValueError):
+                    alerts.append("PROTECTIVE_GRANT_EXPIRY_DOCUMENT_UNREADABLE")
+                else:
+                    if now >= until:
+                        alerts.append("PROTECTIVE_GRANT_DOCUMENT_EXPIRED_UNVERIFIED")
+                    elif now >= until - expiry_window:
+                        alerts.append("PROTECTIVE_GRANT_EXPIRY_WITHIN_24H_UNVERIFIED")
+                if now >= policy_expiry - expiry_window:
+                    alerts.append("PROTECTIVE_GRANT_SIGNATURE_AND_REVOCATION_CHECK_REQUIRED")
+        return {
+            "schema": "sidedeck.sd152.offline-ops-status/1",
+            "fence": fence.report(),
+            "policy_kill_switch": bool(state.killed),
+            "policy_open_positions": len(ledger.open_positions()),
+            "durable_owned_open_positions": sum(1 for pos in owned
+                                                if pos["state"] == "OPEN"),
+            "durable_unknown_order_count": unknown,
+            "durable_pending_submit_count": pending,
+            "durable_accepted_close_count": close_pending,
+            "protected_original_positions": len(lineage.baseline_position_ids),
+            "alerts": alerts,
+            "broker_route": "SIMULATED_LOCAL",
+            "broker_account_verified": False,
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+
+    def recovery_dossier(self, *, now: datetime) -> dict[str, Any]:
+        """Classify local uncertain orders for a separately authorised GET-only review.
+
+        This method NEVER executes recovery, calls the fake broker, clears a HALT,
+        uses a grant or permits a new POST. It is an operator checklist, not a
+        licence to call /pnl. An unknown close without a durable orderId cannot
+        be looked up via close-info: it requires a separately signed whole-account
+        reconciliation and protection of the original baseline first.
+        """
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise OfflineRunnerRefused("recovery dossier requires timezone-aware time")
+        fence = self.fence.health(now=now)
+        ledger = self.controller.runtime.ledger
+        state = ledger.state()
+        lineage = self.controller.adapter._port._lineage
+        if lineage is None:
+            raise OfflineRunnerRefused("recovery dossier requires durable order lineage")
+        orders = lineage.orders()
+        owned = {int(pos["position_id"]): pos for pos in lineage.owned_positions()}
+        items: list[dict[str, Any]] = []
+        for row in orders:
+            kind, status = str(row["kind"]), str(row["state"])
+            ref = str(row["reference_id"])
+            order_id = row["order_id"]
+            position_id = row["position_id"]
+            action: str | None = None
+            if kind == "OPEN":
+                if status in {"PENDING_SUBMIT", "OUTCOME_UNKNOWN"}:
+                    action = "ORDER_REFERENCE_LOOKUP_GET_ONLY"
+                elif status == "ACCEPTED" and not any(
+                    int(pos["order_id"]) == int(order_id)
+                    for pos in owned.values() if order_id is not None
+                ):
+                    action = "VERIFY_ACCEPTED_OPEN_GET_ONLY"
+                elif status == "ACCEPTED":
+                    positions = [pos for pos in owned.values()
+                                 if order_id is not None and
+                                 int(pos["order_id"]) == int(order_id)]
+                    if positions:
+                        policy_entry = state.entries.get(str(row["intent_id"]))
+                        if (len(positions) != 1 or policy_entry is None
+                                or policy_entry.outcome not in {"FILLED", "PARTIALLY_FILLED"}
+                                or policy_entry.broker_order_id != str(order_id)
+                                or policy_entry.broker_position_id !=
+                                    str(positions[0]["position_id"])
+                                or policy_entry.instrument != row["instrument_id"]
+                                or positions[0]["instrument_id"] != row["instrument_id"]
+                                or positions[0]["reference_id"] != ref
+                                or positions[0]["book_id"] != row["book_id"]
+                                or row["book_id"] !=
+                                    self.controller.adapter._gate._policy.book_for_track(
+                                        policy_entry.track)
+                                or policy_entry.filled !=
+                                    Decimal(str(positions[0]["units"]))
+                                or policy_entry.filled - policy_entry.exited !=
+                                    Decimal(str(positions[0]["remaining_units"]))
+                                or policy_entry.filled >
+                                    Decimal(str(row["units"]))):
+                            action = "DURABLE_OPEN_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+            elif kind == "CLOSE":
+                if status in {"PENDING_SUBMIT", "OUTCOME_UNKNOWN"}:
+                    # No trusted close orderId: never invent one or repeat POST.
+                    action = "SIGNED_WHOLE_ACCOUNT_RECONCILIATION_ONLY"
+                elif status == "ACCEPTED":
+                    if order_id is None:
+                        action = "SIGNED_WHOLE_ACCOUNT_RECONCILIATION_ONLY"
+                    else:
+                        action = "SIGNED_CLOSE_INFO_THEN_ACCOUNT_GET_ONLY"
+                elif status == "FILLED":
+                    policy_exit = state.exits.get(str(row["intent_id"]))
+                    policy_entry = (
+                        None if policy_exit is None
+                        else state.entries.get(policy_exit.entry)
+                    )
+                    if (position_id is None or int(position_id) not in owned
+                            or owned[int(position_id)]["state"] != "CLOSED"
+                            or policy_exit is None or policy_exit.outcome != "FILLED"
+                            or policy_entry is None
+                            or policy_entry.broker_position_id != str(position_id)
+                            or policy_entry.instrument != row["instrument_id"]
+                            or owned[int(position_id)]["instrument_id"] != row["instrument_id"]
+                            or owned[int(position_id)]["book_id"] != row["book_id"]
+                            or row["book_id"] !=
+                                self.controller.adapter._gate._policy.book_for_track(
+                                    policy_entry.track)
+                            or policy_exit.units != Decimal(str(row["units"]))
+                            or policy_exit.units != Decimal(str(row["filled_units"]))
+                            or policy_exit.units !=
+                                Decimal(str(owned[int(position_id)]["units"]))
+                            or Decimal(str(owned[int(position_id)]["remaining_units"])) != 0
+                            or policy_entry.filled != policy_entry.exited):
+                        action = "DURABLE_CLOSE_POLICY_LEDGER_MISMATCH_MANUAL_REVIEW"
+            else:
+                raise OfflineRunnerRefused("unknown durable broker order kind")
+            if action is not None:
+                items.append({
+                    "reference_id": ref,
+                    "kind": kind,
+                    "durable_state": status,
+                    "accepted_order_id": None if order_id is None else int(order_id),
+                    "owned_position_id": None if position_id is None else int(position_id),
+                    "review_action": action,
+                    "signed_read_and_audit_required": True,
+                    "automatic_post_allowed": False,
+                })
+        # An extra locally "owned" position with no opening order is never
+        # evidence of valid SideDeck ownership.  Fail closed even when all
+        # previously known OPEN/CLOSE rows appear fully settled.
+        for pos in owned.values():
+            linked = [
+                row for row in orders if row["kind"] == "OPEN"
+                and row["state"] == "ACCEPTED"
+                and row["reference_id"] == pos["reference_id"]
+                and row["order_id"] == pos["order_id"]
+            ]
+            if len(linked) != 1:
+                items.append({
+                    "reference_id": str(pos["reference_id"]),
+                    "kind": "OWNED_POSITION",
+                    "durable_state": str(pos["state"]),
+                    "accepted_order_id": int(pos["order_id"]),
+                    "owned_position_id": int(pos["position_id"]),
+                    "review_action": "ORPHAN_OWNED_POSITION_MANUAL_REVIEW",
+                    "signed_read_and_audit_required": True,
+                    "automatic_post_allowed": False,
+                })
+        if state.killed:
+            status = "HALTED_REVIEW_REQUIRED"
+        elif fence.state != "IDLE" or items:
+            status = "RECONCILIATION_REQUIRED"
+        else:
+            status = "NO_LOCAL_UNCERTAIN_ORDERS"
+        return {
+            "schema": "sidedeck.sd152.offline-recovery-dossier/1",
+            "status": status,
+            "fence": fence.report(),
+            "policy_kill_switch": bool(state.killed),
+            "protected_original_positions": len(lineage.baseline_position_ids),
+            "uncertain_orders": items,
+            "automatic_get_allowed": False,
+            "automatic_post_allowed": False,
+            "clear_halt_allowed": False,
+            "broker_account_verified": False,
+            "broker_route": "SIMULATED_LOCAL",
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+
+    def recovery_read_preflight(
+        self, *, now: datetime, max_gets: int = 2,
+    ) -> dict[str, Any]:
+        """SD-153/R: offline *proposal* for strictly bounded recovery reads.
+
+        This is not a broker GET, a signed owner approval, or a durable request
+        reservation. Each later GET requires fresh SD-064 signed authority,
+        SD-145 pre-send audit anchoring, quote/policy checks and a separate
+        owner-reviewed release. This preflight can never reset HALT/fences.
+        """
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise OfflineRunnerRefused("recovery preflight requires timezone-aware time")
+        if type(max_gets) is not int or not 1 <= max_gets <= 2:
+            raise OfflineRunnerRefused("offline recovery plan may budget only 1 or 2 GETs")
+        dossier = self.recovery_dossier(now=now)
+        gate = self.controller.adapter._gate
+        failures: list[str] = []
+        try:
+            gate._audit_journal.verify()
+        except Exception:
+            failures.append("EXTERNAL_AUDIT_CHECKPOINT_UNVERIFIED")
+        try:
+            gate._anchor_keeper.require_published(self.controller.runtime.ledger)
+        except Exception:
+            failures.append("POLICY_ANCHOR_CHECKPOINT_UNVERIFIED")
+        try:
+            if not gate._authority._ledger.verify_chain():
+                failures.append("GRANT_LEDGER_CHECKPOINT_UNVERIFIED")
+        except Exception:
+            failures.append("GRANT_LEDGER_CHECKPOINT_UNVERIFIED")
+        if dossier["protected_original_positions"] != 4:
+            failures.append("ORIGINAL_BASELINE_COUNT_NOT_VERIFIED")
+        steps: list[dict[str, Any]] = []
+        lineage = self.controller.adapter._port._lineage
+        if lineage is None:
+            raise OfflineRunnerRefused("durable recovery lineage is unavailable")
+        for item in dossier["uncertain_orders"]:
+            ref = str(item["reference_id"])
+            action = str(item["review_action"])
+            kind = str(item["kind"])
+            # Conservative after crash: once a recovery GET stage was reserved,
+            # never propose a fresh request for the same original OPEN intent.
+            # A separate signed operator investigation is then required.
+            if kind == "OPEN" and lineage.offline_recovery_read_stages(ref):
+                failures.append("DURABLE_RECOVERY_GET_ALREADY_RESERVED_MANUAL_REVIEW")
+                continue
+            def add_step(operation: str, lookup: str) -> None:
+                steps.append({
+                    "reference_id": ref, "order_kind": kind,
+                    "operation": operation, "lookup": lookup,
+                    "authorization": "SEPARATE_OWNER_SIGNATURE_REQUIRED",
+                    "pre_send_audit": "REQUIRED",
+                    "automatic_execution": False,
+                })
+            if action == "ORDER_REFERENCE_LOOKUP_GET_ONLY":
+                add_step("OPEN_ORDER_LOOKUP_GET", "ORIGINAL_REFERENCE_ID")
+                if item["accepted_order_id"] is not None:
+                    add_step("OPEN_ORDER_LOOKUP_FALLBACK_GET", "DURABLE_ACCEPTED_ORDER_ID")
+            elif action == "VERIFY_ACCEPTED_OPEN_GET_ONLY":
+                if item["accepted_order_id"] is None:
+                    failures.append("ACCEPTED_OPEN_WITHOUT_ORDER_ID")
+                else:
+                    add_step("OPEN_ORDER_LOOKUP_GET", "DURABLE_ACCEPTED_ORDER_ID")
+            elif action == "SIGNED_CLOSE_INFO_THEN_ACCOUNT_GET_ONLY":
+                if item["accepted_order_id"] is None:
+                    failures.append("ACCEPTED_CLOSE_WITHOUT_ORDER_ID")
+                else:
+                    add_step("CLOSE_INFO_GET", "DURABLE_ACCEPTED_ORDER_ID")
+                    add_step("WHOLE_ACCOUNT_PNL_GET", "PROTECTED_BASELINE_RECONCILIATION")
+            elif action == "SIGNED_WHOLE_ACCOUNT_RECONCILIATION_ONLY":
+                # The result must never be treated as proof this application
+                # submitted a CLOSE, or as permission to place another.
+                add_step("WHOLE_ACCOUNT_PNL_GET", "PROTECTED_BASELINE_RECONCILIATION")
+            else:
+                failures.append("INDEPENDENT_MANUAL_RECONCILIATION_REQUIRED")
+        if dossier["fence"]["state"] != "IDLE":
+            failures.append("WORKER_FENCE_NOT_IDLE_RECONCILIATION_REQUIRED")
+        if len(steps) > max_gets:
+            failures.append("PLANNED_GET_BUDGET_EXCEEDED")
+        # A budget or integrity failure means NO actionable read plan; retain
+        # the non-executable requested steps only as a review description.
+        status = (
+            "BLOCKED_MANUAL_REVIEW" if failures else
+            "AWAITING_SEPARATE_OWNER_SIGNED_READ_AUTHORIZATION" if steps else
+            "NO_RECOVERY_READS_NEEDED"
+        )
+        return {
+            "schema": "sidedeck.sd153.offline-recovery-read-preflight/1",
+            "status": status,
+            "failure_reasons": sorted(set(failures)),
+            "max_gets": max_gets,
+            "planned_get_count": len(steps),
+            "planned_gets": steps,
+            "safe_to_send": False,
+            "broker_account_verified": False,
+            "automatic_get_allowed": False,
+            "automatic_post_allowed": False,
+            "clear_halt_allowed": False,
+            "broker_route": "SIMULATED_LOCAL",
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+
+    def recovery_evidence_manifest(
+        self, *, now: datetime, max_gets: int = 2,
+    ) -> dict[str, Any]:
+        """Unsigned, non-executable fingerprint of local recovery evidence.
+
+        Caller must independently verify real broker identity and obtain its
+        own signed operator authority. No request reservation, socket, signer,
+        kill reset or release mechanism is available from this method.
+        """
+        preflight = self.recovery_read_preflight(now=now, max_gets=max_gets)
+        gate = self.controller.adapter._gate
+        lineage = self.controller.adapter._port._lineage
+        if lineage is None:
+            raise OfflineRunnerRefused("durable recovery lineage unavailable")
+        errors = list(preflight["failure_reasons"])
+        policy_count, policy_head = self.controller.runtime.ledger._head()
+        grant_count, grant_head = gate._authority._ledger._head()
+        try:
+            audit_count, audit_head = gate._audit_journal.verify()
+        except Exception:
+            errors.append("EXTERNAL_AUDIT_CHECKPOINT_UNVERIFIED")
+            audit_count, audit_head = -1, "UNVERIFIED"
+        try:
+            baseline_hash = lineage.offline_original_baseline_sha256()
+        except Exception:
+            errors.append("LOCAL_ORIGINAL_BASELINE_UNVERIFIED")
+            baseline_hash = "UNVERIFIED"
+        lineage_facts = {
+            "orders": [dict(row) for row in lineage.orders()],
+            "owned_positions": [dict(row) for row in lineage.owned_positions()],
+        }
+        lineage_hash = hashlib.sha256(json.dumps(
+            lineage_facts, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        payload = {
+            "schema": "sidedeck.sd153.offline-recovery-evidence/1",
+            "observed_at": now.astimezone(UTC).isoformat(),
+            "policy_digest": gate._policy.digest(),
+            "policy_ledger": {"count": policy_count, "head": policy_head},
+            "grant_ledger": {"count": grant_count, "head": grant_head},
+            "audit_journal": {"count": audit_count, "head": audit_head},
+            "original_offline_baseline_sha256": baseline_hash,
+            "local_order_lineage_sha256": lineage_hash,
+            "read_preflight": preflight,
+            "errors": sorted(set(errors)),
+            "status": (
+                "UNRESOLVED" if errors or preflight["status"] == "BLOCKED_MANUAL_REVIEW"
+                else "AWAITING_INDEPENDENT_OWNER_REVIEW" if preflight["planned_gets"]
+                else "NO_RECOVERY_READS_NEEDED"
+            ),
+            "evidence_origin": "LOCAL_OFFLINE_FIXTURE_ONLY",
+            "owner_signature": "NOT_PROVIDED",
+            "broker_account_verified": False,
+            "automatic_get_allowed": False,
+            "automatic_post_allowed": False,
+            "clear_halt_allowed": False,
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return {**payload, "manifest_sha256": hashlib.sha256(
+            canonical.encode("utf-8")).hexdigest()}
+
+    def run_due(
+        self, *, owner: str,
+        planning_bids: Sequence[Envelope] = (),
+        execution_bids: Mapping[str, Envelope] | None = None,
+        entry: EntryProposal | Refusal | None = None,
+        entry_quote: Envelope | None = None,
+        entry_marks: Sequence[Envelope] = (),
+    ) -> RunnerOutcome:
+        now = self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise OfflineRunnerRefused("worker clock must be timezone-aware")
+        if self.fence.state() != "IDLE":
+            return RunnerOutcome("RECOVERY_REQUIRED", None,
+                                 "a prior worker is running or unresolved; no automatic takeover")
+        # Check the persisted SD-036 ledger as well as the singleton worker
+        # fence. A crash or an orphan reservation must never be turned into a
+        # new order merely because the worker row happens to be IDLE.
+        dossier = self.recovery_dossier(now=now)
+        if dossier["uncertain_orders"]:
+            return RunnerOutcome(
+                "RECOVERY_REQUIRED", None,
+                "durable broker order or position requires signed GET-only reconciliation",
+            )
+        job = self.scheduler.jobs[SWING_JOB]
+        if self.scheduler.effective_mode(job) != "SIMULATION_ONLY":
+            return RunnerOutcome("LOCKED", None, "explicit SIMULATION_ONLY mode required")
+        due = [run for run in self.scheduler.due(now) if run.job_id == SWING_JOB]
+        if not due:
+            return RunnerOutcome("NO_DUE_SLOT", None, "no new eligible SWING schedule")
+        slot = due[-1].slot
+        token = self.fence.acquire(slot, owner=owner, at=now)
+        if token is None:
+            return RunnerOutcome("RECOVERY_REQUIRED", slot.isoformat(),
+                                 "slot consumed or another worker holds the durable fence")
+        claim = self.scheduler.claim(SWING_JOB, slot, owner, now)
+        if not claim.claimed or claim.reason == "LEASE_TAKEOVER":
+            # A prior scheduler lease cannot authorize another broker send.
+            self.fence.finish(token, at=self.clock(), safe=False, outcome="CLAIM_REFUSED")
+            return RunnerOutcome("RECOVERY_REQUIRED", slot.isoformat(),
+                                 "scheduler claim refused or stale owner; reconcile manually")
+        scheduler_finalized = False
+        try:
+            self.fence.heartbeat(token, owner=owner, at=self.clock())
+            result = self.controller.tick(
+                planning_bids=planning_bids, execution_bids=execution_bids,
+                entry=entry, entry_quote=entry_quote, entry_marks=entry_marks,
+            )
+            success = result.status != "HALTED"
+            # Commit the scheduler result before releasing the durable exclusive
+            # worker. A crash between these writes must leave RUNNING (manual
+            # reconciliation), never IDLE with an unfinished scheduler claim.
+            self.scheduler.finish(SWING_JOB, slot, owner, self.clock(), ok=success)
+            scheduler_finalized = True
+            self.fence.finish(token, at=self.clock(), safe=success, outcome=result.status)
+            return RunnerOutcome(
+                result.status, slot.isoformat(), "OFFLINE_SIMULATOR_ONLY", result,
+            )
+        except Exception:
+            # Do not retry this cycle or automatically take over an unknown
+            # state; a crash before this block also leaves RUNNING durable.
+            # Preserve the original failure, but do not silently leave the
+            # scheduler lease active if it can be marked failed safely.
+            if not scheduler_finalized:
+                try:
+                    self.scheduler.finish(SWING_JOB, slot, owner, self.clock(), ok=False)
+                except Exception:
+                    pass  # The RUNNING fence still blocks automatic takeover.
+            self.fence.finish(token, at=self.clock(), safe=False, outcome="EXCEPTION")
+            raise
+
+
+class OfflineDayScheduledService:
+    """Durably fence SD-126 DAY ticks; never imports a live broker transport.
+
+    Uses the existing SD-068 scheduler and SD-152 cross-process fence.
+    A crash or ambiguous outcome requires operator reconciliation. This is an
+    explicit offline tick entrypoint, NOT a daemon or eToro release.
+    """
+
+    JOB = "day_candidate_scan"
+
+    def __init__(
+        self, scheduler: SchedulerStore, fence: OfflineSwingRunFence,
+        controller: OfflineDayCycleController, *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        if (type(scheduler) is not SchedulerStore
+                or type(fence) is not OfflineSwingRunFence
+                or type(controller) is not OfflineDayCycleController
+                or self.JOB not in scheduler.jobs):
+            raise OfflineRunnerRefused("DAY requires exact existing offline components")
+        job = scheduler.jobs[self.JOB]
+        if job.track != "DAY" or job.calendar_id != "XNYS":
+            raise OfflineRunnerRefused("DAY requires the XNYS DAY schedule")
+        self.scheduler, self.fence, self.controller, self.clock = (
+            scheduler, fence, controller, clock,
+        )
+
+    def run_due(
+        self, *, owner: str,
+        planning_bids: Sequence[Envelope] = (),
+        execution_bids: Mapping[str, Envelope] | None = None,
+        entry: EntryProposal | Refusal | None = None,
+        entry_quote: Envelope | None = None,
+        entry_marks: Sequence[Envelope] = (),
+    ) -> dict[str, Any]:
+        now = self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise OfflineRunnerRefused("DAY requires timezone-aware time")
+        result: dict[str, Any] = {
+            "schema": "sidedeck.sd152.offline-day-scheduled/1",
+            "execution_release": "ETORO_DEMO_NOT_RELEASED",
+            "broker_route": "SIMULATED_LOCAL",
+        }
+
+        def outcome(status: str, detail: str, slot: str | None = None,
+                    cycle: Any = None) -> dict[str, Any]:
+            return {**result, "status": status, "detail": detail, "slot": slot,
+                    "cycle": None if cycle is None else cycle.report()}
+
+        if self.fence.state() != "IDLE":
+            return outcome("RECOVERY_REQUIRED", "durable DAY fence not idle")
+        if self.controller.runtime.ledger.kill_switch_engaged():
+            return outcome("HALTED", "policy kill switch engaged")
+        job = self.scheduler.jobs[self.JOB]
+        if self.scheduler.effective_mode(job) != "SIMULATION_ONLY":
+            return outcome("LOCKED", "DAY simulation not explicitly enabled")
+        due = [run for run in self.scheduler.due(now) if run.job_id == self.JOB]
+        if not due:
+            return outcome("NO_DUE_SLOT", "no eligible DAY slot")
+        slot = due[-1].slot
+        iso = slot.isoformat()
+        token = self.fence.acquire(slot, owner=owner, at=now)
+        if token is None:
+            return outcome("RECOVERY_REQUIRED", "DAY slot already fenced", iso)
+        claim = self.scheduler.claim(self.JOB, slot, owner, now)
+        if not claim.claimed or claim.reason == "LEASE_TAKEOVER":
+            self.fence.finish(token, at=self.clock(), safe=False, outcome="CLAIM_REFUSED")
+            return outcome("RECOVERY_REQUIRED", "DAY scheduler refused claim", iso)
+        finalized = False
+        try:
+            self.fence.heartbeat(token, owner=owner, at=self.clock())
+            cycle = self.controller.tick(
+                planning_bids=planning_bids, execution_bids=execution_bids,
+                entry=entry, entry_quote=entry_quote, entry_marks=entry_marks,
+            )
+            safe = cycle.status != "HALTED" and not self.controller.runtime.ledger.kill_switch_engaged()
+            self.scheduler.finish(self.JOB, slot, owner, self.clock(), ok=safe)
+            finalized = True
+            self.fence.finish(token, at=self.clock(), safe=safe, outcome=cycle.status)
+            return outcome(cycle.status, "OFFLINE_SIMULATOR_ONLY", iso, cycle)
+        except Exception:
+            if not finalized:
+                try:
+                    self.scheduler.finish(self.JOB, slot, owner, self.clock(), ok=False)
+                except Exception:
+                    pass
+            self.fence.finish(token, at=self.clock(), safe=False, outcome="EXCEPTION")
+            raise
+
+
+def drive_offline_day_sequence(
+    service_factory: Callable[[], OfflineDayScheduledService],
+    ticks: Sequence[Callable[[], dict[str, Any]]], *,
+    max_ticks: int = 100,
+) -> tuple[dict[str, Any], ...]:
+    """Bounded in-process offline lifecycle driver; never starts a daemon.
+
+    Each callable invokes one due tick using the existing simulation-only
+    service. Terminate on any stop/uncertain result; no automatic HALT reset,
+    grant construction, broker connection or retries. Clock/input sourcing is
+    deliberately supplied by the offline test harness, not this function.
+    """
+    if not 1 <= max_ticks <= 1000 or len(ticks) > max_ticks:
+        raise OfflineRunnerRefused("offline DAY sequence exceeds bounded tick budget")
+    if type(service_factory()) is not OfflineDayScheduledService:
+        raise OfflineRunnerRefused("DAY sequence requires the exact offline service")
+    outcomes: list[dict[str, Any]] = []
+    for tick in ticks:
+        result = tick()
+        if (not isinstance(result, dict)
+                or result.get("execution_release") != "ETORO_DEMO_NOT_RELEASED"
+                or result.get("broker_route") != "SIMULATED_LOCAL"):
+            raise OfflineRunnerRefused("DAY driver received non-offline outcome")
+        outcomes.append(result)
+        if result.get("status") in {"HALTED", "RECOVERY_REQUIRED", "LOCKED"}:
+            break
+    return tuple(outcomes)
+
+
+def run_offline_day_service_loop(
+    service: OfflineDayScheduledService, *,
+    owner: str,
+    inputs: Callable[[], Mapping[str, Any]],
+    wait: Callable[[], None],
+    stop_requested: Callable[[], bool],
+    max_polls: int = 100, stop_on_confirmed_flat: bool = False,
+) -> tuple[dict[str, Any], ...]:
+    """Bounded simulation-only polling loop over the durable DAY service.
+
+    The host supplies clock progression, validated offline inputs and a wait
+    primitive. No sleeper, daemon, network client or credential reader is
+    constructed here. An unresolved or locked state stops immediately.
+    """
+    if type(service) is not OfflineDayScheduledService or not owner.strip():
+        raise OfflineRunnerRefused("exact offline DAY service and worker required")
+    if not 1 <= max_polls <= 1000:
+        raise OfflineRunnerRefused("bounded DAY poll count required")
+    outcomes: list[dict[str, Any]] = []
+    for index in range(max_polls):
+        if stop_requested():
+            break
+        provided = inputs()
+        if not isinstance(provided, Mapping):
+            raise OfflineRunnerRefused("offline DAY tick inputs must be a mapping")
+        allowed = {"planning_bids", "execution_bids", "entry", "entry_quote", "entry_marks"}
+        if set(provided) - allowed:
+            raise OfflineRunnerRefused("unexpected DAY tick input refused")
+        result = service.run_due(owner=owner, **provided)
+        outcomes.append(result)
+        if result["status"] in {"HALTED", "RECOVERY_REQUIRED", "LOCKED"}:
+            break
+        if (stop_on_confirmed_flat and result["status"] == "EXITS_CONFIRMED"
+                and result.get("cycle", {}).get("open_positions") == 0
+                and result.get("cycle", {}).get("exit_references")):
+            break
+        if index + 1 < max_polls and not stop_requested():
+            wait()
+    return tuple(outcomes)
+
+
+def run_offline_day_process(
+    service: OfflineDayScheduledService, *,
+    owner: str,
+    inputs: Callable[[], Mapping[str, Any]],
+    interval_seconds: float = 1.0,
+    max_polls: int = 100,
+    stop_requested: Callable[[], bool] = lambda: False,
+) -> tuple[dict[str, Any], ...]:
+    """Blocking offline process entrypoint with a real monotonic wait.
+
+    A caller must construct the exact simulator service and an approved local
+    fixture input provider. This cannot instantiate a broker, obtain credentials,
+    auto-recover HALT or widen the release state. Bounded for testability.
+    """
+    import time
+
+    if not 0.01 <= interval_seconds <= 300:
+        raise OfflineRunnerRefused("DAY process interval outside bounded range")
+
+    def wait() -> None:
+        deadline = time.monotonic() + interval_seconds
+        while not stop_requested():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 0.25))
+
+    return run_offline_day_service_loop(
+        service, owner=owner, inputs=inputs, wait=wait,
+        stop_requested=stop_requested, max_polls=max_polls,
+        stop_on_confirmed_flat=True,
+    )

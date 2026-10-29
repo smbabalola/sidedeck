@@ -23,6 +23,8 @@ from sidedeck.application.sd097_uk_markets_api import uk_markets_summary
 from sidedeck.application.sd104_pipeline_api import pipeline_summary
 from sidedeck.application.sd109_research_schedule import history_summary
 from sidedeck.application.sd113_day_trader_api import day_trader_summary
+from sidedeck.application.sd127_day_trader_readiness import day_trader_readiness
+from sidedeck.application.sd152_offline_fence_readonly import readonly_fence_status
 
 
 def baseline_summary(db_path: str) -> dict[str, Any]:
@@ -285,7 +287,8 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                  uk_report: str | None = None, *,
                  pipeline_report: str | None = "data/sd103/latest-run.json",
                  pipeline_history: str | None = "data/sd109/run-history.sqlite3",
-                 day_trader_runs: str = "data/day-trader-runs.sqlite3"
+                 day_trader_runs: str = "data/day-trader-runs.sqlite3",
+                 offline_fence_path: str | None = None
                  ) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -320,6 +323,10 @@ def make_handler(db_path: str, snapshot_path: str | None = None, research_path: 
                     data = history_summary(pipeline_history)
                 elif route == "/api/day-trader/summary":
                     data = day_trader_summary(day_trader_runs)
+                elif route == "/api/day-trader/readiness":
+                    data = day_trader_readiness()
+                elif route == "/api/ops/offline-operator-status":
+                    data = readonly_fence_status(offline_fence_path, now=datetime.now(timezone.utc))
                 else:
                     self.send_error(404)
                     return
@@ -364,6 +371,7 @@ def main() -> int:
     p.add_argument("--pipeline-report", default="data/sd103/latest-run.json")
     p.add_argument("--pipeline-history", default="data/sd109/run-history.sqlite3")
     p.add_argument("--day-trader-runs", default="data/day-trader-runs.sqlite3")
+    p.add_argument("--offline-fence-path", default=None)
     a = p.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", 8765), make_handler(a.db, a.snapshot, a.research,
                                                                      tuple(a.strategy_research), tuple(a.strategy_audit), a.release_gate,
@@ -373,7 +381,8 @@ def main() -> int:
                                                                      a.uk_report,
                                                                      pipeline_report=a.pipeline_report,
                                                                      pipeline_history=a.pipeline_history,
-                                                                     day_trader_runs=a.day_trader_runs))
+                                                                     day_trader_runs=a.day_trader_runs,
+                                                                     offline_fence_path=a.offline_fence_path))
     print("SideDeck baseline API listening on 127.0.0.1:8765 (read-only)")
     try:
         server.serve_forever()

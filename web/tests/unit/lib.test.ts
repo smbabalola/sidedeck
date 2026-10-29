@@ -3,8 +3,10 @@ import marketScan from "../fixtures/market-scan.json";
 import marketTracks from "../fixtures/market-tracks.json";
 import releaseGate from "../fixtures/release-gate.json";
 import demo from "../fixtures/demo-summary.json";
+import dayReadiness from "../fixtures/day-trader-readiness.json";
 import marketUk from "../fixtures/market-uk.json";
-import { isDayTraderSummary, isDemoSummary, isMarketTracks, isReleaseGate, isScanSnapshot, isUkMarkets } from "../../src/lib/contracts";
+import offlineOperatorStatus from "../fixtures/offline-operator-status.json";
+import { isDayTraderReadiness, isDayTraderSummary, isDemoSummary, isMarketTracks, isOfflineOperatorStatus, isReleaseGate, isScanSnapshot, isUkMarkets } from "../../src/lib/contracts";
 import { compactUsd, gbp, pct, plainPct, tone, words } from "../../src/lib/format";
 import { href, parseRoute } from "../../src/lib/router";
 
@@ -24,6 +26,14 @@ describe("contracts accept real backend payloads and reject unsafe ones", () => 
     const tracks = structuredClone(marketTracks);
     tracks.tracks[0].execution = "ENABLED";
     expect(isMarketTracks(tracks)).toBe(false);
+  });
+  it("accepts only fail-closed local worker diagnostics", () => {
+    expect(isOfflineOperatorStatus(offlineOperatorStatus)).toBe(true);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, safe_to_trade: true })).toBe(false);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, automatic_get_allowed: true })).toBe(false);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, clear_halt_allowed: true })).toBe(false);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, broker_account_verified: true })).toBe(false);
+    expect(isOfflineOperatorStatus({ ...offlineOperatorStatus, incident_digest_sha256: "not-a-digest" })).toBe(false);
   });
   it("rejects unknown provenance and non-numeric values", () => {
     expect(isScanSnapshot({ ...marketScan, provenance: "LIVE" })).toBe(false);
@@ -46,6 +56,23 @@ describe("Day Trader contract", () => {
     };
     expect(isDayTraderSummary(summary)).toBe(true);
     expect(isDayTraderSummary({ ...summary, simulations: [] })).toBe(true);
+  });
+});
+
+describe("Day Trader readiness refuses forged execution states", () => {
+  it("validates the exact offline gate sequence", () => {
+    expect(isDayTraderReadiness(dayReadiness)).toBe(true);
+  });
+  it("rejects attempts to claim broker, strategy, or real trading release", () => {
+    expect(isDayTraderReadiness({ ...dayReadiness, demo_release: "RELEASED" })).toBe(false);
+    expect(isDayTraderReadiness({ ...dayReadiness, execution_enabled: true })).toBe(false);
+    expect(isDayTraderReadiness({ ...dayReadiness, real_execution: "ENABLED" })).toBe(false);
+    const forged = structuredClone(dayReadiness);
+    forged.gates[4].status = "IMPLEMENTED_OFFLINE";
+    expect(isDayTraderReadiness(forged)).toBe(false);
+    const shortened = structuredClone(dayReadiness);
+    shortened.gates.pop();
+    expect(isDayTraderReadiness(shortened)).toBe(false);
   });
 });
 

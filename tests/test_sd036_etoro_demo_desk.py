@@ -2,6 +2,7 @@
 import ast
 import inspect
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -16,6 +17,9 @@ from sidedeck.application.sd036_etoro_demo_desk import (
     EtoroDemoLineage, OfflineEtoroDemoSimulator, RateBudgetExceeded, bucket_for, close_scope,
     open_scope, rehearse,
 )
+from sidedeck.application.sd137_pnl_recovery import recover_from_pnl
+from sidedeck.application.sd074_external_anchor import WriteOnceDirectoryAnchor
+from sidedeck.application.sd145_audit_journal import AuditJournal
 from sidedeck.domain import etoro_demo_orders as orders_module
 from sidedeck.domain.etoro_demo import EtoroDemoDataError, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import BaselinePosition, EtoroDemoBookError
@@ -132,6 +136,42 @@ def test_open_body_is_long_unleveraged_price_protected_usd():
     assert body == {"action": "open", "transaction": "buy", "instrumentId": 1001,
                     "orderType": "limitIOC", "limitRate": 101.25, "units": 2.5, "leverage": 1,
                     "orderCurrency": "usd"}
+
+
+def test_audit_anchor_outage_refuses_order_before_simulated_send(h, tmp_path):
+    class FailedAudit:
+        def append(self, *args, **kwargs):
+            raise RuntimeError("anchor unavailable")
+
+    desk = EtoroDemoDesk(
+        outbox=h.outbox, controls=h.controls, lineage=h.lineage, transport=h.sim,
+        policy=DemoDeskPolicy(Decimal(h.cap), frozenset({1001}), h.max_open),
+        baseline=h.baseline, budget=h.budget, audit_journal=FailedAudit(),
+    )
+    request = DemoOpenRequest(ref(), 1001, Decimal("1"), Decimal("101"))
+    h.approve("audit-failure", open_scope(BOOK, request))
+    with pytest.raises(RuntimeError, match="anchor unavailable"):
+        desk.submit_open(intent_id="audit-failure", strategy="tradingagents", request=request)
+    assert h.posts() == []
+    assert h.lineage.orders() == []
+
+
+def test_order_reservation_and_send_are_externally_anchored_before_simulator(h, tmp_path):
+    journal = AuditJournal(tmp_path / "audit.sqlite", stream_id="desk-test",
+                           anchor=WriteOnceDirectoryAnchor(tmp_path / "remote"),
+                           device_key=b"external-audit-test-key-32-bytes-long")
+    journal.initialize(h.now)
+    desk = EtoroDemoDesk(
+        outbox=h.outbox, controls=h.controls, lineage=h.lineage, transport=h.sim,
+        policy=DemoDeskPolicy(Decimal(h.cap), frozenset({1001}), h.max_open),
+        baseline=h.baseline, budget=h.budget, audit_journal=journal,
+    )
+    request = DemoOpenRequest(ref(), 1001, Decimal("1"), Decimal("101"))
+    h.approve("audit-events", open_scope(BOOK, request))
+    assert desk.submit_open(intent_id="audit-events", strategy="tradingagents",
+                            request=request) == "ACCEPTED"
+    assert [r.event_type for r in journal.records()] == ["ORDER_RESERVATION", "SEND"]
+    journal.close()
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -309,6 +349,33 @@ def test_recovery_survives_restart(h):
     h.open_stores()
     assert h.controls.is_halted()
     assert h.desk.recover() == {request.reference_id: "FILLED"}
+
+
+def test_sd137_signed_pnl_recovery_persists_position_and_outbox_fill(h):
+    request, state = h.open()
+    assert state == "ACCEPTED"
+
+    class ReadAuthority:
+        def authorize_request(self, **kwargs):
+            assert kwargs["write"] is False
+            return type("Grant", (), {"grant_id": "test-grant"})()
+
+    class PnlRoute:
+        def send(self, method, path, **kwargs):
+            assert method == "GET" and path == orders_module.DEMO_PNL_PATH
+            return h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+
+    result = recover_from_pnl(
+        route=PnlRoute(), authority=ReadAuthority(), document={}, signature="signed",
+        subject_digest="a" * 64, reference_id="read-once-1",
+        open_reference_id=request.reference_id, desk=h.desk, now=h.now,
+    )
+    row = h.lineage.order(request.reference_id)
+    owned = h.lineage.owned(result.position_id)
+    assert result.classification == "OWNED_POSITION"
+    assert row["state"] == "RECONCILED_FILLED_BY_SNAPSHOT"
+    assert owned is not None and owned["order_id"] == row["order_id"]
+    assert h.outbox.get(row["intent_id"])["state"] == "FILLED_SIMULATED"
 
 
 def test_rejected_and_partial_outcomes(h):
@@ -537,16 +604,18 @@ def test_lost_full_close_recovered_from_snapshot(h):
     position_id, close = _lost_close(h)
     state = h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
                                                now=h.now)
-    assert state == "RECONCILED_CLOSED_BY_SNAPSHOT"
+    assert state == "POSITION_ABSENT_EXECUTOR_UNVERIFIED"
     assert h.lineage.owned(position_id)["state"] == "CLOSED"
+    assert h.lineage.order(close.reference_id)["state"] == "UNRESOLVED_BY_SNAPSHOT"
     assert h.controls.is_halted()   # separate operator clearance still required
 
 
 def test_lost_partial_close_recovered_from_snapshot(h):
     position_id, close = _lost_close(h, Decimal("0.5"))
     assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
-                                              now=h.now) == "RECONCILED_PARTIAL_BY_SNAPSHOT"
+                                              now=h.now) == "POSITION_REDUCED_EXECUTOR_UNVERIFIED"
     assert Decimal(h.lineage.owned(position_id)["remaining_units"]) == Decimal("1.5")
+    assert h.lineage.order(close.reference_id)["state"] == "UNRESOLVED_BY_SNAPSHOT"
 
 
 def test_close_that_never_reached_broker_recovers_as_not_executed(h):
@@ -556,8 +625,71 @@ def test_close_that_never_reached_broker_recovers_as_not_executed(h):
     h.sim.drop_next_request = True
     h.desk.submit_close(intent_id="c1", request=close, snapshot=h.snapshot(), now=h.now)
     assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(),
-                                              now=h.now) == "RECONCILED_NOT_EXECUTED"
+                                              now=h.now) == "NO_REDUCTION_OBSERVED"
     assert h.lineage.owned(position_id)["state"] == "OPEN"
+    assert h.lineage.order(close.reference_id)["state"] == "UNRESOLVED_BY_SNAPSHOT"
+
+
+def test_unknown_snapshot_close_reservation_fences_second_worker(h, tmp_path):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    h.desk.recover_close_from_snapshot(close.reference_id, snapshot=h.snapshot(), now=h.now)
+    competing = EtoroDemoLineage(
+        str(tmp_path / "lineage.sqlite3"),
+        baseline_position_ids=[b.position_id for b in h.baseline],
+        baseline_order_ids=[b.order_id for b in h.baseline if b.order_id],
+    )
+    try:
+        with pytest.raises(EtoroDemoOrderError, match="reference or intent already used"):
+            competing.record_pending(
+                reference_id=ref(), kind="CLOSE", intent_id="competing-close",
+                book_id=BOOK, instrument_id=1001, units=Decimal("1.5"),
+                limit_rate=None, position_id=position_id,
+            )
+    finally:
+        competing.close()
+
+
+def test_unknown_close_snapshot_replay_after_restart_is_idempotent(h):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    snapshot = h.snapshot()
+    assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=snapshot,
+                                              now=h.now) == "POSITION_REDUCED_EXECUTOR_UNVERIFIED"
+    h.close_stores()
+    h.open_stores()
+    assert h.desk.recover_close_from_snapshot(close.reference_id, snapshot=snapshot,
+                                              now=h.now) == "NO_REDUCTION_OBSERVED"
+    assert Decimal(h.lineage.owned(position_id)["remaining_units"]) == Decimal("1.5")
+    order = h.lineage.order(close.reference_id)
+    assert order["state"] == "UNRESOLVED_BY_SNAPSHOT"
+    assert Decimal(order["filled_units"]) == Decimal("0.5")
+
+
+def test_unknown_close_simultaneous_snapshot_recovery_serializes_two_handles(h, tmp_path):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    snapshot = h.snapshot()
+    def worker():
+        lineage = EtoroDemoLineage(
+            str(tmp_path / "lineage.sqlite3"),
+            baseline_position_ids=[b.position_id for b in h.baseline],
+            baseline_order_ids=[b.order_id for b in h.baseline if b.order_id],
+        )
+        desk = EtoroDemoDesk(
+            outbox=h.outbox, controls=h.controls, lineage=lineage,
+            transport=h.sim,
+            policy=DemoDeskPolicy(Decimal(h.cap), frozenset({1001}), h.max_open),
+            baseline=h.baseline, budget=h.budget,
+        )
+        try:
+            return desk.recover_close_from_snapshot(close.reference_id,
+                                                    snapshot=snapshot, now=h.now)
+        finally:
+            lineage.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        states = set(pool.map(lambda _: worker(), range(2)))
+    assert states == {"POSITION_REDUCED_EXECUTOR_UNVERIFIED", "NO_REDUCTION_OBSERVED"}
+    assert Decimal(h.lineage.owned(position_id)["remaining_units"]) == Decimal("1.5")
+    assert Decimal(h.lineage.order(close.reference_id)["filled_units"]) == Decimal("0.5")
 
 
 def test_close_recovery_refuses_contradictions(h):
@@ -574,10 +706,80 @@ def test_close_recovery_refuses_contradictions(h):
     with pytest.raises(EtoroDemoOrderError, match="more units closed"):
         h.desk.recover_close_from_snapshot(close.reference_id, now=h.now,
                                            snapshot=parse_demo_portfolio(gone, observed_at=h.now))
-    with pytest.raises(EtoroDemoOrderError, match="unknown outcome"):
+    with pytest.raises(EtoroDemoOrderError, match="unresolved close"):
         h.desk.recover_close_from_snapshot(h.lineage.orders()[0]["reference_id"],
                                            snapshot=h.snapshot(), now=h.now)
 
+
+
+def test_close_snapshot_refuses_baseline_drift_before_durable_mutation(h):
+    position_id, close = _lost_close(h)
+    previous = h.lineage.owned(position_id)["remaining_units"]
+    payload = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    protected = SYNTHETIC_BASELINE_ROWS[0]["positionID"]
+    payload["clientPortfolio"]["positions"] = [
+        p for p in payload["clientPortfolio"]["positions"]
+        if p["positionID"] != protected
+    ]
+    with pytest.raises(EtoroDemoBookError, match="baseline"):
+        h.desk.recover_close_from_snapshot(
+            close.reference_id, snapshot=parse_demo_portfolio(payload, observed_at=h.now),
+            now=h.now,
+        )
+    assert h.lineage.owned(position_id)["state"] == "OPEN"
+    assert h.lineage.owned(position_id)["remaining_units"] == previous
+    assert h.lineage.order(close.reference_id)["state"] == "OUTCOME_UNKNOWN"
+    assert h.controls.is_halted()
+
+
+def test_close_snapshot_refuses_pending_order_before_durable_mutation(h):
+    position_id, close = _lost_close(h)
+    previous = h.lineage.owned(position_id)["remaining_units"]
+    payload = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    payload["clientPortfolio"]["orders"] = [{"orderID": 424242, "amount": 25}]
+    with pytest.raises(EtoroDemoBookError, match="pending"):
+        h.desk.recover_close_from_snapshot(
+            close.reference_id, snapshot=parse_demo_portfolio(payload, observed_at=h.now),
+            now=h.now,
+        )
+    assert h.lineage.owned(position_id)["state"] == "OPEN"
+    assert h.lineage.owned(position_id)["remaining_units"] == previous
+    assert h.lineage.order(close.reference_id)["state"] == "OUTCOME_UNKNOWN"
+    assert h.controls.is_halted()
+
+
+def test_close_snapshot_refuses_foreign_position_before_durable_mutation(h):
+    position_id, close = _lost_close(h)
+    previous = h.lineage.owned(position_id)["remaining_units"]
+    payload = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    foreign = dict(SYNTHETIC_BASELINE_ROWS[0])
+    foreign["positionID"], foreign["orderID"] = 991337, 991338
+    payload["clientPortfolio"]["positions"].append(foreign)
+    with pytest.raises(EtoroDemoBookError, match="baseline"):
+        h.desk.recover_close_from_snapshot(
+            close.reference_id, snapshot=parse_demo_portfolio(payload, observed_at=h.now),
+            now=h.now,
+        )
+    assert h.lineage.owned(position_id)["remaining_units"] == previous
+    assert h.lineage.order(close.reference_id)["state"] == "OUTCOME_UNKNOWN"
+    assert h.controls.is_halted()
+
+
+def test_close_snapshot_refuses_changed_owned_instrument_and_keeps_unknown(h):
+    position_id, close = _lost_close(h, Decimal("0.5"))
+    payload = h.sim.pnl_payload(SYNTHETIC_BASELINE_ROWS)
+    live = next(p for p in payload["clientPortfolio"]["positions"]
+                if p["positionID"] == position_id)
+    live["instrumentID"] = 999999
+    previous = h.lineage.owned(position_id)["remaining_units"]
+    with pytest.raises(EtoroDemoBookError, match="lineage"):
+        h.desk.recover_close_from_snapshot(
+            close.reference_id, snapshot=parse_demo_portfolio(payload, observed_at=h.now),
+            now=h.now,
+        )
+    assert h.lineage.owned(position_id)["remaining_units"] == previous
+    assert h.lineage.order(close.reference_id)["state"] == "OUTCOME_UNKNOWN"
+    assert h.controls.is_halted()
 
 def test_close_lookup_recovery_is_explicitly_unverified():
     assert desk_module.CLOSE_LOOKUP_RECOVERY == "NOT_VERIFIED"

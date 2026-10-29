@@ -150,3 +150,41 @@ def test_single_aapl_diagnostic_records_numeric_http_failure_without_body(tmp_pa
     assert report["classification"] == "ACCESS_OR_ENTITLEMENT_DENIED"
     assert report["response_sha256"] is None
     assert "X-Secret" not in json.dumps(report)
+
+
+def test_single_aapl_diagnostic_persists_sanitized_urlerror_without_retry(tmp_path):
+    """Network errors consume exactly one GET budget and never invent an HTTP status."""
+    from urllib.error import URLError
+
+    auth = draft_diagnostic_authorization(
+        datetime(2026, 10, 26, tzinfo=UTC), owner_terms_reviewed=True,
+        api_key_env="ETORO_DEMO_TRADE_API_KEY",
+        user_key_env="ETORO_DEMO_TRADE_USER_KEY",
+    )
+    ledger = DataRequestLedger(tmp_path / "budget.sqlite3", auth)
+    count = 0
+
+    def opener(request, timeout=20):
+        nonlocal count
+        del request, timeout
+        count += 1
+        raise URLError("token=secret-must-not-leak: proxy refused")
+
+    report = run_diagnostic(
+        auth, ledger, api_key="hidden_api", user_key="hidden_user",
+        api_key_env="ETORO_DEMO_TRADE_API_KEY",
+        user_key_env="ETORO_DEMO_TRADE_USER_KEY",
+        out_dir=tmp_path / "diagnostic", opener=opener,
+        now=lambda: datetime(2026, 10, 26, tzinfo=UTC),
+    )
+    assert count == 1
+    assert ledger.used() == 1
+    assert report["requests_used"] == 1
+    assert report["status"] is None
+    assert report["classification"] == "NETWORK_TRANSPORT_ERROR"
+    persisted = (tmp_path / "diagnostic" / "summary.json").read_text()
+    assert "NETWORK_TRANSPORT_ERROR" in persisted
+    assert "token=" not in persisted
+    assert "hidden_" not in persisted
+    assert "secret-must-not-leak" not in persisted
+    assert "HTTP_200" not in persisted

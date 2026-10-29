@@ -10,6 +10,7 @@ import json
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -21,11 +22,23 @@ from sidedeck.application import sd063_autonomous_demo_policy as sd063
 from sidedeck.application.sd063_autonomous_demo_policy import (
     AutonomousDemoPolicy, AutonomousDemoRuntime, EntryProposal, EntryQuote, ExitQuote,
     InstrumentScope, PolicyLedger, PolicyRefused, Refusal, StrategyScope, TrackBudget,
+    protective_subject,
     check_grant_binding,
 )
 from sidedeck.application.sd064_unlock_grant import (
     GRANT_NAMESPACE, GrantLedger, UnlockAuthority, UnlockGrant,
 )
+from sidedeck.application.sd074_trusted_inputs import (
+    AuthenticatedRuntime, InputVerifier, NonceStore, SourceRegistry, SourceSigner,
+    TrustedSource,
+)
+from sidedeck.application.sd074_external_anchor import (
+    AnchorKeeper, WriteOnceDirectoryAnchor,
+)
+from sidedeck.application.sd107_demo_gateway import (
+    BROKER_ROUTES, GatewayRefused, OfflineDemoGateway, OfflineDemoSimulator,
+)
+from sidedeck.application.sd145_audit_journal import AuditJournal
 from sidedeck.application.sd070_research_signal import EvidenceRef, ResearchSignal
 from sidedeck.application.sd071_decision_engine import MarketContext, StrategyAdmission
 
@@ -52,7 +65,8 @@ def _policy(**changes: object) -> AutonomousDemoPolicy:
         not_before=datetime(2026, 11, 2, 14, 0, tzinfo=UTC),
         expires_at=datetime(2026, 11, 6, 21, 0, tzinfo=UTC),
         tracks=(_budget(),),
-        strategies=(StrategyScope("sma_cross", "1.0.0", "SWING", "SD022.md", EVIDENCE_SHA),),
+        strategies=(StrategyScope("sma_cross", "1.0.0", "SWING", "SD022.md", EVIDENCE_SHA,
+                                  "etoro-demo:tradingagents"),),
         instruments=tuple(InstrumentScope(c, i) for c, i in IDS.items()),
         protected_instrument_ids=PROTECTED,
         max_limit_premium_pct=Decimal("0.005"),
@@ -64,12 +78,31 @@ def _policy(**changes: object) -> AutonomousDemoPolicy:
     return replace(base, **changes)  # type: ignore[arg-type]
 
 
+def test_signed_strategy_scope_binds_one_separate_book_per_track():
+    first = _policy()
+    other_book = replace(first.strategies[0], book_id="etoro-demo:ai-trading")
+    rebound = replace(first, strategies=(other_book,))
+    assert first.digest() != rebound.digest()
+    assert first.book_for_strategies(("sma_cross@1.0.0",), track="SWING") == \
+        "etoro-demo:tradingagents"
+    assert rebound.book_for_track("SWING") == "etoro-demo:ai-trading"
+    document = rebound.to_document()
+    assert len(document["strategies"][0]) == 6
+    assert AutonomousDemoPolicy.from_document(document).digest() == rebound.digest()
+
+    split_book = replace(first.strategies[0], strategy_id="other", book_id="etoro-demo:ai-trading")
+    with pytest.raises(PolicyRefused, match="all strategies on one track"):
+        replace(first, strategies=(first.strategies[0], split_book))
+
+
 def _fill(reference: str, outcome: str, at: datetime, *, filled_units: Decimal = Decimal(0),
-          avg_price: Decimal = Decimal(0)) -> sd063.FillEvidence:
+          avg_price: Decimal = Decimal(0),
+          broker_position_id: str = "demo-position-1") -> sd063.FillEvidence:
     """Test stand-in for SD-074 verified reconciliation evidence."""
     return sd063._new_fill_evidence(reference=reference, outcome=outcome, units=filled_units,
                                     price=avg_price, at=at, source_id="test-reconciliation",
-                                    broker_order_id="demo-order-1", lookup_sha256="c" * 64)
+                                    broker_order_id="demo-order-1", lookup_sha256="c" * 64,
+                                    broker_position_id=broker_position_id)
 
 
 class _Clock:
@@ -181,6 +214,283 @@ def env(tmp_path: Path):
     e.ledger.close()
 
 
+def _offline_gateway(env: _Env, *, fill_price: str = "500", close_price: str | None = None,
+                     malformed_lookup: bool = False,
+                     bid: str = "499.9", ask: str = "500",
+                     protective_grant: tuple[dict[str, object], str] | None = None,
+                     storage_path: Path | None = None, crash_after_open: bool = False,
+                     crash_after_close: bool = False, audit_outage: bool = False):
+    quote_source = TrustedSource("gateway-quotes", "broker_quotes", b"q" * 40)
+    recon_source = TrustedSource("gateway-recon", "broker_reconciliation", b"r" * 40)
+    verifier = InputVerifier(SourceRegistry([quote_source, recon_source]),
+                             NonceStore(env.tmp / "gateway-nonces.sqlite3"),
+                             clock=env.clock)
+    runtime_impl = env.rt
+    if protective_grant is not None:
+        runtime_impl = env.runtime(env.ledger, env.authority,
+                                   protective_grant=protective_grant)
+        env.rt = runtime_impl
+    runtime = AuthenticatedRuntime(runtime_impl, verifier)
+    anchor_dir = env.tmp / "gateway-anchor"
+    anchor = AnchorKeeper(WriteOnceDirectoryAnchor(anchor_dir), b"a" * 40)
+    if not list(anchor_dir.glob("*.json")):
+        anchor.initialize(env.ledger, env.clock.now)
+    if not hasattr(env, "gateway_audit_journal"):
+        audit_backend = WriteOnceDirectoryAnchor(env.tmp / "gateway-audit-anchor")
+
+        class AuditAnchor:
+            unavailable = False
+
+            def history(self, ledger_id):
+                if self.unavailable:
+                    raise OSError("offline fixture anchor outage")
+                return audit_backend.history(ledger_id)
+
+            def append(self, checkpoint):
+                if self.unavailable:
+                    raise OSError("offline fixture anchor outage")
+                audit_backend.append(checkpoint)
+
+        audit_anchor = AuditAnchor()
+        audit_journal = AuditJournal(
+            env.tmp / f"gateway-audit-{uuid.uuid4().hex}.sqlite3",
+            stream_id=f"gateway-test-{uuid.uuid4().hex}", anchor=audit_anchor,
+            device_key=b"g" * 40,
+        )
+        audit_journal.initialize(env.clock.now)
+        env.gateway_audit_anchor = audit_anchor
+        env.gateway_audit_journal = audit_journal
+    audit_anchor = env.gateway_audit_anchor
+    audit_journal = env.gateway_audit_journal
+    audit_anchor.unavailable = audit_outage
+    quote_signer = SourceSigner(quote_source, env.clock)
+    gateway = OfflineDemoGateway(
+        policy=env.policy, runtime=runtime, authority=env.authority,
+        grant_document=env.grant_document, grant_signature=env.signature,
+        simulator=OfflineDemoSimulator(fill_price=Decimal(fill_price),
+                                       close_price=Decimal(close_price) if close_price else None,
+                                       malformed_lookup=malformed_lookup, storage_path=storage_path,
+                                       crash_after_open=crash_after_open,
+                                       crash_after_close=crash_after_close),
+        reconciliation_signer=SourceSigner(recon_source, env.clock), anchor_keeper=anchor,
+        audit_journal=audit_journal,
+        protective_grant=protective_grant, clock=env.clock,
+    )
+    quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": bid, "ask": ask,
+        "quote_time": (env.clock.now - timedelta(seconds=5)).isoformat(),
+    })
+    return gateway, quote, quote_signer
+
+
+def test_sd107_offline_gateway_revalidates_grant_and_reconciles_sealed_fill(env):
+    gateway, quote, quote_signer = _offline_gateway(env, close_price="400")
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+
+    envelope = gateway.submit_entry(proposal, quote=quote)
+
+    entry = env.ledger.state().entries[proposal.reference_id]
+    assert entry.outcome == "FILLED" and entry.filled == proposal.units
+    assert entry.avg_price == Decimal("500")
+    assert envelope.kind == "fill"
+    assert len(env.authority._ledger.events()) >= 3  # runtime check + send + lookup
+    assert BROKER_ROUTES["ETORO_DEMO"] == "NOT_RELEASED"
+    records = gateway._audit_journal.records()
+    lifecycle = [record.event_type for record in records
+                 if record.event_type in {"ORDER_RESERVATION", "SEND", "RECONCILIATION"}]
+    assert lifecycle == ["ORDER_RESERVATION", "SEND", "RECONCILIATION"]
+    assert {"POLICY", "GRANT", "GRANT_USE"}.issubset(
+        {record.event_type for record in records})
+    replay_quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": "499.9", "ask": "500",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    with pytest.raises(GatewayRefused, match="resolved or already submitted"):
+        gateway.submit_entry(proposal, quote=replay_quote)
+    assert gateway._simulator.submitted_orders == 1
+
+    plan = env.rt.plan_exits(bids=env.bids("400"))
+    assert len(plan.exits) == 1 and plan.exits[0].broker_position_id == "100001"
+    exit_quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": "400", "ask": "401",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    exit_envelope = gateway.submit_exit(plan.exits[0], quote=exit_quote)
+    assert exit_envelope.kind == "fill"
+    assert not env.ledger.open_positions()
+    assert env.ledger.state().exits[plan.exits[0].reference_id].outcome == "FILLED"
+    records = gateway._audit_journal.records()
+    lifecycle = [record.event_type for record in records
+                 if record.event_type in {"ORDER_RESERVATION", "SEND", "RECONCILIATION"}]
+    assert lifecycle == ["ORDER_RESERVATION", "SEND", "RECONCILIATION",
+                         "ORDER_RESERVATION", "SEND", "RECONCILIATION"]
+
+
+def test_sd145_autonomous_gateway_requires_and_uses_available_audit_anchor(env):
+    gateway, quote, _ = _offline_gateway(env)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    env.gateway_audit_anchor.unavailable = True
+    with pytest.raises(GatewayRefused, match="audit evidence unavailable"):
+        gateway.submit_entry(proposal, quote=quote)
+    assert gateway._simulator.submitted_orders == 0
+    assert env.ledger.kill_switch_engaged()
+
+
+def test_sd107_revoked_grant_refuses_before_simulated_write(env):
+    gateway, quote, _ = _offline_gateway(env)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    env.authority.revoke(env.grant_document["grant_id"], "test revocation")
+
+    with pytest.raises(GatewayRefused, match="signed grant refused"):
+        gateway.submit_entry(proposal, quote=quote)
+
+    assert env.ledger.state().entries[proposal.reference_id].outcome is None
+    assert env.ledger.kill_switch_engaged() is False
+    assert any(record.event_type == "REVOCATION"
+               for record in gateway._audit_journal.records())
+
+
+def test_sd107_fresh_quote_above_limit_is_refused_before_simulated_write(env):
+    gateway, quote, _ = _offline_gateway(env, bid="510", ask="511")
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+
+    with pytest.raises(GatewayRefused, match="above the proposal limit"):
+        gateway.submit_entry(proposal, quote=quote)
+    assert env.ledger.state().entries[proposal.reference_id].outcome is None
+
+
+def test_sd107_unavailable_external_anchor_refuses_before_simulated_write(env):
+    gateway, quote, _ = _offline_gateway(env)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+    checkpoint = next((env.tmp / "gateway-anchor").glob("*.json"))
+    checkpoint.unlink()
+
+    with pytest.raises(GatewayRefused, match="not externally anchored"):
+        gateway.submit_entry(proposal, quote=quote)
+
+    assert gateway._simulator.submitted_orders == 0
+
+
+def test_sd107_malformed_lookup_is_unresolved_and_halts_without_retry(env):
+    gateway, quote, _ = _offline_gateway(env, malformed_lookup=True)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+
+    evidence = gateway.submit_entry(proposal, quote=quote)
+
+    entry = env.ledger.state().entries[proposal.reference_id]
+    assert evidence.kind == "fill"
+    assert entry.outcome == "UNRESOLVED"
+    assert env.ledger.kill_switch_engaged()
+    uses = [event for _, event, _ in env.authority._ledger.events()
+            if event in ("USE_WRITE", "USE_READ")]
+    assert uses.count("USE_WRITE") == 1
+
+
+def test_sd107_restart_recovers_durable_acceptance_without_replaying_open(env):
+    storage = env.tmp / "simulator.sqlite3"
+    gateway, quote, _ = _offline_gateway(env, storage_path=storage, crash_after_open=True)
+    proposal = env.entry()
+    assert isinstance(proposal, EntryProposal)
+
+    with pytest.raises(GatewayRefused, match="process interruption"):
+        gateway.submit_entry(proposal, quote=quote)
+    assert env.ledger.kill_switch_engaged()
+    assert gateway._simulator.submitted_orders == 1
+    gateway._simulator.close_store()
+
+    restarted, _, _ = _offline_gateway(env, storage_path=storage)
+    recovered = restarted.recover_entry(proposal)
+
+    assert recovered.payload["outcome"] == "FILLED"
+    assert env.ledger.state().entries[proposal.reference_id].outcome == "FILLED"
+    assert env.ledger.kill_switch_engaged()  # recovery never resets the halt
+    assert restarted._simulator.submitted_orders == 1
+
+
+def test_sd107_restart_recovers_durable_close_without_replaying_close(env):
+    storage = env.tmp / "simulator.sqlite3"
+    gateway, entry_quote, quote_signer = _offline_gateway(
+        env, close_price="400", storage_path=storage)
+    entry = env.entry()
+    assert isinstance(entry, EntryProposal)
+    gateway.submit_entry(entry, quote=entry_quote)
+    plan = env.rt.plan_exits(bids=env.bids("400"))
+    assert len(plan.exits) == 1
+    proposal = plan.exits[0]
+    close_quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": "400", "ask": "401",
+        "quote_time": env.clock.now.isoformat(),
+    })
+    # Use a gateway backed by the same durable store with a one-shot crash after close commit.
+    gateway._simulator.close_store()
+    gateway, _, _ = _offline_gateway(env, close_price="400", storage_path=storage,
+                                    crash_after_close=True)
+
+    with pytest.raises(GatewayRefused, match="process interruption"):
+        gateway.submit_exit(proposal, quote=close_quote)
+    assert env.ledger.kill_switch_engaged()
+    assert len(env.ledger.open_positions()) == 1
+    gateway._simulator.close_store()
+
+    restarted, _, _ = _offline_gateway(env, close_price="400", storage_path=storage)
+    recovered = restarted.recover_exit(proposal)
+
+    assert recovered.payload["outcome"] == "FILLED"
+    assert not env.ledger.open_positions()
+    assert env.ledger.kill_switch_engaged()
+    assert entry.reference_id in env.ledger.state().entries
+
+
+def test_close_reconciliation_cannot_change_broker_position_lineage(env):
+    proposal = env.open_position()
+    plan = env.rt.plan_exits(bids=env.bids("400"))
+    assert len(plan.exits) == 1
+
+    with pytest.raises(PolicyRefused, match="different broker position"):
+        env.ledger.resolve(_fill(plan.exits[0].reference_id, "FILLED", env.clock.now,
+                                 filled_units=proposal.units, avg_price=Decimal("400"),
+                                 broker_position_id="another-position"))
+
+
+def test_protective_grant_allows_reduce_only_close_after_policy_expiry(env):
+    grant = replace(
+        _grant(env.policy), grant_id=str(uuid.uuid4()),
+        subject_digest=protective_subject(env.policy),
+        not_before=datetime(2026, 11, 3, 14, 0, tzinfo=UTC),
+        expires_at=datetime(2026, 11, 10, 14, 0, tzinfo=UTC),
+        purpose="SD-074E protective exit test",
+    )
+    document = json.loads(grant.canonical())
+    protective = (document, f"sig:{grant.digest()}")
+    gateway, _, quote_signer = _offline_gateway(
+        env, close_price="400", protective_grant=protective)
+    entry = env.entry()
+    assert isinstance(entry, EntryProposal)
+    gateway.submit_entry(entry, quote=quote_signer.seal({
+        "canonical_id": MSFT, "bid": "499.9", "ask": "500",
+        "quote_time": env.clock.now.isoformat(),
+    }))
+
+    env.clock.now = datetime(2026, 11, 9, 15, 0, tzinfo=UTC)
+    plan = env.rt.plan_exits(bids=env.bids("400"))
+    assert len(plan.exits) == 1 and plan.exits[0].authority == "protective"
+    close_quote = quote_signer.seal({
+        "canonical_id": MSFT, "bid": "400", "ask": "401",
+        "quote_time": env.clock.now.isoformat(),
+    })
+
+    gateway.submit_exit(plan.exits[0], quote=close_quote)
+
+    assert not env.ledger.open_positions()
+    assert env.ledger.state().exits[plan.exits[0].reference_id].outcome == "FILLED"
+
+
 # --- policy document -------------------------------------------------------------------------
 
 def test_policy_digest_is_stable_and_round_trips():
@@ -211,7 +521,6 @@ def test_from_document_is_strict():
       "expires_at": datetime(2026, 11, 8, 23, 0, tzinfo=UTC)}, "full exchange session"),
     ({"tracks": ()}, "at least one track"),
     ({"tracks": (_budget(), _budget())}, "duplicate track"),
-    ({"tracks": (_budget(track="DAY"),)}, "DAY"),
     ({"tracks": (_budget(virtual_capital=Decimal("1200")),)}, "1000"),
     ({"tracks": (_budget(max_position_notional=Decimal("600")),)}, "position"),
     ({"tracks": (_budget(max_new_entries_per_day=5),)}, "entries"),
@@ -225,8 +534,12 @@ def test_from_document_is_strict():
     ({"instruments": (InstrumentScope(MSFT, 1004), InstrumentScope(MSFT, 1006))}, "duplicate"),
     ({"instruments": ()}, "at least one instrument"),
     ({"protected_instrument_ids": frozenset()}, "must not be empty"),
-    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "POSITION", "x", SHA),)}, "track"),
-    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "SWING", "x", "nothex"),)}, "SHA-256"),
+    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "POSITION", "x", SHA,
+                                    "etoro-demo:tradingagents"),)}, "track"),
+    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "SWING", "x", "nothex",
+                                    "etoro-demo:tradingagents"),)}, "SHA-256"),
+    ({"strategies": (StrategyScope("sma_cross", "1.0.0", "SWING", "x", SHA,
+                                    "unscoped-book"),)}, "existing SideDeck book"),
     ({"strategies": ()}, "at least one strategy"),
     ({"max_limit_premium_pct": Decimal("0.01")}, "premium"),
     ({"max_quote_age_seconds": 120}, "quote"),
@@ -235,6 +548,16 @@ def test_from_document_is_strict():
 def test_policy_scope_violations_are_refused(changes, message):
     with pytest.raises(PolicyRefused, match=message):
         _policy(**changes)
+
+
+def test_day_track_is_supported_but_still_requires_independent_admission():
+    day = _budget(track="DAY")
+    policy = _policy(
+        tracks=(day,),
+        strategies=(StrategyScope("day_orb", "1.0.0", "DAY", "SD022.md", EVIDENCE_SHA,
+                                  "etoro-demo:tradingagents"),),
+    )
+    assert policy.budget("DAY") == day
 
 
 # --- SD-064 grant binding (F1) ---------------------------------------------------------------
@@ -312,7 +635,7 @@ def test_f2_evidence_path_traversal_is_refused(tmp_path):
     outside = tmp_path / "SD022.md"
     outside.write_bytes(EVIDENCE)
     policy = _policy(strategies=(StrategyScope("sma_cross", "1.0.0", "SWING", "../SD022.md",
-                                               EVIDENCE_SHA),))
+                                               EVIDENCE_SHA, "etoro-demo:tradingagents"),))
     e = _Env(tmp_path, policy)
     try:
         result = e.entry(admissions=(StrategyAdmission("sma_cross", "1.0.0", "SWING", "ADMITTED",

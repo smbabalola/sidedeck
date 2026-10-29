@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 NAMESPACE = "sidedeck-data-authorization"
 SCHEMA = "sidedeck.data_authorization.v1"
@@ -30,6 +30,7 @@ MAX_LIFETIME = timedelta(days=7)
 PROVIDER_HOSTS: dict[str, frozenset[str]] = {
     "NASDAQ_TRADER_SYMBOL_DIRECTORY": frozenset({"www.nasdaqtrader.com"}),
     "ALPACA_SIP_DAILY": frozenset({"data.alpaca.markets"}),
+    "ALPACA_SIP_INTRADAY": frozenset({"data.alpaca.markets"}),
     # SD-094A: public England & Wales bank-holiday feed (Open Government Licence v3.0).
     "GOV_UK_BANK_HOLIDAYS": frozenset({"www.gov.uk"}),
     "ETORO_DEMO_MARKET_DATA": frozenset({"public-api.etoro.com"}),
@@ -111,6 +112,18 @@ class DataAuthorization:
             raise AuthorizationRefused("authorization must expire within 7 days of issue")
         if not self.owner_terms_reviewed:
             raise AuthorizationRefused("owner must confirm the source terms were reviewed")
+        if self.provider == "ALPACA_SIP_INTRADAY":
+            keys = {"timeframe", "feed", "adjustment", "start", "end", "limit"}
+            if set(self.scope) != keys or any(
+                not isinstance(self.scope.get(key), str) for key in keys
+            ):
+                raise AuthorizationRefused("intraday query scope must pin all six fields")
+            if (self.scope["timeframe"] != "5Min" or self.scope["feed"] != "sip"
+                    or self.scope["adjustment"] != "split"
+                    or self.scope["limit"] != "10000"
+                    or not self.scope["start"] or not self.scope["end"]
+                    or self.scope["start"] >= self.scope["end"]):
+                raise AuthorizationRefused("intraday query scope is invalid")
 
     def canonical(self) -> str:
         data = asdict(self)
@@ -121,6 +134,16 @@ class DataAuthorization:
     def allows_url(self, url: str) -> bool:
         """Match an exact authorized path or a documented instrument-ID template."""
         base = _check_url(url, PROVIDER_HOSTS[self.provider])
+        if self.provider == "ALPACA_SIP_INTRADAY":
+            pairs = parse_qsl(urlsplit(url).query, keep_blank_values=True)
+            actual = dict(pairs)
+            if len(pairs) != len(actual):
+                return False
+            token = actual.pop("page_token", None)
+            if token is not None and (not token or len(token) > 512):
+                return False
+            if actual != self.scope:
+                return False
         for authorized in self.urls:
             if "{instrumentId}" not in authorized:
                 if base == authorized:

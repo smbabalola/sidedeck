@@ -73,7 +73,7 @@ class _Kit:
              price: str = "500", signer: str = "etoro-demo-recon", **changes: object):
         payload = {"reference": reference, "outcome": outcome, "units": units, "price": price,
                    "filled_at": self.env.clock.now.isoformat(), "broker_order_id": "demo-77",
-                   "lookup_sha256": LOOKUP}
+                   "lookup_sha256": LOOKUP, "broker_position_id": "demo-position-88"}
         payload.update(changes)
         return self.signers[signer].seal(payload)
 

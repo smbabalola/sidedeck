@@ -18,18 +18,21 @@ Alpaca PAPER is secondary. This desk is **offline only**:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import tempfile
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Iterator, Protocol
 
 from sidedeck.application.sd032_durable_paper_intent import DurablePaperIntentStore, PaperIntent
 from sidedeck.application.sd033_approval_killswitch import ApprovalKillSwitch, intent_digest
+from sidedeck.application.sd145_audit_journal import AuditJournal
 from sidedeck.domain.etoro_demo import DemoPortfolioSnapshot, parse_demo_portfolio
 from sidedeck.domain.etoro_demo_books import (
     STRATEGY_BOOKS, BaselinePosition, EtoroDemoBookError, OrderAttribution, reconcile_demo,
@@ -80,6 +83,15 @@ class TransportOutcomeUnknown(RuntimeError):
 
 class TransportNotFound(RuntimeError):
     """The broker reports no such order (HTTP 404)."""
+
+
+class TransportRetryableStatus(RuntimeError):
+    """A fake broker's transient GET status and its Retry-After seconds."""
+
+    def __init__(self, status_code: int, retry_after_seconds: float | None) -> None:
+        super().__init__(f"simulated retryable GET status {status_code}")
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class AcceptedOrderNotVisible(EtoroDemoOrderError):
@@ -199,6 +211,39 @@ CREATE TABLE IF NOT EXISTS etoro_demo_owned_positions (
   remaining_units TEXT NOT NULL, state TEXT NOT NULL, recorded_at TEXT NOT NULL,
   FOREIGN KEY(reference_id) REFERENCES etoro_demo_lineage_orders(reference_id)
 );
+-- Recovery GETs are independently reserved once per stage and original intent.
+-- This is not a signed GET grant or a broker release; the SD-064/145 gate is separate.
+CREATE TABLE IF NOT EXISTS etoro_demo_offline_recovery_reads (
+  order_reference TEXT NOT NULL,
+  stage TEXT NOT NULL CHECK(stage IN ('REFERENCE', 'ACCEPTED_ORDER_ID')),
+  requested_at TEXT NOT NULL,
+  PRIMARY KEY(order_reference, stage),
+  FOREIGN KEY(order_reference) REFERENCES etoro_demo_lineage_orders(reference_id)
+);
+CREATE TABLE IF NOT EXISTS etoro_demo_offline_recovery_attempts (
+  order_reference TEXT NOT NULL,
+  stage TEXT NOT NULL CHECK(stage IN ('REFERENCE', 'ACCEPTED_ORDER_ID')),
+  attempt INTEGER NOT NULL CHECK(attempt BETWEEN 1 AND 3),
+  requested_at TEXT NOT NULL,
+  retry_after_seconds REAL,
+  PRIMARY KEY(order_reference, stage, attempt),
+  FOREIGN KEY(order_reference) REFERENCES etoro_demo_lineage_orders(reference_id)
+);
+-- An offline adapter restart must not silently rebase protected original holdings.
+CREATE TABLE IF NOT EXISTS etoro_demo_original_baseline (
+  id INTEGER PRIMARY KEY CHECK(id=1), facts_json TEXT NOT NULL
+);
+-- Protect multiple processes against sending two concurrent closes for one position.
+-- Settled attempts can only be retried after independently verified reconciliation;
+-- unresolved/unknown outcomes remain reserved across every process restart.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_etoro_one_pending_close_per_position
+ON etoro_demo_lineage_orders(position_id)
+WHERE kind='CLOSE' AND state NOT IN (
+  'FILLED', 'REJECTED', 'CANCELED', 'EXPIRED',
+  'CANCELED_PARTIALLY_FILLED', 'REJECTED_PARTIALLY_FILLED',
+  'RECONCILED_NOT_EXECUTED', 'RECONCILED_CLOSED_BY_SNAPSHOT',
+  'RECONCILED_PARTIAL_BY_SNAPSHOT'
+);
 """
 
 
@@ -214,8 +259,201 @@ class EtoroDemoLineage:
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.executescript(_LINEAGE_DDL)
 
+    @property
+    def baseline_position_ids(self) -> frozenset[int]:
+        """Configured protected IDs, exposed read-only for whole-account checks."""
+        return self._protected
+
+    @property
+    def baseline_order_ids(self) -> frozenset[int]:
+        """Configured protected order IDs, exposed read-only for whole-account checks."""
+        return self._protected_orders
+
+    def bind_offline_original_baseline(self, baseline: Iterable[BaselinePosition]) -> None:
+        """Bind complete original facts once in this durable lineage (offline only).
+
+        IDs alone cannot protect against a pre-restart change in quantities,
+        direction, instrument, opening timestamp or order identities. Do not
+        overwrite the first binding, including after an ambiguous broker result.
+        A live adapter needs a separately owner-authenticated broker baseline;
+        this fixture binding is NOT sufficient to release a broker transport.
+        """
+        rows = tuple(sorted(baseline, key=lambda p: p.position_id))
+        if (len(rows) != 4 or
+                {p.position_id for p in rows} != self._protected or
+                {p.order_id for p in rows} != self._protected_orders):
+            raise EtoroDemoBookError("offline original baseline IDs do not match protected lineage")
+        facts = json.dumps([
+            {"position_id": p.position_id, "order_id": p.order_id,
+             "instrument_id": p.instrument_id, "is_buy": p.is_buy,
+             "units": str(p.units), "opened_at": p.opened_at.isoformat()}
+            for p in rows
+        ], sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        with self.transaction():
+            saved = self._db.execute(
+                "SELECT facts_json FROM etoro_demo_original_baseline WHERE id=1"
+            ).fetchone()
+            if saved is None:
+                prior_orders = self._db.execute(
+                    "SELECT EXISTS(SELECT 1 FROM etoro_demo_lineage_orders)"
+                ).fetchone()[0]
+                if prior_orders:
+                    raise EtoroDemoBookError(
+                        "cannot establish a new original baseline after an order was reserved")
+                self._db.execute(
+                    "INSERT INTO etoro_demo_original_baseline(id,facts_json) VALUES(1,?)",
+                    (facts,),
+                )
+            elif saved["facts_json"] != facts:
+                raise EtoroDemoBookError(
+                    "protected baseline facts differ from durable original after restart")
+
+    def reserve_offline_recovery_read(
+        self, *, order_reference: str, stage: str, at: datetime,
+        deadline_seconds: int = 120,
+    ) -> None:
+        """Conservatively reserve one stage before a signed, audited fake GET.
+
+        A crash after this reserve consumes the step. It cannot create
+        permission, retry a POST, reset HALT, or imply broker confirmation.
+        """
+        if (at.tzinfo is None or at.utcoffset() is None
+                or type(deadline_seconds) is not int or not 1 <= deadline_seconds <= 120):
+            raise EtoroDemoOrderError("recovery read clock/deadline is invalid")
+        if stage not in {"REFERENCE", "ACCEPTED_ORDER_ID"}:
+            raise EtoroDemoOrderError("unrecognized recovery read stage")
+        now = at.astimezone(timezone.utc)
+        with self.transaction():
+            original = self._db.execute(
+                "SELECT kind,state,order_id FROM etoro_demo_lineage_orders "
+                "WHERE reference_id=?", (order_reference,),
+            ).fetchone()
+            if original is None or original["kind"] != "OPEN":
+                raise EtoroDemoOrderError("recovery read requires original durable OPEN")
+            rows = self._db.execute(
+                "SELECT stage,requested_at FROM etoro_demo_offline_recovery_reads "
+                "WHERE order_reference=?", (order_reference,),
+            ).fetchall()
+            prior = {str(row["stage"]): datetime.fromisoformat(
+                str(row["requested_at"])) for row in rows}
+            if stage in prior or len(prior) >= 2:
+                raise EtoroDemoOrderError("offline recovery GET stage already reserved")
+            if stage == "ACCEPTED_ORDER_ID":
+                first = prior.get("REFERENCE")
+                if first is None or original["order_id"] is None:
+                    raise EtoroDemoOrderError(
+                        "orderId fallback requires prior reference GET and accepted broker ID")
+                elapsed = (now - first.astimezone(timezone.utc)).total_seconds()
+                if not 0 <= elapsed <= deadline_seconds:
+                    raise EtoroDemoOrderError("fallback GET deadline or clock invalid")
+            elif prior:
+                raise EtoroDemoOrderError("reference recovery GET cannot replay")
+            self._db.execute(
+                "INSERT INTO etoro_demo_offline_recovery_reads"
+                "(order_reference,stage,requested_at) VALUES(?,?,?)",
+                (order_reference, stage, now.isoformat()),
+            )
+
+    def offline_recovery_read_stages(self, order_reference: str) -> tuple[str, ...]:
+        """Read-only inspection of one offline recovery's durable budget."""
+        return tuple(str(row[0]) for row in self._db.execute(
+            "SELECT stage FROM etoro_demo_offline_recovery_reads "
+            "WHERE order_reference=? ORDER BY rowid", (order_reference,),
+        ))
+
+    def reserve_offline_recovery_attempt(
+        self, *, order_reference: str, stage: str, attempt: int, at: datetime,
+        deadline_seconds: int = 120,
+    ) -> None:
+        """Atomically fence one of at most three GET attempts within its stage."""
+        if (stage not in {"REFERENCE", "ACCEPTED_ORDER_ID"}
+                or type(attempt) is not int or not 1 <= attempt <= 3
+                or at.tzinfo is None or at.utcoffset() is None
+                or type(deadline_seconds) is not int or not 1 <= deadline_seconds <= 120):
+            raise EtoroDemoOrderError("recovery GET attempt scope is invalid")
+        now = at.astimezone(timezone.utc)
+        with self.transaction():
+            base = self._db.execute(
+                "SELECT requested_at FROM etoro_demo_offline_recovery_reads "
+                "WHERE order_reference=? AND stage=?", (order_reference, stage),
+            ).fetchone()
+            if base is None:
+                raise EtoroDemoOrderError("GET attempt requires its durable stage reservation")
+            prior = self._db.execute(
+                "SELECT attempt,requested_at,retry_after_seconds "
+                "FROM etoro_demo_offline_recovery_attempts "
+                "WHERE order_reference=? AND stage=? ORDER BY attempt",
+                (order_reference, stage),
+            ).fetchall()
+            if attempt != len(prior) + 1:
+                raise EtoroDemoOrderError("GET attempt sequence is not contiguous")
+            first_at = datetime.fromisoformat(str(base["requested_at"])).astimezone(timezone.utc)
+            if not 0 <= (now - first_at).total_seconds() <= deadline_seconds:
+                raise EtoroDemoOrderError("GET retry deadline or clock invalid")
+            if prior:
+                previous = prior[-1]
+                delay = previous["retry_after_seconds"]
+                if delay is None:
+                    raise EtoroDemoOrderError("previous GET attempt is not retry-authorized")
+                previous_at = datetime.fromisoformat(str(previous["requested_at"])).astimezone(
+                    timezone.utc)
+                if (now - previous_at).total_seconds() < float(delay):
+                    raise EtoroDemoOrderError("GET retry pacing deadline has not elapsed")
+            self._db.execute(
+                "INSERT INTO etoro_demo_offline_recovery_attempts"
+                "(order_reference,stage,attempt,requested_at) VALUES(?,?,?,?)",
+                (order_reference, stage, attempt, now.isoformat()),
+            )
+
+    def authorize_offline_recovery_retry(
+        self, *, order_reference: str, stage: str, attempt: int,
+        retry_after_seconds: float,
+    ) -> None:
+        """Persist a bounded fake Retry-After only for an already-reserved attempt."""
+        if (type(attempt) is not int or not 1 <= attempt < 3
+                or type(retry_after_seconds) not in (int, float)
+                or not 0 < retry_after_seconds <= 30):
+            raise EtoroDemoOrderError("GET retry delay is outside the offline policy")
+        cursor = self._db.execute(
+            "UPDATE etoro_demo_offline_recovery_attempts SET retry_after_seconds=? "
+            "WHERE order_reference=? AND stage=? AND attempt=? "
+            "AND retry_after_seconds IS NULL",
+            (float(retry_after_seconds), order_reference, stage, attempt),
+        )
+        if cursor.rowcount != 1:
+            raise EtoroDemoOrderError("GET retry does not match one unconsumed attempt")
+
+    def offline_recovery_attempts(self, order_reference: str) -> list[sqlite3.Row]:
+        """Read-only synthetic GET attempt history, ordered by request stage and attempt."""
+        return list(self._db.execute(
+            "SELECT stage,attempt,requested_at,retry_after_seconds "
+            "FROM etoro_demo_offline_recovery_attempts WHERE order_reference=? "
+            "ORDER BY rowid", (order_reference,),
+        ))
+
+    def offline_original_baseline_sha256(self) -> str:
+        """Local original-facts fingerprint; NEVER broker-owner verification."""
+        row = self._db.execute(
+            "SELECT facts_json FROM etoro_demo_original_baseline WHERE id=1"
+        ).fetchone()
+        if row is None:
+            raise EtoroDemoBookError("original offline baseline facts are unavailable")
+        return hashlib.sha256(str(row["facts_json"]).encode("utf-8")).hexdigest()
+
     def close(self) -> None:
         self._db.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Serialize multi-row broker reconciliation across SQLite workers."""
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except Exception:
+            self._db.rollback()
+            raise
+        else:
+            self._db.commit()
 
     def record_pending(self, *, reference_id: str, kind: str, intent_id: str, book_id: str,
                        instrument_id: int, units: Decimal | None, limit_rate: Decimal | None,
@@ -295,6 +533,36 @@ class EtoroDemoLineage:
                          "WHERE position_id=?",
                          (str(remaining), "CLOSED" if remaining == 0 else "OPEN", position_id))
 
+    def reconcile_full_close(self, *, reference_id: str, order_id: int,
+                             position_id: int, closed_units: Decimal) -> None:
+        """Settle a full close only after caller verifies close receipt and final portfolio."""
+        with self.transaction():
+            order = self.order(reference_id)
+            position = self.owned(position_id)
+            if position is None:
+                raise EtoroDemoOrderError("full close reconciliation has no owned position")
+            opened = self.order(position["reference_id"])
+            if (opened["kind"] != "OPEN" or opened["state"] != "ACCEPTED"
+                    or opened["order_id"] != position["order_id"]
+                    or opened["book_id"] != position["book_id"]
+                    or opened["instrument_id"] != position["instrument_id"]
+                    or order["kind"] != "CLOSE"
+                    or order["state"] not in {"ACCEPTED", "FILLED"}
+                    or order["order_id"] != order_id or order["position_id"] != position_id
+                    or order["instrument_id"] != position["instrument_id"]
+                    or order["book_id"] != position["book_id"]
+                    or Decimal(order["units"]) != closed_units
+                    or position_id in self._protected):
+                raise EtoroDemoOrderError("full close reconciliation lacks exact durable lineage")
+            if order["state"] == "FILLED" and position["state"] == "CLOSED":
+                return  # idempotent replay after the first durable half of reconciliation
+            if (order["state"] != "ACCEPTED" or position["state"] != "OPEN"
+                    or closed_units != Decimal(position["remaining_units"])):
+                raise EtoroDemoOrderError("full close reconciliation state is inconsistent")
+            self.set_state(reference_id, "FILLED", order_id=order_id,
+                           filled_units=closed_units)
+            self.reduce_position(position_id, closed_units)
+
     def attributions(self) -> tuple[OrderAttribution, ...]:
         rows = self._db.execute("SELECT order_id, book_id FROM etoro_demo_lineage_orders "
                                 "WHERE kind='OPEN' AND order_id IS NOT NULL ORDER BY order_id")
@@ -305,7 +573,8 @@ class EtoroDemoDesk:
     def __init__(self, *, outbox: DurablePaperIntentStore, controls: ApprovalKillSwitch,
                  lineage: EtoroDemoLineage, transport: EtoroDemoTransport,
                  policy: DemoDeskPolicy, baseline: Iterable[BaselinePosition],
-                 budget: DemoRateBudget, pilot_release: Any = None) -> None:
+                 budget: DemoRateBudget, pilot_release: Any = None,
+                 audit_journal: AuditJournal | None = None) -> None:
         self._pilot_release = None
         if getattr(transport, "offline_simulation", False) is not True:
             # The general release stays NO_GO. The only exception is one active, owner-signed
@@ -326,6 +595,13 @@ class EtoroDemoDesk:
         self._transport, self._policy = transport, policy
         self._baseline = tuple(baseline)
         self._budget = budget
+        self._audit_journal = audit_journal
+
+    def _audit(self, event_type: str, *, entity_id: str, payload: dict[str, Any],
+               at: datetime | None = None) -> None:
+        if self._audit_journal is not None:
+            self._audit_journal.append(event_type, entity_id=entity_id, payload=payload,
+                                       at=at or datetime.now(timezone.utc))
 
     # ---- transport boundary -------------------------------------------------
     def _send(self, method: str, path: str, *, reference_id: str,
@@ -369,6 +645,10 @@ class EtoroDemoDesk:
                 raise EtoroDemoOrderError("open differs from the signed pilot intent")
             self._require_preflight_evidence(request, quote, eligibility)
         self._budget.acquire("write")
+        self._audit("ORDER_RESERVATION", entity_id=request.reference_id,
+                    payload={"kind": "OPEN", "intent_id": intent_id, "book_id": book,
+                             "instrument_id": request.instrument_id,
+                             "units": str(request.units), "limit_rate": str(request.limit_rate)})
         self._outbox.enqueue(PaperIntent(
             intent_id, request.reference_id, "sidedeck", "etoro", "paper", "etoro-demo", book,
             f"etoro:{request.instrument_id}", "BUY", request.units, request.limit_rate))
@@ -380,6 +660,9 @@ class EtoroDemoDesk:
                                      instrument_id=request.instrument_id, units=request.units,
                                      limit_rate=request.limit_rate, position_id=None)
         self._outbox.record_simulated_submission(intent_id)
+        self._audit("SEND", entity_id=request.reference_id,
+                    payload={"method": "POST", "path": DEMO_OPEN_PATH,
+                             "intent_id": intent_id, "kind": "OPEN"})
         try:
             payload = self._send("POST", DEMO_OPEN_PATH, reference_id=request.reference_id,
                                  body=request.body())
@@ -488,6 +771,9 @@ class EtoroDemoDesk:
         requested instrument, long, 1x, direct (not mirrored), with 0 < units <= requested
         and a reported ``openRate`` <= the signed limit. Anything else halts. Never resubmits.
         """
+        self._audit("RECONCILIATION", entity_id=reference_id,
+                    payload={"kind": "OPEN", "evidence": "SIGNED_PORTFOLIO_SNAPSHOT",
+                             "observed_at": snapshot.observed_at.isoformat()}, at=now)
         row = self._lineage.order(reference_id)
         if (row["kind"] != "OPEN" or row["state"] != "ACCEPTED" or row["order_id"] is None
                 or Decimal(row["filled_units"]) != ZERO):
@@ -535,6 +821,19 @@ class EtoroDemoDesk:
         self._outbox.record_fill(intent_id, live.units)
         return live
 
+    def accepted_open_snapshot_identity(self, reference_id: str) -> sqlite3.Row:
+        """Return durable accepted-open identity for signed `/pnl` authorization.
+
+        This read-only preflight lets the signed portfolio-read service reject
+        unknown, already-filled, or unaccepted references before consuming a
+        broker read. Recovery still goes through `recover_open_from_snapshot`.
+        """
+        row = self._lineage.order(reference_id)
+        if (row["kind"] != "OPEN" or row["state"] != "ACCEPTED"
+                or row["order_id"] is None or Decimal(row["filled_units"]) != ZERO):
+            raise EtoroDemoOrderError("snapshot recovery requires a durably accepted open")
+        return row
+
     def recover(self) -> dict[str, str]:
         """After restart: look up every unresolved open by referenceId. Never resubmits."""
         results = {}
@@ -574,11 +873,20 @@ class EtoroDemoDesk:
         if not self._controls.is_approved(intent_id, close_scope(owned["book_id"], request)):
             raise EtoroDemoOrderError("no verified, unexpired approval for this exact close")
         self._budget.acquire("write")
+        self._audit("ORDER_RESERVATION", entity_id=request.reference_id,
+                    payload={"kind": "CLOSE", "intent_id": intent_id,
+                             "book_id": owned["book_id"],
+                             "instrument_id": request.instrument_id,
+                             "position_id": request.position_id,
+                             "units": str(request.units_to_deduct or remaining)})
         self._lineage.record_pending(reference_id=request.reference_id, kind="CLOSE",
                                      intent_id=intent_id, book_id=owned["book_id"],
                                      instrument_id=request.instrument_id,
                                      units=request.units_to_deduct or remaining,
                                      limit_rate=None, position_id=request.position_id)
+        self._audit("SEND", entity_id=request.reference_id,
+                    payload={"method": "POST", "path": request.path,
+                             "intent_id": intent_id, "kind": "CLOSE"})
         try:
             payload = self._send("POST", request.path, reference_id=request.reference_id,
                                  body=request.body())
@@ -614,40 +922,94 @@ class EtoroDemoDesk:
         self._lineage.set_state(reference_id, outcome.status, filled_units=outcome.closed_units)
         return outcome.status
 
-    def recover_close_from_snapshot(self, reference_id: str, *,
-                                    snapshot: DemoPortfolioSnapshot, now: datetime) -> str:
-        """Resolve a close whose response was lost, using a fresh documented /pnl snapshot.
+    def unknown_close_snapshot_identity(self, reference_id: str) -> sqlite3.Row:
+        """Preflight persisted UNKNOWN CLOSE before consuming a separately signed /pnl GET.
 
-        ``orders:lookup`` for close orders is ``CLOSE_LOOKUP_RECOVERY=NOT_VERIFIED``, so the
-        broker-reported position units decide. The kill-switch stays tripped; clearing it is
-        a separate operator action.
+        The close is *not* claimed as executed just because it was reserved or
+        because a later portfolio snapshot no longer shows the owned position.
         """
         row = self._lineage.order(reference_id)
-        if row["kind"] != "CLOSE" or row["state"] != "OUTCOME_UNKNOWN":
-            raise EtoroDemoOrderError("only a close with an unknown outcome can be recovered")
-        snapshot.require_fresh(now)
+        if row["kind"] != "CLOSE" or row["state"] not in {
+                "OUTCOME_UNKNOWN", "UNRESOLVED_BY_SNAPSHOT"}:
+            raise EtoroDemoOrderError("only an unresolved close can be recovered")
         owned = self._lineage.owned(row["position_id"])
-        if owned is None:
-            raise EtoroDemoBookError("position has no SideDeck lineage")
+        if owned is None or owned["state"] != "OPEN":
+            raise EtoroDemoBookError("close recovery lacks an open SideDeck-owned position")
+        if (row["book_id"] != owned["book_id"]
+                or row["instrument_id"] != owned["instrument_id"]
+                or row["position_id"] != owned["position_id"]
+                or owned["order_id"] is None
+                or any(p.position_id == row["position_id"] for p in self._baseline)
+                or Decimal(row["units"]) - Decimal(row["filled_units"] or "0") < ZERO
+                or Decimal(row["units"]) - Decimal(row["filled_units"] or "0")
+                > Decimal(owned["remaining_units"])):
+            raise EtoroDemoBookError("close recovery identity or reserved units contradict lineage")
+        return row
+
+    def recover_close_from_snapshot(self, reference_id: str, *,
+                                    snapshot: DemoPortfolioSnapshot, now: datetime) -> str:
+        """Reconcile a lost CLOSE response using a fresh *whole-account* /pnl snapshot.
+
+        This can prove observed position reduction or absence, but NOT which
+        actor/order executed the close, realised P&L or permission for another POST.
+        The kill switch stays HALTED; clearing it requires independent authority.
+        """
+        self._audit("RECONCILIATION", entity_id=reference_id,
+                    payload={"kind": "CLOSE", "evidence": "SIGNED_PORTFOLIO_SNAPSHOT",
+                             "observed_at": snapshot.observed_at.isoformat()}, at=now)
+        with self._lineage.transaction():
+            return self._recover_close_from_snapshot_locked(
+                reference_id, snapshot=snapshot, now=now,
+            )
+
+    def _recover_close_from_snapshot_locked(self, reference_id: str, *,
+                                            snapshot: DemoPortfolioSnapshot,
+                                            now: datetime) -> str:
+        row = self.unknown_close_snapshot_identity(reference_id)
+        snapshot.require_fresh(now)
+        # Validate all four protected baseline IDs and refuse foreign, mirrored,
+        # pending or contradictory orders BEFORE reducing any durable units.
+        whole = reconcile_demo(snapshot, baseline=self._baseline,
+                               attributions=self._lineage.attributions(), now=now)
+        if whole.status != "MATCHED" or snapshot.pending_orders:
+            self._halt("close recovery snapshot does not reconcile protected account")
+            raise EtoroDemoBookError("close recovery snapshot contradicts baseline or has pending orders")
+        owned = self._lineage.owned(row["position_id"])
+        assert owned is not None  # proven by unknown_close_snapshot_identity
         before = Decimal(owned["remaining_units"])
         live = next((p for p in snapshot.positions if p.position_id == row["position_id"]), None)
-        if live is not None and (live.order_id != owned["order_id"] or live.units > before):
-            self._halt("close recovery snapshot contradicts lineage")
+        if live is not None and (
+                live.order_id != owned["order_id"]
+                or live.instrument_id != owned["instrument_id"]
+                or not live.is_buy or live.leverage != 1 or live.mirror_id != 0
+                or live.units > before):
+            self._halt("close recovery snapshot contradicts exact owned-position lineage")
             raise EtoroDemoBookError("snapshot contradicts SideDeck lineage")
         closed = before if live is None else before - live.units
-        if closed > Decimal(row["units"]):
+        previously_observed = Decimal(row["filled_units"] or "0")
+        remaining_reserved = Decimal(row["units"]) - previously_observed
+        cumulative_observed = previously_observed + closed
+        if closed > remaining_reserved or cumulative_observed > Decimal(row["units"]):
             self._halt("close recovery shows more units closed than requested")
             raise EtoroDemoOrderError("more units closed than the close requested")
         if closed > 0:
             self._lineage.reduce_position(row["position_id"], closed)
-        state = ("RECONCILED_NOT_EXECUTED" if closed == 0 else
-                 "RECONCILED_CLOSED_BY_SNAPSHOT" if live is None else
-                 "RECONCILED_PARTIAL_BY_SNAPSHOT")
-        self._lineage.set_state(reference_id, state, filled_units=closed)
-        return state
+        # /pnl reports account state, not which actor/order caused a change.
+        # Keep the write unresolved so the unique pending-close fence blocks a
+        # second close even when the snapshot shows reduction or absence.
+        self._lineage.set_state(reference_id, "UNRESOLVED_BY_SNAPSHOT",
+                                filled_units=cumulative_observed)
+        return ("NO_REDUCTION_OBSERVED" if closed == 0 else
+                "POSITION_ABSENT_EXECUTOR_UNVERIFIED" if live is None else
+                "POSITION_REDUCED_EXECUTOR_UNVERIFIED")
 
     # ---- reconciliation -----------------------------------------------------
     def reconcile(self, snapshot: DemoPortfolioSnapshot, now: datetime) -> dict[str, Any]:
+        self._audit("RECONCILIATION", entity_id="portfolio",
+                    payload={"kind": "PORTFOLIO", "evidence": "SIGNED_PORTFOLIO_SNAPSHOT",
+                             "observed_at": snapshot.observed_at.isoformat(),
+                             "position_count": len(snapshot.positions),
+                             "pending_order_count": len(snapshot.pending_orders)}, at=now)
         report = reconcile_demo(snapshot, baseline=self._baseline,
                                 attributions=self._lineage.attributions(), now=now)
         issues = list(report.discrepancies)
@@ -699,6 +1061,7 @@ class OfflineEtoroDemoSimulator:
         self.lose_next_response = False
         self.drop_next_request = False        # never reaches the broker (lookup -> 404)
         self.lookup_not_visible = 0           # next N lookups 404 although the order exists
+        self.lookup_status_failures: list[tuple[int, float | None]] = []
         self.force_position_id: int | None = None
         self.baseline_rows: list[dict[str, Any]] = []   # served by the simulated /pnl GET
         self.ask: Decimal = fill_price               # simulated realtime ask (rates GET)
@@ -707,8 +1070,16 @@ class OfflineEtoroDemoSimulator:
         self.eligibility: dict[str, Any] = {"unitsQuantityType": "fractional",
                                             "minPositionExposure": 10, "minPositionAmount": 10}
         self.calls: list[tuple[str, str]] = []
+        self.call_references: list[str] = []
         self._orders: dict[str, dict[str, Any]] = {}
         self._close_orders: dict[int, dict[str, Any]] = {}
+
+    def simulated_close_fill_price(self, order_id: int) -> Decimal | None:
+        """Price from this exact deterministic fake; never broker response evidence."""
+        close = self._close_orders.get(order_id)
+        if close is None or close["statusID"] != 3 or len(close["positions"]) != 1:
+            return None
+        return self.fill_price
 
     def _new_order_id(self) -> int:
         self.next_order_id += 1
@@ -717,9 +1088,14 @@ class OfflineEtoroDemoSimulator:
     def send(self, method: str, path: str, *, reference_id: str,
              body: dict[str, Any] | None = None, query: dict[str, str] | None = None) -> Any:
         self.calls.append((method, path))
+        self.call_references.append(reference_id)
         if self.drop_next_request:
             self.drop_next_request = False
             raise TransportOutcomeUnknown("simulated connection reset before delivery")
+        if (method == "GET" and path == DEMO_ORDER_LOOKUP_PATH
+                and self.lookup_status_failures):
+            status, retry_after = self.lookup_status_failures.pop(0)
+            raise TransportRetryableStatus(status, retry_after)
         if method == "GET" and path == DEMO_PNL_PATH:
             return self.pnl_payload(self.baseline_rows)
         if method == "GET" and path == MARKET_DATA_RATES_PATH:
@@ -813,9 +1189,16 @@ class OfflineEtoroDemoSimulator:
         return {"orderForClose": {"positionID": position_id, "instrumentID": body["InstrumentID"],
                                   "orderID": order_id, "unitsToDeduct": units, "statusID": 1}}
 
-    def pnl_payload(self, baseline_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    def pnl_payload(self, baseline_rows: list[dict[str, Any]], *,
+                    include_simulated: bool = True) -> dict[str, Any]:
         """A synthetic /pnl body: the given baseline rows plus open simulated positions."""
         rows = list(baseline_rows)
+        if not include_simulated:
+            return {"clientPortfolio": {"positions": rows, "credit": 0, "bonusCredit": 0,
+                                         "accountCurrencyId": 1, "mirrors": [], "orders": [],
+                                         "ordersForOpen": [], "ordersForClose": [],
+                                         "ordersForCloseMultiple": [], "entryOrders": [],
+                                         "exitOrders": [], "stockOrders": []}}
         closed: dict[int, Decimal] = {}
         for close in self._close_orders.values():
             for p in close["positions"]:
@@ -836,6 +1219,10 @@ class OfflineEtoroDemoSimulator:
                                     "ordersForOpen": [], "ordersForClose": [],
                                     "ordersForCloseMultiple": [], "entryOrders": [],
                                     "exitOrders": [], "stockOrders": []}}
+
+    def offline_baseline_payload(self) -> dict[str, Any]:
+        """Return only the fixture's immutable pre-SideDeck positions for baseline binding."""
+        return self.pnl_payload(self.baseline_rows, include_simulated=False)
 
 
 SYNTHETIC_BASELINE_ROWS = [

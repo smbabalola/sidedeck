@@ -6,7 +6,7 @@
 ## 0. How to start every Codex session
 
 1. Read `AGENTS.md`, **this file**, `TODO.md`, `README.md`, relevant docs and latest CI. Precedence: explicit current owner instruction > non-negotiable safety rules in `AGENTS.md`/this charter > `TODO.md` > historical docs. Resolve conflicts conservatively, document them; never silently bypass safety.
-2. Check branch, HEAD, working tree, untracked files, local toolchains, pending commits and GitHub Actions. Work only in the **nested** SideDeck checkout on `feat/p5-agent-adapters` or an approved worktree. The outer `feat/p2` worktree is separate. Never discard uncommitted or untracked work.
+2. Check branch, HEAD, working tree, untracked files, local toolchains, pending commits and GitHub Actions. For the current autonomous eToro Demo engineering loop, the explicitly selected isolated worktree is `codex/sd122-etoro-data-autodemo-20261027` (§20); otherwise work only in an approved nested SideDeck checkout (historically `feat/p5-agent-adapters`). The outer `feat/p2` worktree is separate. Never discard uncommitted or untracked work.
 3. Read the top **Current execution board** in `TODO.md`. Select the highest-priority **READY** items with no unmet dependencies. Create a batch of 3–8 compatible tasks rather than a one-issue cycle.
 4. Execute all safe tasks through implementation, deterministic tests, independent checks, docs, commits, push, GitHub CI and remediation. When blocked, record precise evidence and pivot to the next unblocked item. Do **not** stop a batch because one provider, dataset, permission or workstream is unavailable.
 5. Report at meaningful milestones and at the end; do not ask for routine architecture, naming, testing, refactoring or synthetic-data decisions that can be resolved under this charter. Explicit owner approvals defined below are the only deliberate stops.
@@ -132,7 +132,9 @@ Return (1) branch/HEAD/commits and CI link/status, (2) workstream-by-workstream 
 
 ## 10. First Demo Trade Completion and Autonomous Execution Transition (owner directive 2026-10-22)
 
-**Highest-priority current milestone:** SideDeck's first genuine broker-connected eToro **Demo**
+**Historical pilot planning snapshot only:** the owner-authorised 26 October Demo POST, manual owner close and 27 October `/pnl` MATCHED reconciliation are the actual current evidence in §20 and TODO SD-105. Never replay a signed 23 October pilot intent, restart its consumed release or clear HALTED from this historical section.
+
+**Highest-priority milestone at the time of the 22 October directive:** SideDeck's first genuine broker-connected eToro **Demo**
 buy-and-close lifecycle — the reviewed SD-053 MSFT pilot — executed, reconciled and
 independently audited. Tracked as SD-055…SD-063 at the top of `TODO.md`.
 
@@ -342,18 +344,18 @@ pilot or change its reviewed execution behaviour. eToro Real is excluded permane
 
 | Requirement | Status |
 |---|---|
-| Signed autonomous policy (Demo only, ≤ 7 days, ≤ USD 1000, SWING/POSITION) | VERIFIED offline (SD-063) |
+| Signed autonomous policy (Demo only, ≤ 7 days, ≤ USD 1000, DAY/SWING/POSITION) | VERIFIED offline (SD-063; execution still unreleased) |
 | Grant re-verified on every call; runtime clock only | VERIFIED offline |
 | Strategy evidence pinned by owner-signed SHA-256; decision engine run internally | VERIFIED offline |
 | Exposure, cash, equity, loss limits from the ledger | VERIFIED offline |
 | Concurrency (`BEGIN IMMEDIATE`), single-use references, kill-switch (entries only) | VERIFIED offline |
 | Tamper-evident ledger; crash/tamper recovery quarantines, never trusts anchored rows | VERIFIED offline |
-| Authenticated signals/quotes/fills (sealed envelopes, roles, replay protection) | IMPLEMENTED offline (SD-074); broker adapters pending |
+| Authenticated signals/quotes/fills (sealed envelopes, roles, replay protection) | VERIFIED offline (SD-074 + SD-108 adapters) |
 | Unknown outcomes settled only by sealed broker reconciliation evidence | IMPLEMENTED offline |
 | Protective-exit authority after expiry/revocation (reduce-only) | IMPLEMENTED offline |
 | Incident report and runbook | IMPLEMENTED (`docs/SD074_OPERATOR_INCIDENT_RUNBOOK.md`) |
 | Off-machine ledger/revocation anchoring | Verification building block IMPLEMENTED offline (`sd074_external_anchor`); real write-once remote store and wiring BLOCKED (owner provisioning) |
-| SD-064 grants wired into the Demo order transport; send-time caps | BLOCKED until the SD-058 pilot completes and the transport is re-locked |
+| SD-064 grants wired into the Demo order transport; send-time caps | VERIFIED in offline SD-107 simulator; production HTTP transport remains locked |
 | Independent review of the full policy-to-transport lifecycle | BLOCKED on the wiring above |
 | Owner release of a bounded autonomous Demo operating period | BLOCKED_OWNER |
 
@@ -376,10 +378,10 @@ capital, permission or schedule controls.
 
 ## 16. Integration-first: one operational trading pipeline (owner directive 2026-10-26)
 
-**Paused engineering workstream (owner directive 2026-10-27):** this integration remains the
-long-term target, but further gateway feature work is paused while the Day Trader module is
-completed on an isolated branch. Keep the existing autonomous execution draft PR open and
-unmerged. Continue to preserve every release, data and admission gate below.
+**Current offline engineering workstream (owner directive 2026-10-27):** the Day Trader module is
+now connected to the policy-bound offline Demo gateway through SD-122/SD-123. Production broker
+release remains separately blocked; keep the autonomous execution draft PR open and unmerged while
+preserving every data, admission, review and owner-release gate below.
 
 The former engineering priority was to integrate the existing components into one pipeline —
 MARKET DATA → SCANNER → STRATEGIES → AI AGENTS → DECISION ENGINE → RISK ENGINE → PORTFOLIO
@@ -460,3 +462,427 @@ skills. Preserve `ETORO_DEMO NOT_RELEASED`, `RESEARCH_ONLY`, all existing kill-s
 state and broker/data authorization gates. Synthetic simulation authorizations are confined to
 offline acceptance and cannot produce a production permission or strategy admission. No
 authenticated requests, provider spend, trades, or pilot checkout changes are in scope.
+
+
+## 20. Continuous eToro Demo autonomy delivery loop (owner directive 2026-10-27; supersedes §19's sequencing)
+
+**Primary objective:** finish one integrated, reproducible SideDeck path:
+**licensed market data → qualified strategy → deterministic risk/portfolio decision →
+signed bounded eToro Demo gateway → order acceptance → delayed/restarted broker
+reconciliation → managed exits → protected-baseline and P&L reconciliation →
+monitoring/soak**. An autonomous *development* loop is approved; autonomous
+*broker order transmission* remains **NOT_RELEASED**. This directive supersedes
+§19's instruction to complete every Day Trader UI task before advancing Demo
+gateway engineering, but **does not override §§2, 7, 10, 15, 17, 18 or
+`AGENTS.md` safety gates**. Avoid switching to new isolated apps, agents or
+brokers when the integrated eToro Demo path can be improved offline.
+
+### 20.1 Confirmed baseline — do not rediscover it
+
+- **26 October 2026:** an owner-authorised MSFT **Demo** buy POST returned
+  **HTTP 200** with an echoed reference ID and linked order ID. The owner saw a
+  **0.09-unit** Demo position. The follow-up lookup by reference returned **404
+  ~0.8 seconds after acceptance**; SideDeck **HALTED** and never automatically
+  closed it. The owner subsequently closed the position manually.
+- **27 October:** a separately owner-authorised read-only eToro Demo `/pnl`
+  GET returned **200 / MATCHED**: all **four original protected positions**
+  intact, no MSFT pilot position, no pending or unexplained positions. Closing
+  price/P&L remain unverified; the historical pilot is **not** an automatically
+  completed end-to-end trade. Pilot kill switch remains HALTED until the owner
+  separately approves a recorded reset.
+- Existing eToro key: **Demo environment, Read/Write permissions, expiry not
+  defined**, reconfirmed by owner; canonical `ETORO_DEMO_TRADE_*` variable
+  names, no legacy-name collision. **Do not ask to regenerate keys or repeat
+  permission checks.**
+- **AAPL market-data search alone** returned **HTTP 403** after a different
+  signed one-GET diagnostic. Its two one-shot authorizations (earlier
+  `FAILED:URLError`, later HTTP 403) remain **consumed**. Treat this as a
+  **market-data endpoint/access issue**, not a failed Demo trading-key test.
+  No repeat unauthorised probes; isolate a legitimately licensed feed.
+- The historical supervised pilot's SD-105 delayed lookup and strict `/pnl`
+  fallback are already implemented **offline**; SD-129/134/135 add separate
+  transport-neutral recovery and close classification. Do not rebuild working
+  contracts or mark offline simulation as live broker readiness.
+- Current isolated engineering branch:
+  `codex/sd122-etoro-data-autodemo-20261027`, draft PR #8. Reconcile actual
+  branch HEAD and CI rather than assuming an older recorded SHA is current.
+
+### 20.2 The run–verify–record–repeat algorithm
+
+Within **each actively running Codex execution session**, repeat the loop
+below without waiting for owner instructions between ordinary engineering
+tasks. This is a deterministic **development workflow**, not an unattended
+scheduler or permission to issue external orders.
+
+1. **RECONCILE:** inspect `AGENTS.md`, this charter, the first "Autonomous
+   eToro Demo delivery loop" section of `TODO.md`, the current worktree and
+   branch, recent commits and exact-head GitHub Actions status. Read relevant
+   SD-063/064/074/105/107/108/125/126/129/134/135 contracts before editing.
+   Do not overwrite another worktree, credential file, consumed grant or the
+   old pilot ledger. If a previously marked task has failed CI, reopen it.
+2. **SELECT:** from TODO pick the highest-risk-reducing `READY` P0 task
+   whose dependencies are verified. Select 2–5 related items per batch when
+   practical, preferably a broker lifecycle task plus its failure-injection
+   test/observability task. A queue item with unmet dependencies is not
+   runnable even if queued `READY`. Never choose a `BLOCKED_OWNER` or
+   `BLOCKED_EXTERNAL` task as if its external evidence exists.
+3. **DESIGN:** write down pre/postconditions, durable identity, explicit
+   broker-state transitions, request/write caps, quote freshness and exact
+   rejection criteria. Add failing positive, negative, crash/restart and
+   concurrency assertions first. Reuse existing SideDeck policy and adapters;
+   do not make a parallel shadow execution stack.
+4. **IMPLEMENT OFFLINE:** wire a narrowly typed adapter against **fake Demo
+   transports**, sealed fixtures and disposable databases; no inherited API
+   credentials, real network access, hidden fallbacks or principal impersonation.
+   Keep real transport locked by default and refuse even an accidental order
+   if owner release/grant/verified strategy/broker authority is absent.
+5. **ATTACK THE IMPLEMENTATION:** test duplicate/replayed or lost POST,
+   acceptance→404 lookup, by-orderId fallback, eventual fills, partial/multiple
+   positions, out-of-order close, stale bid/ask, time-zone/DST/early close,
+   quota exhaustion, service crash at every journal boundary, corrupt/tampered
+   audit record, revocation, remote-anchor outage, incorrect portfolio
+   attribution, unexpected baseline changes and Real-route injection.
+   **No uncertainty may turn into a second write.**
+6. **VERIFY:** focused tests, full pytest, Ruff, mypy, database migrations
+   only on disposable SQLite/PostgreSQL, frontend typecheck/build/unit,
+   relevant desktop/mobile Playwright, dependency/security and explicit
+   locked-route tests. Record skipped unavailable infrastructure as
+   `UNVERIFIED`, never `PASS`. Check the exact pushed commit in Actions;
+   investigate red CI instead of using an older green run.
+7. **RECORD:** make small reviewable commits on the authorized feature branch,
+   push, link the exact successful CI run, and update TODO task status,
+   acceptance evidence, negative cases and specific external blockers.
+   Reconcile `SIDEDECK_STEERING.md`, `STEERING.md`, `AGENTS.md`, runbooks
+   and PR description when requirements change. No merge to default branch,
+   branch reset, force push, destructive cleanup or external deployment.
+8. **REPEAT:** determine the next dependency-clearing batch and execute it
+   **in the same active session** if tools/context permit. A green milestone
+   is not an instruction to stop and ask "proceed." If one source is blocked,
+   switch to a genuine unblocked workstream (durability, close safety, risk,
+   data importer, strategy validation, UI or audits). Do **not** manufacture
+   pointless work to create endless activity.
+9. **HANDOFF:** at an actual session/tool limit or where all substantive
+   remaining steps require owner/external action, leave an exact resumable
+   TODO record with current branch/SHA/CI, what has been verified, next
+   runnable task IDs, commands, locked permissions and **one consolidated
+   bounded approval request** when necessary. Another Codex session may
+   resume from the files without this conversation.
+
+**Automatic stop conditions:** owner grants exhausted/expired/revoked;
+unresolved orders or baseline drift; kill switch HALTED; missing genuine
+data/admission; audit-anchor failure; strategy not admitted; uncontrolled
+credential exposure; CI/security failure; unclear ownership/price; or
+unauthorised broker/provider network access. Stop only the unsafe action;
+continue offline work. Do not reset `.consumed` markers, journal rows, a
+kill switch or a denied endpoint to make progress appear successful.
+
+### 20.3 Dependency-directed delivery sequence (SD-136 through SD-151)
+
+**Track A — Broker correctness, start now (offline; no user input):**
+SD-136 audit the actual contracts, lock status and gaps; SD-137 connect
+the SD-129/134/135 one-shot accepted-order recovery to the **durable**
+SD-063/SD-074 journal across restarts; SD-138 implement the policy-bound
+Demo-only transport adapter behind an invariant **hard network lock**,
+independent SD-064 per-call signed grants, endpoint allowlists and durable
+request/response reservation; SD-139 implement authoritative strict Demo
+`/pnl` fill/close/attribution verification, no duplicate close and no
+position ownership by ticker; SD-140 integrate exchange-session-aware
+DAY/SWING/POSITION cycle scheduling, recovery and protective reduce-only
+exits; SD-141 perform full crash/replay/partial fill/kill-switch and
+cross-book/baseline threat testing.
+
+**Track B — Data and strategy admission in parallel:** SD-142 build a
+provider-neutral, licensed intraday importer and evidence contract (session,
+timezone, bid/ask spread, volume, corporate actions, lag, gaps, adjustment
+and provenance; no synthetic "live" bars). SD-143 identify/provision **only
+by separately approved owner/provider scope** a genuine full-session
+five-minute data feed; the eToro AAPL search 403 is not a reason to test
+indefinitely. SD-144 perform leak-free walk-forward/locked-OOS strategy
+admission (≥ 30 qualified locked-OOS trades for the current method, trading
+costs, robustness, final holdout, no promotional fixture override). If the
+genuine feed is absent, keep G1/G3 **BLOCKED** and fully exercise offline
+schema and acceptance fixtures instead.
+
+**Track C — Security and operations in parallel:** SD-145 connect grant-use,
+policy ledger, revocation and order journal to fail-closed external
+append-only/audited anchors in disposable tests; provisioning and
+credentials for a real external store require a separate owner decision.
+SD-146 review bounded release scopes, independent security report,
+secret-safe telemetry, operator kill/reset/runbook, protective close under
+expired entry grants and off-hours incidents. SD-147 build read-only Demo
+readiness and reconciliation displays with actual broker status only when
+the corresponding read has been authorised; synthetic runs remain
+`SIMULATED_LOCAL`. SD-148 conduct restart/reconciliation operational
+rehearsals and a multi-day **offline simulated** soak. Record degraded
+outcomes, not just happy-path success.
+
+**Track D — Explicitly external release and actual Demo:** SD-149 assemble
+independently reviewed G0–G4 evidence, exact provider/data scope, signed
+policy draft and per-route request limits; keep execution LOCKED.
+SD-150 is the owner's **separate, specific, bounded, expiring eToro Demo
+release** (virtual cash only, symbol/strategy/book/time/capital/order caps,
+max-loss, end-of-day flatten, protective-exit authority, external audit
+anchors, operator recovery); Codex cannot self-approve it. SD-151 is
+owner-controlled, monitored limited Demo canary followed by the planned
+one-month Demo soak, with signed scope renewals and an explicit stop on
+ambiguity. No transition to eToro Real is permitted.
+
+**Ordering discipline:** Finish dependency-unblocking A tasks while
+building B/C offline. Don't ask for a Demo release before data, strategy
+admission, code security, independent review and external anchors are
+VERIFIED. A demonstration of Demo POST HTTP 200 from the historical MSFT
+pilot is *access evidence*, not an autonomous go-live authorization.
+`TODO.md` is the precise current assignment and owner of each gate.
+
+### 20.4 One integrated lifecycle contract (definition of done)
+
+Only the reviewed SideDeck decision/risk controller may promote an admitted
+strategy proposal into a signed policy-bound order intent. Model/agent
+recommendations never self-authorize. A production Demo route must:
+
+- Persist `proposal_id → intent_id → referenceId → accepted_orderId →
+  confirmed positionId → close referenceId → close orderId` with
+  append-only provenance, monotonic transitions and reconciliation against
+  real broker responses. Reconcile preexisting protected Demo holdings by
+  fixed known baseline identifiers, never by ticker alone.
+- Reserve before send, verify fresh planning **and send-time** quotes,
+  instrument/side/leverage/fractional constraints, allowed order type,
+  market-calendar window, virtual cash/exposure/position caps, time-limited
+  owner signatures, strategy proof, grant revocation, ledger anchors,
+  redaction and real-money prohibition on **every** request.
+- An accepted POST is only `ACCEPTED`; follow up by bounded
+  `referenceId` and linked `orderId` GETs (as observed, first referenceId
+  404 may be transient), then a strict separately budgeted `/pnl` recovery.
+  Unknown/partial/multi-position/contradictory cases remain `UNRESOLVED`,
+  trigger halt and permit **read-only** investigation, never POST replay.
+- A close is full **reduce-only**, uses only a broker-verified SideDeck-owned
+  position and its independent protective authority. Broker close-info
+  reporting FILLED is not proof of a flat reconciled portfolio; demand
+  fresh `/pnl` (zero attributable position, no pending order, all four
+  protected unchanged) and independently verified execution price before
+  claiming net realised P&L. A manual operator close must never be
+  fabricated as a SideDeck order.
+- Enforce correct trading hours in `America/New_York` using exchange
+  calendars, DST and early closes. DAY no-entry final 30 minutes and
+  flatten 10 minutes before close; overdue overnight positions stop new
+  entries and require an incident/recovery path. SWING/POSITION tracks
+  retain their distinct approved holding horizons. No crypto, no leverage
+  creep, no Real routes.
+- On any uncertainty: no fresh entries, persistent HALTED incident,
+  external alarm/visible operator status, fail-closed off-machine anchor;
+  provide a separately recorded owner-authorised recovery or reset only
+  after independent reconciliation.
+
+**Release gates (not inherited from green tests):** G0 exact-HEAD CI and
+security review; G1 licensed genuine 5m data validated; G2 evidence used
+only as research unless its provider run is explicitly approved; G3
+independently qualified strategy with costs and locked OOS; G4 signed
+owner policy + grants + protective/recovery authority, verified 1:1
+lineage and broker endpoints, immutable four-position baseline, durable
+off-machine audit/revocation and independent acceptance tests; G5 monitored
+Demo-only bounded canary and one-month soak. Each must be independently
+marked `PASS`, `FAIL`, `BLOCKED` or `NOT_ASSESSED`; keep launch locked
+until all prerequisites actually pass.
+
+### 20.5 Machine-readable handoff convention (in TODO)
+
+At the **top** of `TODO.md`, maintain a stable block with
+`GOAL`, `REPO/BRANCH`, `LAST_VERIFIED_HEAD`, `EXACT_HEAD_CI`,
+`BROKER_ROUTE`, `HISTORICAL_PILOT_KILL_SWITCH`, `G0–G5`,
+`CURRENT_BATCH`, `NEXT_READY` and `BLOCKED_OWNER`/
+`BLOCKED_EXTERNAL`. Reconcile it every cycle; never carry an outdated
+SHA as "latest." Every SD-136…151 item requires priority, status, deps,
+owner, acceptance, test/evidence, next action and whether real
+provider/broker I/O is authorized. Keep existing TODO chronology intact.
+
+**No background-work fiction:** this is a standing instruction for an
+*active* Codex process. Writing steering/TODO does not schedule a worker,
+start a daemon or grant continuous API access. To execute in another
+session, the operator launches Codex in the authorised branch; the files
+make that session self-directed without further routine conversation.
+
+## 21. Autonomous eToro Demo GO-LIVE delivery contract (owner directive 2026-10-27)
+
+This section **operationalises §20**, the owner's five-step Demo go-live plan, and
+the top launch board in `TODO.md`. It does not lift any lock or waive a
+`BLOCKED_OWNER` / `BLOCKED_EXTERNAL` dependency. §2 and `AGENTS.md`
+always take precedence on account access, user approval and destructive work.
+“Live” below means **an independently confirmed autonomous eToro *Demo*
+canary using virtual funds**; Real orders are excluded forever.
+
+### 21.1 One objective, one integration path
+
+Ship the minimum reliable path **licensed five-minute historical + timely
+execution-price evidence → independent admission of one reproducible
+strategy → SD-071/072/063 risk decision → SD-064 owner-signed, expiring
+request/grant scope → SD-074 verified inputs and external anchor → SD-137/138
+durable, hard-locked Demo transport → broker-confirmed open/order/position
+identity → SD-139/140 protective close → fresh, separately granted
+`/pnl` + baseline reconciliation → SD-152 monitored restart-safe runner →
+one owner-approved SD-151 Demo canary**.
+
+Use existing SideDeck modules and the active branch/PR, not a second app,
+broker execution engine, copied secrets or unreviewed HTTP path. The
+historical MSFT buy plus manual close is connectivity evidence only.
+
+**“Autonomous” is policy-constrained**, not an unlimited approval: once a
+separate signed release has passed G0–G4, the runner may autonomously
+select, open, manage and close qualifying Demo trades *within that exact
+strategy, instrument, book, capital, request, hour and expiry scope*. Every
+new grant or extension requires its own human approval; no automated
+self-signing or self-releasing.
+
+### 21.2 Five go-live lanes — advance concurrently where dependencies permit
+
+| Lane | TODO proof | Pass condition | Scope that Codex may execute now |
+| --- | --- | --- | --- |
+| **1. Valid data** | SD-142 → SD-143 | Provider-neutral five-minute importer and session integrity; signed provider/account entitlement and terms (historic storage/replay, research/automation use, eToro-cross-broker use); independent point-in-time instrument mapping, real bid/ask or justified spread, timestamps, lag, DST/early closes/corporate actions; proven *timely* send-time quotes. | Implement/evaluate terms and offline fixtures. Never probe protected endpoints or spend money without new owner approval. |
+| **2. Strategy** | SD-144 | Start with *one* immutable strategy (DAY or SWING) supported by the obtained feed; reproducible locked OOS ≥30 qualified trades under the current method, tested costs/latency/slippage, final holdout, concentration/risk/drawdown and independent PASS; signals never self-approve. | Build and test research/admission with offline evidence only until licensed real data exists. |
+| **3. Demo lifecycle** | SD-137 → 138 → 139 → 140 → 141 | Atomic write-ahead, one POST per intent across crashes, acceptance→404→linked orderId GET→separately granted /pnl; strict ownership by broker IDs, no ticker-based close, full reduce-only close, broker-confirmed flat, all 4 protected baselines invariant; correct DAY/early-close and distinct SWING horizons. | Offline synthetic gateway, crash/replay/partial tests with fake transport; real sockets stay locked. |
+| **4. Secure always-on operation** | SD-145 → 146 → 147 → **152** → 148 → 149 | Off-machine append-only policy/grant-use/order anchors, revocation and recovery; independently reviewed security; reliable single-writer supervised runtime with deterministic market scheduler, durable startup recovery, observability, safe shutdown, alerts and overnight protection; multi-session *offline* soak and final review dossier. | Local fake anchors, read-only UI, unattended worker tests and deployment/runbooks without external account provisioning or real broker I/O. |
+| **5. Signed Demo canary** | SD-150 → SD-151 | Human approves data/provider/anchor deployment and exact scope, signs policy + protective grant, explicitly handles historical HALTED reset; approved operator enables only reviewed Demo digest. Execute **one** fully automatic opening, observed fill, close, fresh /pnl proving flat and 4/4 protected, incident-free reconciled accounting; then bounded renewals and one-month monitored soak. | Prepare approval artefacts and operator runbook only until the owner independently releases broker access. |
+
+**Critical path:** A (SD-137/138/139) + B (SD-142 and prospective provider
+evidence) + C (SD-145/152) advance in parallel, then strategy admission,
+end-to-end negative tests, security review, offline soak, human release and
+canary. A `READY` item with unsatisfied dependencies is **queued**, not
+permission to execute it out of order. Do not delay the broker safety track
+merely because the external feed is unavailable.
+
+### 21.3 External data choice — no more market-data entitlement guessing
+
+Evaluate **eToro data**, **Alpaca as a data-only candidate**, and any other
+lawfully usable source using an evidence-based selection record in
+`docs/SD143_INTRADAY_SOURCE_DECISION.md` (SD-143). No provider is presumed
+licensed or available for SideDeck's purpose. Record provider/plan, official
+terms and as-of-date, market feed type (SIP vs other), cost, 5m regular-session
+coverage over sufficient history for OOS, timeliness/latency, bid/ask/spread
+availability, volume/actions, symbols/adjustment basis, storage/replay rights,
+cross-broker use, polling caps and operational failure modes. Historical
+five-minute candles alone are **not** a fresh execution quote and prior daily
+Alpaca bars are not proof of an intraday licensed feed. Compare eToro Demo
+execution bid/ask when a separately signed, bounded read is available; don't
+route around a 403 or reuse consumed authorisations.
+
+Decision rules: `APPROVED_SOURCE` only after verified permitted use **and**
+a new bounded data acquisition grant with durable call/spend counters;
+`BLOCKED_EXTERNAL` otherwise. A researched provider shortlist can be
+completed offline; buying a subscription, collecting signed data or
+provisioning an account is an owner action. A cached fixture must always
+be labeled `SYNTHETIC_FIXTURE` or unverified research, never `REAL_DATA`.
+
+### 21.4 Release policy proposal (NOT owner approval)
+
+Prepare a clearly marked, unsigned **one-strategy, one-instrument,
+one-position-at-a-time Demo canary** draft at
+`docs/SD150_DEMO_CANARY_RELEASE_PROPOSAL.md`. Start discussion with the
+illustrative ceilings shown to the owner (virtual allocation **$1,000**,
+**$100** maximum order notional, **$10** maximum daily loss,
+**one new entry/day**, long-only, leverage **1×**, no crypto), but **do not
+treat those figures as selected, authorized or compatible with the existing
+SD-063 policy**. Reconcile any existing stricter caps (including historic
+$50/position design) and actual eToro Demo minimum-notional/fractional
+rules; reject or request a new human decision rather than silently raising
+caps. No release is valid until the owner confirms and signs the exact
+version, policy digest, allowed strategy/symbol/instrument ID, Demo
+account/book and virtual cash, position/aggregate/daily-loss ceilings,
+order/write/GET budgets, exchange hours, protective-exit grant, monitored
+window, remote anchor identity, expiry and separate kill-switch reset where
+justified. No policy permits a Real URL or real funds.
+
+A signed *time-bounded* policy should enable executions without an approval
+prompt **for each trade**, but it may not silently renew, expand or
+override a revoked grant. The existing two $1,000 virtual strategy books
+are not automatically funded by this illustrative canary amount.
+
+### 21.5 SD-152: unattended Demo runner (new explicit gate)
+
+Create **one** operational SideDeck service/CLI using the existing
+controller and Demo gateway. Run an always-on **monitoring process** while
+actual DAY entries are exchange-session limited. No autonomous trading from
+a developer prompt, webpage render, startup/import, or CI. Its permanent
+default must be `NOT_RELEASED`; a valid signed owner policy and separate
+network unlock, provider entitlement, remote anchors, genuine admitted
+strategy and fresh broker snapshot are required before an eToro GET/POST.
+
+Engineering acceptance, **offline**:
+1. A single active worker holds a durable fenced leader lease;
+   concurrent processes, stale owners and lease loss cannot place orders.
+2. Cold restart reconstructs intent/reference/order/position/close and
+   grant counters from durable storage; outstanding unknowns lock new
+   entries and trigger read-only bounded, independently authorized recovery.
+3. Each scheduled cycle is deterministic and idempotent: check external
+   kill/revocation, policy expiry, independent anchors, data entitlement,
+   immutable strategy admission, valid session, fresh quotes, 4-position
+   baseline, pending orders and remaining risk/request budget **before**
+   any broker operation; manage protective exits before new entries.
+4. Use exact `America/New_York` exchange calendar; DAY no new entries
+   inside 30 minutes of close and target verified flat 10 minutes before
+   close, including early closes/DST. Missed flatten is an incident/HALT,
+   not a silent rollover. SWING/POSITION retain their signed horizons.
+5. Health/status/metrics/logging are read-only and show `SIMULATED_LOCAL`
+   vs verified `ETORO_DEMO`; no secret leakage, invented P&L or silent
+   trade outcome. Persist heartbeat, data age, balances/limits, rejected
+   signal reasons, quote/lookup timings, positions and alarms.
+6. Failure of broker, rate budget, machine clock, leader lease, data,
+   external anchor, expiring grant or reconciliation causes safe HALT,
+   alerts operator and never auto-resets. Include startup/shutdown,
+   restart/deployment, protective-close authority and recovery runbook.
+7. Demonstrate multi-session fake-Demo integration tests, service-kill
+   fault injection, duplicate-worker fencing and exact-head CI.
+   Durable service restart is not proof of 24/7 broker availability.
+
+SD-152 is a dependency of the **offline operational soak SD-148** and
+release dossier **SD-149**; it may be developed using an isolated fake
+broker while SD-138/139/140 are completed. No real always-on job with broker
+credentials or remote deployment until the owner explicitly provisions and
+releases the exact environment.
+
+### 21.6 Owner handoff and definition of first Demo GO
+
+At most **one consolidated approval packet per genuine external hinge**:
+(A) market-data provider licence, endpoint, quote access, maximum GET count
+and spend, (B) external anchor/deployment account/retention/cost,
+(C) audited, digest-specific, expiring Demo canary and any historical
+kill-switch reset. Collect all necessary particulars in the reviewed
+release packet; do not repeatedly re-ask established Demo Read/Write key
+facts or request routine coding instructions.
+
+**First Demo GO acceptance:** one independently qualified, genuinely
+priced proposal is traded by the released service on the owner-approved
+Demo account **without a manual close**. Its unique entry has a durable
+reference/order ID, independently broker-confirmed fill and position,
+protective or scheduled full reduce-only close, persisted accepted close,
+read-only confirmation and final fresh owner-granted /pnl: **SideDeck
+attributable units 0, no unresolved or pending orders, all four original
+baseline positions 4/4 MATCHED, request/audit/grant counts intact, actual
+broker-derived economic results, kill state clear where justified, zero
+Real traffic**. Any unmatched quantity, ambiguous 404, partial closure,
+baseline drift, missing P&L or broken external anchor is
+`UNRESOLVED/HALTED`, **not** `COMPLETE`. If an approved canary stops
+unresolved, fix/review evidence offline and seek new owner authorisation
+for any further write.
+
+Only **after** a successful first canary may the project call Demo autonomy
+`INITIAL_CANARY_VERIFIED`; sustained `DEMO_OPERATIONAL` also requires
+monitored bounded renewals and the planned **one-month Demo-only soak**.
+No auto-escalation to Real or increased virtual notional.
+
+### 21.7 Work selection, reporting and honest completion
+
+The top of `TODO.md` must include the **five-lane launch matrix**,
+`FIRST_AUTONOMOUS_DEMO_TRADE` and `DEMO_ONE_MONTH_SOAK` statuses,
+the code/CI evidence and the **single next offline task** per active lane.
+Preserve SD-136–151 IDs and add SD-152 for the runner. Every active
+Codex session follows §20.2 continuously: reconcile → implement → attack
+→ test → push → exact-HEAD CI → update TODO → move to next eligible task.
+Never mark a blocked external or owner step done because docs, mock
+transports or CI passed. If exact-head CI has not concluded, record
+`PENDING` and obtain its result when accessible. If blocked by a real
+owner decision, provide the finite, verifiable release request and work
+on other READY tasks.
+
+**The steering files are instructions, not a spawned background runner.**
+The autonomous software runtime itself is SD-152 and remains strictly
+locked until the separately authorised Demo release.
+

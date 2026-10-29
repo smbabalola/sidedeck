@@ -123,6 +123,11 @@ def test_orb_refuses_gaps_holidays_and_naive_time() -> None:
         opening_range_breakout(bars, datetime(2026, 10, 22, 14))
     with pytest.raises(MethodError):
         opening_range_breakout(bars, OPEN + timedelta(minutes=30), or_minutes=7)
+    with pytest.raises(MethodError, match="bar timestamps must be timezone-aware"):
+        opening_range_breakout([*bars, IntradayBar(
+            datetime(2026, 10, 22, 14), Decimal(100), Decimal(101),
+            Decimal(99), Decimal(100), Decimal(1000),
+        )], OPEN + timedelta(minutes=30))
 
 
 def test_orb_signal_is_day_track_with_invalidation() -> None:

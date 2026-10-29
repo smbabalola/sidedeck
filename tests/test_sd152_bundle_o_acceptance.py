@@ -1,0 +1,999 @@
+"""SD-152 Bundle O consolidated offline regression acceptance entrypoint.
+
+This suite intentionally invokes existing tests rather than reimplementing the
+simulation. It is not broker qualification, a release grant, or an external audit.
+Run with: pytest -q tests/test_sd152_bundle_o_acceptance.py
+"""
+from __future__ import annotations
+
+import pytest
+
+import test_sd140_sd152_offline_swing_runner as scenarios
+
+
+@pytest.mark.parametrize("scenario", [
+    scenarios.test_sd140_sd152_two_sessions_open_and_close_via_real_fake_adapter,
+    scenarios.test_sd152_twenty_restart_attempts_do_not_repeat_simulated_entry,
+    scenarios.test_sd152_repeated_restart_after_unresolved_fence_never_reposts,
+    scenarios.test_sd152_ambiguous_close_ten_restarts_preserve_single_exit_post,
+    scenarios.test_sd152_close_ledger_mismatch_blocks_twelve_restarts_without_replay,
+    scenarios.test_sd152_tampered_final_close_units_blocks_ten_clean_slot_restarts,
+    scenarios.test_sd152_inconsistent_remaining_units_never_rearms_synthetic_entry,
+    scenarios.test_sd152_partial_entry_then_full_reduce_across_two_slots,
+    scenarios.test_sd152_partial_close_ten_restarts_never_infer_flat_or_repost,
+], ids=lambda test: test.__name__.removeprefix("test_"))
+def test_bundle_o_offline_acceptance_scenarios(setup, scenario):
+    scenario(setup)
+
+
+@pytest.fixture
+def setup(tmp_path):
+    # Keep one fresh fixture per parametrized scenario: never share ledgers
+    # across fault cases. The underlying test module owns the lifecycle.
+    iterator = scenarios.setup.__wrapped__(tmp_path)
+    value = next(iterator)
+    try:
+        yield value
+    finally:
+        try:
+            next(iterator)
+        except StopIteration:
+            pass
+
+
+def test_day_orb_test_only_autonomous_entry_to_exit_and_replay(tmp_path):
+    """Run the native ORB fixture lifecycle inside the same acceptance suite.
+
+    Admission is explicitly a synthetic test fixture, never production evidence.
+    eToro transport stays disabled; the scenario itself checks entry, exit,
+    flatness, replay and the no-admission refusal.
+    """
+    from test_sd155_orb_native_signal_lifecycle import (
+        test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_entry_and_exit,
+    )
+
+    test_real_orb_method_with_separately_sealed_native_fixture_drives_offline_entry_and_exit(
+        tmp_path,
+    )
+
+
+def test_day_orb_no_self_admission(tmp_path):
+    """A genuine method invocation on fixture bars cannot grant its own orders."""
+    from test_sd154_day_trader_orb_integration import (
+        test_actual_orb_signal_enters_bridge_but_cannot_self_admit,
+    )
+
+    test_actual_orb_signal_enters_bridge_but_cannot_self_admit(tmp_path)
+
+
+def test_day_missing_execution_quote_halts_without_simulated_submit(tmp_path):
+    """A DAY proposal may not be sent without its distinct signed send quote."""
+    from datetime import UTC, datetime
+
+    from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 0, tzinfo=UTC))
+    gateway, _planning_quote, _signer = _offline_gateway(env)
+    try:
+        proposal = _day_entry(env)
+        assert isinstance(proposal, EntryProposal)
+        controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+        result = controller.tick(entry=proposal, entry_quote=None)
+        assert result.status == "HALTED"
+        assert "ENTRY_SEND_QUOTE_MISSING" in result.alerts
+        assert gateway._simulator.submitted_orders == 0
+        assert env.ledger.kill_switch_engaged()
+        # Reconstruct the controller over durable state: neither a restart nor
+        # a repeated proposal is authority to send after a missing quote.
+        restarted = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+        replay = restarted.tick(entry=proposal)
+        assert replay.status == "HALTED"
+        assert gateway._simulator.submitted_orders == 0
+        assert restarted.gateway._runtime.ledger.kill_switch_engaged()
+        assert result.execution_release == "ETORO_DEMO_NOT_RELEASED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_scheduled_service_locked_then_single_slot_no_replay(tmp_path):
+    """One simulated DAY slot is consumed once, even across worker reconstruction."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd125_day_session_exits import _day_env
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, _, _ = _offline_gateway(env)
+    scheduler = SchedulerStore(tmp_path / "day-schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "day-fence.sqlite3")
+    controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+    service = OfflineDayScheduledService(scheduler, fence, controller, clock=env.clock)
+    try:
+        assert service.run_due(owner="worker-one")["status"] == "LOCKED"
+        assert gateway._simulator.submitted_orders == 0
+        scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+        scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+        first = service.run_due(owner="worker-one")
+        assert first["status"] == "NO_TRADE"
+        assert first["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+        assert fence.state() == "IDLE"
+        assert len(scheduler.history("day_candidate_scan")) >= 1
+        reconstructed = OfflineDayScheduledService(
+            SchedulerStore(tmp_path / "day-schedule.sqlite3"),
+            OfflineSwingRunFence(tmp_path / "day-fence.sqlite3"),
+            controller, clock=env.clock,
+        )
+        assert reconstructed.run_due(owner="worker-two")["status"] == "NO_DUE_SLOT"
+        assert gateway._simulator.submitted_orders == 0
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_scheduled_service_crashed_worker_never_auto_takes_over(tmp_path):
+    """An abandoned DAY fence blocks a new process, irrespective of schedule lease."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore, slots_for
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd125_day_session_exits import _day_env
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+
+    now = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env)
+    scheduler = SchedulerStore(tmp_path / "day-schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "day-fence.sqlite3")
+    controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+    try:
+        scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+        scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+        slot = slots_for(scheduler.jobs["day_candidate_scan"], now.date())[0]
+        token = fence.acquire(slot, owner="crashed-worker", at=now)
+        assert token is not None
+        restarted = OfflineDayScheduledService(
+            SchedulerStore(tmp_path / "day-schedule.sqlite3"),
+            OfflineSwingRunFence(tmp_path / "day-fence.sqlite3"),
+            controller, clock=env.clock,
+        )
+        assert restarted.run_due(owner="new-worker")["status"] == "RECOVERY_REQUIRED"
+        fence.finish(token, at=now, safe=False, outcome="CRASH_SIMULATED")
+        assert restarted.run_due(owner="another-worker")["status"] == "RECOVERY_REQUIRED"
+        assert gateway._simulator.submitted_orders == 0
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_scheduled_entry_early_close_exit_and_cold_restart(tmp_path):
+    """Real DAY scheduler slots drive the existing offline entry and exit gateway."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway, MSFT
+    from test_sd125_day_session_exits import _day_env, _day_entry
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, send_quote, signer = _offline_gateway(
+        env, fill_price="500", close_price="490",
+        storage_path=tmp_path / "day-sim.sqlite3",
+    )
+    scheduler_path = tmp_path / "day-schedule.sqlite3"
+    fence_path = tmp_path / "day-fence.sqlite3"
+    scheduler = SchedulerStore(scheduler_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    controller = OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock)
+    service = OfflineDayScheduledService(
+        scheduler, OfflineSwingRunFence(fence_path), controller, clock=env.clock,
+    )
+    try:
+        entry = _day_entry(env)
+        from sidedeck.application.sd063_autonomous_demo_policy import EntryProposal
+        assert isinstance(entry, EntryProposal)
+        opened = service.run_due(owner="day-a", entry=entry, entry_quote=send_quote)
+        assert opened["status"] == "ENTRY_CONFIRMED", opened
+        assert opened["cycle"]["open_positions"] == 1
+        assert gateway._simulator.submitted_orders == 1
+
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        restarted = OfflineDayScheduledService(
+            SchedulerStore(scheduler_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+        closed = restarted.run_due(
+            owner="day-b", planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )
+        assert closed["status"] == "EXITS_CONFIRMED", closed
+        assert closed["cycle"]["open_positions"] == 0
+        assert env.ledger.open_positions() == ()
+        assert gateway._simulator.submitted_orders == 1
+        assert restarted.run_due(owner="day-c")["status"] == "NO_DUE_SLOT"
+        assert len([x for x in scheduler.history("day_candidate_scan")
+                    if x[1] == "COMPLETED"]) == 2
+        assert not env.ledger.kill_switch_engaged()
+        assert closed["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_scheduled_missing_exit_quote_halts_and_preserves_open_position(tmp_path):
+    """A due early-close tick cannot claim flat without an executable close quote."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_env, _day_entry
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, send_quote, signer = _offline_gateway(
+        env, storage_path=tmp_path / "day-sim.sqlite3",
+    )
+    scheduler = SchedulerStore(tmp_path / "day-schedule.sqlite3")
+    fence = OfflineSwingRunFence(tmp_path / "day-fence.sqlite3")
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    service = OfflineDayScheduledService(
+        scheduler, fence,
+        OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+        clock=env.clock,
+    )
+    try:
+        assert service.run_due(owner="entry", entry=_day_entry(env),
+                               entry_quote=send_quote)["status"] == "ENTRY_CONFIRMED"
+        assert len(env.ledger.open_positions()) == 1
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        failed = service.run_due(
+            owner="exit-without-send-quote",
+            planning_bids=(_quote(signer, env.clock.now),),
+        )
+        assert failed["status"] == "HALTED"
+        assert "EXIT_SEND_QUOTE_MISSING" in failed["cycle"]["alerts"]
+        assert failed["cycle"]["open_positions"] == 1
+        assert len(env.ledger.open_positions()) == 1
+        assert env.ledger.kill_switch_engaged()
+        assert fence.state() == "UNRESOLVED"
+        assert gateway._simulator.submitted_orders == 1
+        restarted = OfflineDayScheduledService(
+            SchedulerStore(tmp_path / "day-schedule.sqlite3"),
+            OfflineSwingRunFence(tmp_path / "day-fence.sqlite3"),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+        assert restarted.run_due(owner="restart")["status"] == "RECOVERY_REQUIRED"
+        assert len(env.ledger.open_positions()) == 1
+        assert gateway._simulator.submitted_orders == 1
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_multi_tick_unattended_driver_simulates_open_monitor_close(tmp_path):
+    """A deterministic offline clock drives successive scheduled ticks without trade prompts.
+
+    This exercises the scheduler API, not an installed background daemon.
+    No actual broker route, market data or external trading authority is used.
+    """
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, entry_quote, signer = _offline_gateway(
+        env, fill_price="500", close_price="490",
+        storage_path=tmp_path / "day-sim.sqlite3",
+    )
+    schedule_file, fence_file = (
+        tmp_path / "day-schedule.sqlite3", tmp_path / "day-fence.sqlite3",
+    )
+    scheduler = SchedulerStore(schedule_file)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def worker():
+        # Reconstruct the scheduled worker and durable stores at every tick,
+        # as an independently restarted offline process would.
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule_file), OfflineSwingRunFence(fence_file),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    try:
+        entry = _day_entry(env)
+        opened = worker().run_due(owner="tick-entry", entry=entry, entry_quote=entry_quote)
+        assert opened["status"] == "ENTRY_CONFIRMED", opened
+        assert opened["cycle"]["open_positions"] == 1
+        assert gateway._simulator.submitted_orders == 1
+
+        # Several unattended decision ticks are processed with no new entry.
+        # The position remains owned and actively monitored between ticks.
+        for minute in (10, 15, 20):
+            env.clock.now = datetime(2026, 11, 27, 15, minute, tzinfo=UTC)
+            observed = worker().run_due(
+                owner=f"tick-monitor-{minute}",
+                planning_bids=(_quote(signer, env.clock.now),),
+            )
+            assert observed["status"] == "NO_TRADE", observed
+            assert observed["cycle"]["open_positions"] == 1
+            assert len(env.ledger.open_positions()) == 1
+            assert gateway._simulator.submitted_orders == 1
+            assert not env.ledger.kill_switch_engaged()
+
+        # The real exchange calendar marks this Thanksgiving Friday as an
+        # early close. At T-10 the scheduler must still issue a protective exit.
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        final = worker().run_due(
+            owner="tick-close",
+            planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )
+        assert final["status"] == "EXITS_CONFIRMED", final
+        assert final["cycle"]["open_positions"] == 0
+        assert final["cycle"]["exit_references"]
+        assert env.ledger.open_positions() == ()
+        assert gateway._simulator.submitted_orders == 1
+        assert worker().run_due(owner="replay-after-flat")["status"] == "NO_DUE_SLOT"
+        assert OfflineSwingRunFence(fence_file).state() == "IDLE"
+        assert len([row for row in SchedulerStore(schedule_file).history("day_candidate_scan")
+                    if row[1] == "COMPLETED"]) == 5
+        assert final["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_bounded_driver_runs_and_stops_on_unresolved_restart(tmp_path):
+    """One driver call traverses due ticks and stops rather than retrying a failed close."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+        drive_offline_day_sequence,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, entry_quote, signer = _offline_gateway(env)
+    scheduler_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    scheduler = SchedulerStore(scheduler_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def service():
+        return OfflineDayScheduledService(
+            SchedulerStore(scheduler_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    def tick(moment, *, monitor=False, **kwargs):
+        def action():
+            env.clock.now = moment
+            if monitor:
+                return service().run_due(
+                    owner="bounded-driver", planning_bids=(_quote(signer, moment),),
+                )
+            return service().run_due(owner="bounded-driver", **kwargs)
+        return action
+
+    try:
+        entry = _day_entry(env)
+        monitoring_at = datetime(2026, 11, 27, 15, 10, tzinfo=UTC)
+        exit_at = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        ticks = (
+            tick(datetime(2026, 11, 27, 15, 5, tzinfo=UTC),
+                 entry=entry, entry_quote=entry_quote),
+            tick(monitoring_at, monitor=True),
+            tick(exit_at, monitor=True),
+            tick(exit_at),  # Must not run: the previous exit halts the service
+        )
+        outcomes = drive_offline_day_sequence(service, ticks)
+        assert [o["status"] for o in outcomes] == [
+            "ENTRY_CONFIRMED", "NO_TRADE", "HALTED",
+        ]
+        assert "EXIT_SEND_QUOTE_MISSING" in outcomes[-1]["cycle"]["alerts"]
+        assert len(env.ledger.open_positions()) == 1
+        assert env.ledger.kill_switch_engaged()
+        assert OfflineSwingRunFence(fence_path).state() == "UNRESOLVED"
+        assert gateway._simulator.submitted_orders == 1
+        assert service().run_due(owner="after-crash")["status"] == "RECOVERY_REQUIRED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_bounded_driver_completes_offline_lifecycle_without_prompts(tmp_path):
+    """One invocation drives scheduled entry, monitoring and confirmed early close."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence, drive_offline_day_sequence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, open_quote, signer = _offline_gateway(
+        env, fill_price="500", close_price="490",
+        storage_path=tmp_path / "sim.sqlite3",
+    )
+    schedule = tmp_path / "schedule.sqlite3"
+    fence = tmp_path / "fence.sqlite3"
+    store = SchedulerStore(schedule)
+    store.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    store.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def service():
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule), OfflineSwingRunFence(fence),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    def at(moment, *, entry=None, close=False):
+        def run():
+            env.clock.now = moment
+            if close:
+                return service().run_due(
+                    owner="offline-loop",
+                    planning_bids=(_quote(signer, moment),),
+                    execution_bids={MSFT: _quote(signer, moment)},
+                )
+            if entry is not None:
+                return service().run_due(
+                    owner="offline-loop", entry=entry, entry_quote=open_quote,
+                )
+            return service().run_due(
+                owner="offline-loop",
+                planning_bids=(_quote(signer, moment),),
+            )
+        return run
+
+    try:
+        entry = _day_entry(env)
+        results = drive_offline_day_sequence(service, (
+            at(datetime(2026, 11, 27, 15, 5, tzinfo=UTC), entry=entry),
+            at(datetime(2026, 11, 27, 15, 10, tzinfo=UTC)),
+            at(datetime(2026, 11, 27, 17, 50, tzinfo=UTC), close=True),
+        ))
+        assert [r["status"] for r in results] == [
+            "ENTRY_CONFIRMED", "NO_TRADE", "EXITS_CONFIRMED",
+        ]
+        assert results[-1]["cycle"]["open_positions"] == 0
+        assert env.ledger.open_positions() == ()
+        assert not env.ledger.kill_switch_engaged()
+        assert gateway._simulator.submitted_orders == 1
+        assert OfflineSwingRunFence(fence).state() == "IDLE"
+        assert service().run_due(owner="replay")["status"] == "NO_DUE_SLOT"
+        assert all(r["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+                   for r in results)
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_polling_loop_stops_on_halting_close_without_retry(tmp_path):
+    """The offline loop polls autonomously and stops on an unconfirmed close."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence, run_offline_day_service_loop,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    initial = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    close = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+    env = _day_env(tmp_path, initial)
+    gateway, entry_quote, signer = _offline_gateway(env)
+    schedule = SchedulerStore(tmp_path / "schedule.sqlite3")
+    schedule.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    schedule.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    fence = OfflineSwingRunFence(tmp_path / "fence.sqlite3")
+    service = OfflineDayScheduledService(
+        schedule, fence,
+        OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+        clock=env.clock,
+    )
+    step = [0]
+    entry = _day_entry(env)
+    def inputs():
+        if step[0] == 0:
+            return {"entry": entry, "entry_quote": entry_quote}
+        return {"planning_bids": (_quote(signer, env.clock.now),)}
+    def wait():
+        step[0] += 1
+        env.clock.now = close
+    try:
+        outcomes = run_offline_day_service_loop(
+            service, owner="offline-poller", inputs=inputs,
+            wait=wait, stop_requested=lambda: False, max_polls=8,
+        )
+        assert [r["status"] for r in outcomes] == ["ENTRY_CONFIRMED", "HALTED"]
+        assert step[0] == 1
+        assert fence.state() == "UNRESOLVED"
+        assert len(env.ledger.open_positions()) == 1
+        assert env.ledger.kill_switch_engaged()
+        assert gateway._simulator.submitted_orders == 1
+        assert all(r["execution_release"] == "ETORO_DEMO_NOT_RELEASED" for r in outcomes)
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_polling_loop_completes_entry_monitor_close_without_manual_ticks(tmp_path):
+    """One simulation-only polling invocation safely completes the full DAY path."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence, run_offline_day_service_loop,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    times = (
+        datetime(2026, 11, 27, 15, 5, tzinfo=UTC),
+        datetime(2026, 11, 27, 15, 10, tzinfo=UTC),
+        datetime(2026, 11, 27, 17, 50, tzinfo=UTC),
+    )
+    env = _day_env(tmp_path, times[0])
+    gateway, quote, signer = _offline_gateway(
+        env, fill_price="500", close_price="490",
+        storage_path=tmp_path / "day-sim.sqlite3",
+    )
+    schedule = SchedulerStore(tmp_path / "day-schedule.sqlite3")
+    schedule.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    schedule.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    fence = OfflineSwingRunFence(tmp_path / "day-fence.sqlite3")
+    service = OfflineDayScheduledService(
+        schedule, fence,
+        OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+        clock=env.clock,
+    )
+    index = [0]
+    entry = _day_entry(env)
+
+    def inputs():
+        if index[0] == 0:
+            return {"entry": entry, "entry_quote": quote}
+        if index[0] == 1:
+            return {"planning_bids": (_quote(signer, env.clock.now),)}
+        return {
+            "planning_bids": (_quote(signer, env.clock.now),),
+            "execution_bids": {MSFT: _quote(signer, env.clock.now)},
+        }
+
+    def wait():
+        index[0] += 1
+        env.clock.now = times[index[0]]
+
+    try:
+        results = run_offline_day_service_loop(
+            service, owner="offline-auto-cycle", inputs=inputs,
+            wait=wait, stop_requested=lambda: False, max_polls=8,
+            stop_on_confirmed_flat=True,
+        )
+        assert [r["status"] for r in results] == [
+            "ENTRY_CONFIRMED", "NO_TRADE", "EXITS_CONFIRMED",
+        ]
+        assert index[0] == 2
+        assert results[-1]["cycle"]["open_positions"] == 0
+        assert env.ledger.open_positions() == ()
+        assert gateway._simulator.submitted_orders == 1
+        assert fence.state() == "IDLE"
+        assert not env.ledger.kill_switch_engaged()
+        assert service.run_due(owner="replayed")["status"] == "NO_DUE_SLOT"
+        assert all(r["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+                   for r in results)
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_timed_process_runner_completes_offline_full_cycle(tmp_path):
+    """Real timed polling, fake clock and signed local fixture inputs; no broker I/O."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence, run_offline_day_process,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    moments = (
+        datetime(2026, 11, 27, 15, 5, tzinfo=UTC),
+        datetime(2026, 11, 27, 15, 10, tzinfo=UTC),
+        datetime(2026, 11, 27, 17, 50, tzinfo=UTC),
+    )
+    env = _day_env(tmp_path, moments[0])
+    gateway, entry_quote, signer = _offline_gateway(env)
+    scheduler = SchedulerStore(tmp_path / "schedule.sqlite3")
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    fence = OfflineSwingRunFence(tmp_path / "fence.sqlite3")
+    service = OfflineDayScheduledService(
+        scheduler, fence,
+        OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+        clock=env.clock,
+    )
+    proposal = _day_entry(env)
+    count = [0]
+
+    def inputs():
+        index = count[0]
+        count[0] += 1
+        env.clock.now = moments[index]
+        if index == 0:
+            return {"entry": proposal, "entry_quote": entry_quote}
+        if index == 1:
+            return {"planning_bids": (_quote(signer, env.clock.now),)}
+        return {
+            "planning_bids": (_quote(signer, env.clock.now),),
+            "execution_bids": {MSFT: _quote(signer, env.clock.now)},
+        }
+
+    try:
+        reports = run_offline_day_process(
+            service, owner="offline-timed-worker", inputs=inputs,
+            interval_seconds=0.01, max_polls=6,
+        )
+        assert [r["status"] for r in reports] == [
+            "ENTRY_CONFIRMED", "NO_TRADE", "EXITS_CONFIRMED",
+        ]
+        assert count[0] == 3
+        assert env.ledger.open_positions() == ()
+        assert gateway._simulator.submitted_orders == 1
+        assert fence.state() == "IDLE"
+        assert not env.ledger.kill_switch_engaged()
+        assert reports[-1]["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_os_process_crash_fence_survives_cold_worker(tmp_path):
+    """A real child Python process leaves a durable RUNNING fence; restart fails closed."""
+    import subprocess
+    import sys
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_env
+
+    now = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, _, _ = _offline_gateway(env)
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    scheduler = SchedulerStore(schedule_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    # The separate OS process acquires the real SQLite fence and exits without
+    # finishing it, simulating termination at an unsafe point.
+    script = (
+        "import sys;sys.path.insert(0, str(__import__('pathlib').Path.cwd() / 'src'));"
+        "from datetime import datetime;"
+        "from pathlib import Path;"
+        "from sidedeck.application.sd152_offline_swing_runner import OfflineSwingRunFence;"
+        "f=OfflineSwingRunFence(Path(__import__('sys').argv[1]));"
+        "t=datetime.fromisoformat(__import__('sys').argv[2]);"
+        "assert f.acquire(t,owner='crashed-os-process',at=t) is not None;"
+        "assert f.state() == 'RUNNING'"
+    )
+    try:
+        child = subprocess.run(
+            [sys.executable, "-c", script, str(fence_path), now.isoformat()],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert child.returncode == 0, child.stderr
+        assert OfflineSwingRunFence(fence_path).state() == "RUNNING"
+        restarted = OfflineDayScheduledService(
+            SchedulerStore(schedule_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+        result = restarted.run_due(owner="restarted-os-process")
+        assert result["status"] == "RECOVERY_REQUIRED"
+        assert gateway._simulator.submitted_orders == 0
+        assert env.ledger.open_positions() == ()
+        assert restarted.run_due(owner="second-restart")["status"] == "RECOVERY_REQUIRED"
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_scheduled_offline_soak_across_sessions_no_reentry(tmp_path):
+    """Bounded offline soak: full close, next-session no-signal, no duplicate OPEN."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_env, _day_entry
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, quote, signer = _offline_gateway(env, storage_path=tmp_path / "sim.sqlite3")
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    schedule = SchedulerStore(schedule_path)
+    schedule.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    schedule.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def worker():
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    try:
+        proposal = _day_entry(env)
+        assert worker().run_due(owner="soak-open", entry=proposal,
+                                entry_quote=quote)["status"] == "ENTRY_CONFIRMED"
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        assert worker().run_due(
+            owner="soak-close",
+            planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )["status"] == "EXITS_CONFIRMED"
+        # A new regular session after the holiday weekend must not rearm the
+        # historical resolved DAY proposal or infer a new strategy signal.
+        env.clock.now = datetime(2026, 11, 30, 15, 5, tzinfo=UTC)
+        for number in range(5):
+            result = worker().run_due(owner=f"soak-restart-{number}")
+            assert result["status"] in {"NO_TRADE", "NO_DUE_SLOT"}
+            assert gateway._simulator.submitted_orders == 1
+            assert env.ledger.open_positions() == ()
+            assert OfflineSwingRunFence(fence_path).state() == "IDLE"
+        assert not env.ledger.kill_switch_engaged()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_completed_cycle_fence_is_idle_in_new_os_process(tmp_path):
+    """Cold Python process reads committed DAY completion without resetting state."""
+    import json
+    import subprocess
+    import sys
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    now = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, entry_quote, signer = _offline_gateway(
+        env, storage_path=tmp_path / "sim.sqlite3",
+    )
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    scheduler = SchedulerStore(schedule_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    def worker():
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+    try:
+        assert worker().run_due(
+            owner="first-process", entry=_day_entry(env),
+            entry_quote=entry_quote,
+        )["status"] == "ENTRY_CONFIRMED"
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        assert worker().run_due(
+            owner="first-process-close",
+            planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )["status"] == "EXITS_CONFIRMED"
+        script = (
+            "import sys,json;"
+            "sys.path.insert(0,str(__import__('pathlib').Path.cwd()/'src'));"
+            "from pathlib import Path;"
+            "from sidedeck.application.sd152_offline_swing_runner import OfflineSwingRunFence;"
+            "print(json.dumps({'state':OfflineSwingRunFence(Path(sys.argv[1])).state()}))"
+        )
+        child = subprocess.run(
+            [sys.executable, "-c", script, str(fence_path)],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert child.returncode == 0, child.stderr
+        assert json.loads(child.stdout) == {"state": "IDLE"}
+        assert worker().run_due(owner="cold-replay")["status"] == "NO_DUE_SLOT"
+        assert gateway._simulator.submitted_orders == 1
+        assert env.ledger.open_positions() == ()
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_open_position_is_readable_from_new_os_process(tmp_path):
+    """The actual SQLite policy ledger can be reopened by a cold Python process."""
+    import subprocess
+    import sys
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    now = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    env = _day_env(tmp_path, now)
+    gateway, entry_quote, signer = _offline_gateway(env, storage_path=tmp_path / "sim.sqlite3")
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    scheduler = SchedulerStore(schedule_path)
+    scheduler.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    scheduler.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def worker():
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule_path), OfflineSwingRunFence(fence_path),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    script = (
+        "import sys;"
+        "from pathlib import Path;"
+        "from datetime import datetime;"
+        "sys.path[:0]=[str(Path.cwd()/'src'),str(Path.cwd()/'tests')];"
+        "from test_sd125_day_session_exits import _day_env;"
+        "p=Path(sys.argv[1]);"
+        "e=_day_env(p,datetime.fromisoformat(sys.argv[2]));"
+        "assert len(e.ledger.open_positions())==1;"
+        "e.ledger.close()"
+    )
+    try:
+        assert worker().run_due(
+            owner="open-parent", entry=_day_entry(env), entry_quote=entry_quote,
+        )["status"] == "ENTRY_CONFIRMED"
+        child = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path), now.isoformat()],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert child.returncode == 0, child.stderr
+        assert len(env.ledger.open_positions()) == 1
+        env.clock.now = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+        assert worker().run_due(
+            owner="close-parent", planning_bids=(_quote(signer, env.clock.now),),
+            execution_bids={MSFT: _quote(signer, env.clock.now)},
+        )["status"] == "EXITS_CONFIRMED"
+        assert env.ledger.open_positions() == ()
+        assert gateway._simulator.submitted_orders == 1
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
+
+
+def test_day_cold_os_worker_independently_closes_persisted_open_position(tmp_path):
+    """Child worker reconstructs offline ledger and performs DAY exit itself."""
+    import json
+    import subprocess
+    import sys
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+
+    opening = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    closing = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+    env = _day_env(tmp_path, opening)
+    store = tmp_path / "sim.sqlite3"
+    schedule_path = tmp_path / "schedule.sqlite3"
+    fence_path = tmp_path / "fence.sqlite3"
+    gateway, entry_quote, _ = _offline_gateway(env, storage_path=store)
+    schedule = SchedulerStore(schedule_path)
+    schedule.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    schedule.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    worker = OfflineDayScheduledService(
+        schedule, OfflineSwingRunFence(fence_path),
+        OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+        clock=env.clock,
+    )
+    child_code = (
+        "import sys,json;"
+        "from pathlib import Path;"
+        "from datetime import datetime;"
+        "sys.path[:0]=[str(Path.cwd()/'src'),str(Path.cwd()/'tests')];"
+        "from test_sd125_day_session_exits import _day_env;"
+        "from test_sd063_autonomous_demo_policy import MSFT,_offline_gateway;"
+        "from test_sd126_offline_day_controller import _quote;"
+        "from sidedeck.application.sd068_track_scheduler import SchedulerStore;"
+        "from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController;"
+        "from sidedeck.application.sd152_offline_swing_runner import OfflineDayScheduledService,OfflineSwingRunFence;"
+        "p=Path(sys.argv[1]);"
+        "e=_day_env(p,datetime.fromisoformat(sys.argv[2]));"
+        "g,_,signer=_offline_gateway(e,storage_path=p/'sim.sqlite3');"
+        "orig=g.submit_exit;"
+        "exec('def traced(proposal, *, quote):\\n try: return orig(proposal, quote=quote)\\n except Exception as exc: print(\\\"CHILD_GATEWAY_REFUSAL:\\\", repr(exc), file=sys.stderr); raise');"
+        "g.submit_exit=traced;"
+        "w=OfflineDayScheduledService(SchedulerStore(p/'schedule.sqlite3'),"
+        "OfflineSwingRunFence(p/'fence.sqlite3'),"
+        "OfflineDayCycleController(g._runtime,g,clock=e.clock),clock=e.clock);"
+        "q=_quote(signer,e.clock.now);"
+        "result=w.run_due(owner='fresh-child-close',planning_bids=(q,),execution_bids={MSFT:_quote(signer,e.clock.now)});"
+        "print(json.dumps({'status':result['status'],'open':len(e.ledger.open_positions()),'detail':result.get('detail'),'cycle':result.get('cycle'),'kill':e.ledger.kill_switch_engaged()},default=str));"
+        "g._simulator.close_store();e.ledger.close()"
+    )
+    try:
+        assert worker.run_due(
+            owner="original-parent-open", entry=_day_entry(env),
+            entry_quote=entry_quote,
+        )["status"] == "ENTRY_CONFIRMED"
+        assert len(env.ledger.open_positions()) == 1
+        child = subprocess.run(
+            [sys.executable, "-c", child_code, str(tmp_path), closing.isoformat()],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        assert child.returncode == 0, child.stderr
+        child_report = json.loads(child.stdout)
+        assert (child_report["status"], child_report["open"]) == ("EXITS_CONFIRMED", 0), (child_report, child.stderr)
+        assert env.ledger.open_positions() == ()
+        assert OfflineSwingRunFence(fence_path).state() == "IDLE"
+        assert gateway._simulator.submitted_orders == 1
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()

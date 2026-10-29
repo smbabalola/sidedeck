@@ -190,3 +190,265 @@ def test_unpinned_signer_is_refused_before_verification(tmp_path, monkeypatch):
     with pytest.raises(Exception, match="pinned"):
         pilot.main(args)
     assert not list(auth_path.parent.glob("*.consumed")) and calls == []
+
+def test_signed_spy_five_minute_collects_real_timestamp_shape_offline(tmp_path):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import collect_signed_spy_five_minute
+
+    auth = DataAuthorization(
+        authorization_id="sd156-test", provider="ALPACA_SIP_INTRADAY",
+        purpose="fixture five-minute fetch", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=2, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "intraday.sqlite3", auth)
+    calls = []
+    def opener(request, timeout=20):
+        calls.append(request.full_url)
+        rows = [{"t": "2026-10-22T13:30:00Z", "o": 100,
+                 "h": 101, "l": 99, "c": 100, "v": 500}]
+        return _Resp(json.dumps({"bars": rows, "next_page_token": None}).encode())
+    out = collect_signed_spy_five_minute(
+        auth, ledger, key_id="fixture", secret="fixture",
+        now=lambda: NOW, opener=opener,
+    )
+    assert len(calls) == 1
+    assert out["bars"][0]["timestamp_utc"] == "2026-10-22T13:30:00+00:00"
+    assert out["strategy_admission_eligible"] is False
+    assert out["broker_execution"] == "DISABLED"
+    assert ledger.used() == 1
+
+
+
+@pytest.mark.parametrize("stamp, expected", [
+    ("2026-10-21T13:30:00Z", "outside signed date window"),
+    ("2026-10-22T13:31:00Z", "off-grid"),
+])
+def test_signed_five_minute_rejects_invalid_bar_time(tmp_path, stamp, expected):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import (
+        MarketDataUnavailable, collect_signed_spy_five_minute,
+    )
+    auth = DataAuthorization(
+        authorization_id="sd156-badtime", provider="ALPACA_SIP_INTRADAY",
+        purpose="fixture", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=2, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "intraday.sqlite3", auth)
+    def opener(request, timeout=20):
+        rows = [{"t": stamp, "o": 100, "h": 101, "l": 99, "c": 100, "v": 500}]
+        return _Resp(json.dumps({"bars": rows, "next_page_token": None}).encode())
+    with pytest.raises(MarketDataUnavailable, match=expected):
+        collect_signed_spy_five_minute(
+            auth, ledger, key_id="fixture", secret="fixture",
+            now=lambda: NOW, opener=opener,
+        )
+    assert ledger.used() == 1
+
+
+
+def test_intraday_excludes_extended_hours_without_losing_opening_bar(tmp_path):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import collect_signed_spy_five_minute
+
+    auth = DataAuthorization(
+        authorization_id="sd156-extended", provider="ALPACA_SIP_INTRADAY",
+        purpose="fixture", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=1, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "extended.sqlite3", auth)
+    def opener(request, timeout=20):
+        rows = [{"t": t, "o": 100, "h": 101, "l": 99, "c": 100, "v": 500}
+                for t in ("2026-10-22T12:30:00Z", "2026-10-22T13:30:00Z",
+                          "2026-10-22T20:00:00Z")]
+        return _Resp(json.dumps({"bars": rows, "next_page_token": None}).encode())
+    result = collect_signed_spy_five_minute(
+        auth, ledger, key_id="fixture", secret="fixture",
+        now=lambda: NOW, opener=opener,
+    )
+    assert len(result["bars"]) == 1
+    assert result["bars"][0]["timestamp_utc"] == "2026-10-22T13:30:00+00:00"
+    assert result["excluded_extended_hours"] == 2
+    assert result["strategy_admission_eligible"] is False
+
+def test_intraday_draft_requires_explicit_owner_terms_and_is_network_free(tmp_path):
+    from sidedeck.application.sd078_alpaca_sip_pilot import main
+    target = tmp_path / "alpaca-5min.json"
+    with pytest.raises(SystemExit):
+        main(["draft-intraday", "--out", str(target)])
+    assert not target.exists()
+    assert main(["draft-intraday", "--out", str(target),
+                 "--owner-confirms-terms-reviewed"]) == 0
+    draft = json.loads(target.read_text(encoding="utf-8"))
+    assert draft["provider"] == "ALPACA_SIP_INTRADAY"
+    assert draft["urls"] == [ENDPOINT.format(symbol="SPY")]
+    assert draft["scope"]["timeframe"] == "5Min"
+    assert draft["scope"]["feed"] == "sip"
+    assert draft["max_retries"] == 0
+    with pytest.raises(SystemExit):
+        main(["draft-intraday", "--out", str(target),
+              "--owner-confirms-terms-reviewed"])
+
+
+def test_intraday_accepts_alpaca_base64_page_token_and_paginates(tmp_path):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import collect_signed_spy_five_minute
+    from urllib.parse import parse_qs, urlsplit
+
+    auth = DataAuthorization(
+        authorization_id="sd156-base64", provider="ALPACA_SIP_INTRADAY",
+        purpose="mock historical pagination", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=2, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "base64.sqlite3", auth)
+    cursor = "QUFQTHxNfDIwMjItMDEtMDNUMDk6MDA6MDAuMDAwMDAwMDAwWg=="
+    calls = []
+    def opener(request, timeout=20):
+        calls.append(request.full_url)
+        query = parse_qs(urlsplit(request.full_url).query)
+        assert query.get("page_token") == ([cursor] if len(calls) == 2 else None)
+        stamp = "2026-10-22T13:30:00Z" if len(calls) == 1 else "2026-10-22T13:35:00Z"
+        return _Resp(json.dumps({
+            "bars": [{"t": stamp, "o": 100, "h": 101, "l": 99, "c": 100, "v": 500}],
+            "next_page_token": cursor if len(calls) == 1 else None,
+        }).encode())
+    result = collect_signed_spy_five_minute(
+        auth, ledger, key_id="fixture", secret="fixture",
+        now=lambda: NOW, opener=opener,
+    )
+    assert result["pages"] == 2
+    assert len(result["bars"]) == 2
+    assert ledger.used() == 2
+    assert result["strategy_admission_eligible"] is False
+
+
+def test_intraday_checkpoint_survives_page_budget_exhaustion(tmp_path):
+    from sidedeck.application.sd077_data_authorization import DataAuthorization
+    from sidedeck.application.sd078_alpaca_sip_pilot import (
+        MarketDataUnavailable, collect_signed_spy_five_minute,
+    )
+    auth = DataAuthorization(
+        authorization_id="sd156-checkpoint", provider="ALPACA_SIP_INTRADAY",
+        purpose="mock pagination limit", urls=(ENDPOINT.format(symbol="SPY"),),
+        max_requests=1, max_retries=0, credentials_required=True,
+        issued_at=NOW - timedelta(minutes=1), expires_at=NOW + timedelta(hours=1),
+        owner_terms_reviewed=True,
+        scope={"timeframe": "5Min", "feed": "sip", "adjustment": "split",
+               "start": "2026-10-22T00:00:00Z", "end": "2026-10-23T00:00:00Z",
+               "limit": "10000"},
+    )
+    ledger = DataRequestLedger(tmp_path / "ledger.sqlite3", auth)
+    directory = tmp_path / "checkpoints"
+    def opener(request, timeout=20):
+        return _Resp(json.dumps({
+            "bars": [{"t": "2026-10-22T13:30:00Z",
+                      "o": 100, "h": 101, "l": 99, "c": 100, "v": 500}],
+            "next_page_token": "bmV4dA==",
+        }).encode())
+    with pytest.raises(MarketDataUnavailable, match="page budget exhausted"):
+        collect_signed_spy_five_minute(
+            auth, ledger, key_id="fixture", secret="fixture",
+            now=lambda: NOW, opener=opener, checkpoint_dir=directory,
+        )
+    progress = json.loads((directory / "progress.json").read_text())
+    page = json.loads((directory / "page-001.json").read_text())
+    assert progress["complete"] is False
+    assert progress["pages"] == 1
+    assert progress["page_accepted_count"] == 1
+    assert page[0]["timestamp_utc"] == "2026-10-22T13:30:00+00:00"
+    assert ledger.used() == 1
+    import hashlib
+    assert progress["page_sha256"] == hashlib.sha256((directory / "page-001.json").read_bytes()).hexdigest()
+    assert "bmV4dA" not in (directory / "progress.json").read_text()
+
+
+def test_short_probe_is_bounded_and_not_a_full_year_grant(tmp_path):
+    from sidedeck.application.sd078_alpaca_sip_pilot import main
+    target = tmp_path / "short-probe.json"
+    assert main(["draft-intraday", "--out", str(target),
+                 "--short-probe", "--owner-confirms-terms-reviewed"]) == 0
+    draft = json.loads(target.read_text(encoding="utf-8"))
+    assert draft["max_requests"] == 5
+    assert draft["max_retries"] == 0
+    assert draft["scope"]["start"] == "2026-10-19T00:00:00Z"
+    assert draft["scope"]["end"] == "2026-10-24T00:00:00Z"
+    assert draft["scope"]["timeframe"] == "5Min"
+
+
+def test_inspect_saved_spy_orb_uses_native_scanner_and_refuses_gaps(tmp_path):
+    from datetime import timedelta
+    from decimal import Decimal
+    from sidedeck.application.sd078_alpaca_sip_pilot import inspect_saved_spy_orb
+    from sidedeck.application.p5_alpaca_history import MarketDataUnavailable
+
+    start = datetime(2026, 10, 22, 13, 30, tzinfo=UTC)
+    bars = []
+    for i in range(78):
+        value = 100 if i < 3 else 102
+        bars.append({
+            "timestamp_utc": (start + timedelta(minutes=i * 5)).isoformat(),
+            "o": str(value), "h": str(value + 1),
+            "l": str(value - 1), "c": str(value), "v": "500",
+        })
+    file = tmp_path / "spy.json"
+    document = {"schema": "sidedeck-alpaca-five-minute-raw/1",
+                "symbol": "SPY", "feed": "sip", "timeframe": "5Min",
+                "strategy_admission_eligible": False, "bars": bars}
+    file.write_text(json.dumps(document))
+    result = inspect_saved_spy_orb(file)
+    assert result["sessions"] == 1
+    assert result["total_bars"] == 78
+    assert result["orb_breakout_sessions"] == 1
+    assert result["completed_research_trades"] == 1
+    assert result["performance"]["completed"] == 1
+    assert result["performance"]["oos_completed_trades"] == 0
+    assert result["performance"]["oos_qualification"] == "INSUFFICIENT_DATA"
+    assert result["performance"]["qualification"] == "INSUFFICIENT_DATA"
+    assert Decimal(result["performance"]["stressed_net_total_r"]) < 0
+    assert Decimal(result["days"][0]["trade"]["stressed_net_r"]) < 0
+    assert result["days"][0]["trade"]["entry"] == "102"
+    assert result["days"][0]["trade"]["stop"] == "99"
+    assert result["days"][0]["trade"]["exit_reason"] == "EOD_LAST_BAR_OPEN_PROXY"
+    assert result["days"][0]["trade"]["gross_r"] == "0"
+    assert result["strategy_admission_eligible"] is False
+    document["bars"].pop(4)
+    file.write_text(json.dumps(document))
+    with pytest.raises(MarketDataUnavailable, match="incomplete or nonconsecutive"):
+        inspect_saved_spy_orb(file)
+
+
+
+def test_quarter_probe_signs_bounded_multi_month_window(tmp_path):
+    from sidedeck.application.sd078_alpaca_sip_pilot import main
+    target = tmp_path / "quarter.json"
+    assert main(["draft-intraday", "--out", str(target),
+                 "--quarter-probe", "--owner-confirms-terms-reviewed"]) == 0
+    draft = json.loads(target.read_text(encoding="utf-8"))
+    assert draft["max_requests"] == 10
+    assert draft["max_retries"] == 0
+    assert draft["scope"]["start"] == "2026-07-01T00:00:00Z"
+    assert draft["scope"]["end"] == "2026-10-24T00:00:00Z"
+    assert draft["scope"]["timeframe"] == "5Min"
+    with pytest.raises(SystemExit):
+        main(["draft-intraday", "--out", str(tmp_path / "invalid.json"),
+              "--short-probe", "--quarter-probe", "--owner-confirms-terms-reviewed"])
+

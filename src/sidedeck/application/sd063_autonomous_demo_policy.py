@@ -15,9 +15,8 @@ Rules (all fail closed):
   still call ``UnlockAuthority.authorize_request(write=True, reference_id=proposal.reference_id)``
   before sending, which enforces the signed request/write caps and single-use references.
 * **Scope:** eToro Demo only (Real permanently excluded), owner principal, window <= 7 days that
-  contains a full XNYS session, SWING/POSITION only (DAY stays BLOCKED_EXTERNAL), total virtual
-  capital <= USD 1000, explicit instrument mappings, non-empty protected baseline set that can
-  never be in scope.
+  contains a full XNYS session, DAY/SWING/POSITION tracks, total virtual capital <= USD 1000,
+  explicit instrument mappings, non-empty protected baseline set that can never be in scope.
 * **Decision:** SD-063 runs the SD-071 decision engine itself; callers cannot hand it a
   decision. A strategy counts only if it is named in the policy **and** its evidence file under
   ``evidence_root`` hashes to the SHA-256 the owner signed **and** an ADMITTED admission cites it.
@@ -65,10 +64,10 @@ from sidedeck.application.sd072_track_risk_limits import (
     TrackLimits, TrackRiskState, evaluate_track_risk,
 )
 
-SCHEMA = "sidedeck-autonomous-demo-policy/2"
+SCHEMA = "sidedeck-autonomous-demo-policy/3"
 BROKER = "etoro-demo"
 OWNER_PRINCIPAL = "owner@sidedeck"
-AUTONOMOUS_TRACKS = ("SWING", "POSITION")
+AUTONOMOUS_TRACKS = ("DAY", "SWING", "POSITION")
 MAX_POLICY_WINDOW = timedelta(days=7)
 MAX_TOTAL_CAPITAL = Decimal("1000")
 MAX_LIMIT_PREMIUM = Decimal("0.005")
@@ -83,6 +82,8 @@ MIN_ORDER_NOTIONAL = Decimal("10")
 MAX_ENTRY_FILL_DELAY = timedelta(minutes=15)   # an IOC fills immediately or not at all
 MAX_EXIT_FILL_DEVIATION = Decimal("0.10")      # exit fill within 10 % of the planned bid
 FLATTEN_LEAD = timedelta(minutes=60)
+DAY_ENTRY_CLOSE_BUFFER = timedelta(minutes=30)  # leave exit/reconciliation time
+DAY_FLATTEN_LEAD = timedelta(minutes=10)       # close each trading day, including early closes
 MAX_EVIDENCE_BYTES = 50_000_000
 SUBMISSION = "OFFLINE_PROPOSAL_NOT_SUBMITTED"
 OUTCOMES = ("FILLED", "PARTIALLY_FILLED", "NOT_FILLED", "UNRESOLVED")
@@ -150,6 +151,7 @@ class StrategyScope:
     track: str
     evidence_ref: str                     # path relative to the runtime's evidence_root
     evidence_sha256: str                  # owner-signed digest of that evidence file
+    book_id: str                          # signed SideDeck portfolio ownership boundary
 
 
 @dataclass(frozen=True)
@@ -233,8 +235,6 @@ class AutonomousDemoPolicy:
             raise PolicyRefused("duplicate track budget")
         total = ZERO
         for b in self.tracks:
-            if b.track == "DAY":
-                raise PolicyRefused("DAY track is BLOCKED_EXTERNAL without approved intraday data")
             if b.track not in AUTONOMOUS_TRACKS:
                 raise PolicyRefused(f"unknown track {b.track}")
             capital = _decimal(b.virtual_capital, "virtual_capital")
@@ -285,6 +285,11 @@ class AutonomousDemoPolicy:
                 raise PolicyRefused("strategy evidence needs a lower-case SHA-256 digest")
             if s.track not in tracks:
                 raise PolicyRefused("strategy track is not a policy track")
+            if s.book_id not in {"etoro-demo:tradingagents", "etoro-demo:ai-trading"}:
+                raise PolicyRefused("strategy scope must name one existing SideDeck book")
+        for track in tracks:
+            if len({s.book_id for s in self.strategies if s.track == track}) > 1:
+                raise PolicyRefused("all strategies on one track must share one SideDeck book")
 
     def _check_instruments(self) -> None:
         if not self.instruments:
@@ -312,6 +317,27 @@ class AutonomousDemoPolicy:
     def instrument(self, canonical_id: str) -> InstrumentScope | None:
         return next((i for i in self.instruments if i.canonical_id == canonical_id), None)
 
+    def book_for_strategies(self, strategies: Sequence[str], *, track: str) -> str:
+        """Resolve one immutable SideDeck book from signed strategy scopes."""
+        if not strategies:
+            raise PolicyRefused("an order must name at least one signed strategy")
+        scopes = {(scope.strategy_id + "@" + scope.version): scope
+                  for scope in self.strategies if scope.track == track}
+        selected = [scopes.get(strategy) for strategy in strategies]
+        if any(scope is None for scope in selected):
+            raise PolicyRefused("proposal strategy is outside the signed track scope")
+        books = {scope.book_id for scope in selected if scope is not None}
+        if len(books) != 1:
+            raise PolicyRefused("one order cannot cross SideDeck portfolio books")
+        return next(iter(books))
+
+    def book_for_track(self, track: str) -> str:
+        """Resolve a unique signed portfolio for durable position exits."""
+        books = {scope.book_id for scope in self.strategies if scope.track == track}
+        if len(books) != 1:
+            raise PolicyRefused("track has no unique signed SideDeck book")
+        return next(iter(books))
+
     def active(self, now: datetime) -> bool:
         return self.not_before <= now < self.expires_at
 
@@ -327,7 +353,8 @@ class AutonomousDemoPolicy:
             "tracks": [{name: (str(getattr(b, name)) if isinstance(getattr(b, name), Decimal)
                                else getattr(b, name)) for name in sorted(_TRACK_FIELDS)}
                        for b in sorted(self.tracks, key=lambda b: b.track)],
-            "strategies": [[s.strategy_id, s.version, s.track, s.evidence_ref, s.evidence_sha256]
+            "strategies": [[s.strategy_id, s.version, s.track, s.evidence_ref,
+                            s.evidence_sha256, s.book_id]
                            for s in sorted(self.strategies,
                                            key=lambda s: (s.strategy_id, s.version, s.track))],
             "instruments": [[i.canonical_id, i.etoro_instrument_id]
@@ -389,7 +416,7 @@ def protective_subject(policy: AutonomousDemoPolicy) -> str:
     """SD-064 subject digest of a separate owner-signed protective-exit grant for a policy.
 
     Such a grant authorizes only reduce-only exits of positions recorded under this policy
-    (e.g. after expiry or revocation of the policy grant); it never authorizes entries."""
+    after policy expiry; revocation alone does not force a close, and entries are never allowed."""
     return hashlib.sha256(f"{policy.digest()}|protective-exit".encode("utf-8")).hexdigest()
 
 
@@ -424,6 +451,8 @@ class OpenPosition:
     stop_price: Decimal
     horizon_max_days: int
     opened_at: datetime
+    broker_order_id: str = ""
+    broker_position_id: str = ""
 
 
 @dataclass
@@ -444,6 +473,8 @@ class _Entry:
     filled_at: datetime | None = None
     exited: Decimal = ZERO
     realized: Decimal = ZERO
+    broker_order_id: str = ""
+    broker_position_id: str = ""
 
 
 @dataclass
@@ -716,6 +747,8 @@ class PolicyLedger:
                 e.outcome, e.filled = d["outcome"], Decimal(d["units"])
                 e.avg_price = Decimal(d["price"])
                 e.filled_at = datetime.fromisoformat(at)
+                e.broker_order_id = d.get("broker_order_id", "")
+                e.broker_position_id = d.get("broker_position_id", "")
             elif event == "EXIT_PROPOSED":
                 exits[ref] = _Exit(ref, d["entry"], Decimal(d["units"]), Decimal(d["bid"]),
                                    datetime.fromisoformat(at))
@@ -765,13 +798,18 @@ class PolicyLedger:
             "outcome": evidence.outcome, "units": str(units if filled else ZERO),
             "price": str(price if filled else ZERO), "source": evidence.source_id,
             "broker_order_id": evidence.broker_order_id, "lookup_sha256": evidence.lookup_sha256,
+            "broker_position_id": evidence.broker_position_id or "",
             "envelope_mac": evidence.envelope_mac, "envelope_nonce": evidence.envelope_nonce})
 
     def resolve(self, evidence: "FillEvidence") -> None:
         """Record the reconciled broker outcome from verified evidence (SD-074). UNRESOLVED
         trips the persistent kill-switch and keeps the reservation counted."""
         with self.transaction():
-            target = self._target(self.state(), evidence)
+            state = self.state()
+            target = self._target(state, evidence)
+            if isinstance(target, _Exit) and evidence.broker_position_id != \
+                    state.entries[target.entry].broker_position_id:
+                raise PolicyRefused("close evidence names a different broker position")
             units, price = _check_resolution(target, evidence.outcome, evidence.units,
                                              evidence.price, evidence.at)
             kind = "ENTRY" if isinstance(target, _Entry) else "EXIT"
@@ -787,9 +825,13 @@ class PolicyLedger:
         broker order lookup digest) can turn it into a position or release its reservation.
         The kill-switch stays engaged."""
         with self.transaction():
-            target = self._target(self.state(), evidence)
+            state = self.state()
+            target = self._target(state, evidence)
             if target.outcome not in _UNKNOWN_OUTCOMES:
                 raise PolicyRefused("only UNRESOLVED or QUARANTINED proposals are reconciled")
+            if isinstance(target, _Exit) and evidence.broker_position_id != \
+                    state.entries[target.entry].broker_position_id:
+                raise PolicyRefused("close evidence names a different broker position")
             if evidence.outcome == "UNRESOLVED":
                 raise PolicyRefused("reconciliation needs a final broker outcome")
             units, price = _check_resolution(replace(target, outcome=None), evidence.outcome,
@@ -819,6 +861,7 @@ class FillEvidence:
     lookup_sha256: str
     envelope_mac: str = ""
     envelope_nonce: str = ""
+    broker_position_id: str | None = None
     _token: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -833,6 +876,9 @@ class FillEvidence:
         if not (isinstance(self.broker_order_id, str) and self.broker_order_id.strip()
                 and isinstance(self.source_id, str) and self.source_id.strip()):
             raise PolicyRefused("fill evidence needs a broker order id and source")
+        if self.outcome in ("FILLED", "PARTIALLY_FILLED") and not (
+                isinstance(self.broker_position_id, str) and self.broker_position_id.strip()):
+            raise PolicyRefused("filled evidence needs a broker position id")
         if not isinstance(self.at, datetime) or self.at.tzinfo is None:
             raise PolicyRefused("fill evidence time must be timezone-aware")
 
@@ -880,7 +926,7 @@ def _open_positions(st: _State) -> tuple[OpenPosition, ...]:
             assert e.filled_at is not None
             out.append(OpenPosition(e.reference, e.track, e.canonical_id, e.instrument, e.sector,
                                     e.filled - e.exited, e.avg_price, e.stop, e.horizon,
-                                    e.filled_at))
+                                    e.filled_at, e.broker_order_id, e.broker_position_id))
     return tuple(out)
 
 
@@ -937,6 +983,7 @@ class ExitProposal:
     proposed_at: datetime
     submission: str = SUBMISSION
     authority: str = "policy"              # "policy" or "protective" (SD-064 grant to use)
+    broker_position_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1077,6 +1124,14 @@ class AutonomousDemoRuntime:
             return Refusal(("MARKET_CALENDAR_UNCOVERED",))
         if not market_open:
             return Refusal(("MARKET_CLOSED",))
+        if track == "DAY":
+            # A weekly signed policy does not grant entries close to the end
+            # of *each* session. Give the Demo close and reconciliation a buffer.
+            session = session_for(now.astimezone(NEW_YORK).date())
+            if session is None:
+                return Refusal(("MARKET_CLOSED",))
+            if now >= session.close_utc - DAY_ENTRY_CLOSE_BUFFER:
+                return Refusal(("DAY_ENTRY_WINDOW_CLOSED",))
 
         # Equity from the ledger + marks. The session's first mark is the daily-loss baseline;
         # further marks are written only on a new high, so polling cannot grow the ledger.
@@ -1228,10 +1283,9 @@ class AutonomousDemoRuntime:
             return self._finish(now, (), alerts)
         authority = "policy"
         if not (policy.active(now) and self._grant_valid(now)):
-            # Protective authority only after expiry: a revocation (anyone may revoke) or a
-            # transient grant failure must not force a liquidation.
+            # Revocation alone must not trigger an automatic liquidation. A separately signed
+            # protective grant authorizes reduce-only exits after the policy window expires.
             if not policy.active(now) and self._protective_valid(now):
-                # Separate owner-signed protective-exit authority: reduce-only, no entries.
                 authority = "protective"
                 alerts.append("PROTECTIVE_EXIT_AUTHORITY_IN_USE")
             elif not policy.active(now):
@@ -1246,6 +1300,9 @@ class AutonomousDemoRuntime:
         exits: list[ExitProposal] = []
         for p in positions:
             ref = p.entry_reference
+            if not p.broker_position_id:
+                alerts.append(f"BROKER_POSITION_LINEAGE_UNAVAILABLE:{ref}")
+                continue
             if any(x.entry == ref and x.outcome is None for x in st.exits.values()):
                 alerts.append(f"EXIT_PENDING:{ref}")
                 continue
@@ -1262,11 +1319,34 @@ class AutonomousDemoRuntime:
                 alerts.append(f"CALENDAR_UNCOVERED:{ref}")
                 continue
             if not market_open:
-                continue                                    # wait for the session
+                if p.track == "DAY":
+                    # A missed DAY close is an operator incident; never
+                    # fabricate an exit outside the exchange session.
+                    alerts.append(f"DAY_POSITION_OUTSIDE_SESSION:{ref}")
+                continue
             if quote.bid <= p.stop_price:                   # stop first: needs no calendar math
                 reason = "STOP_BREACHED"
             elif authority == "protective":
                 reason = "PROTECTIVE_FLATTEN"
+            elif p.track == "DAY":
+                # Zero-day horizon is *not* an immediate exit. DAY positions
+                # must instead flatten in their own session, not just on the
+                # final day of a multi-day policy.
+                session = session_for(day)
+                if session is None:
+                    alerts.append(f"DAY_SESSION_UNAVAILABLE:{ref}")
+                    continue
+                opened_day = p.opened_at.astimezone(NEW_YORK).date()
+                if opened_day < day:
+                    reason = "DAY_OVERDUE_FLATTEN"
+                    alerts.append(f"DAY_OVERNIGHT_POSITION:{ref}")
+                elif opened_day > day:
+                    alerts.append(f"DAY_POSITION_TIMESTAMP_INVALID:{ref}")
+                    continue
+                elif now >= session.close_utc - DAY_FLATTEN_LEAD:
+                    reason = "DAY_SESSION_FLATTEN"
+                else:
+                    continue
             elif now >= flatten_at:
                 reason = "POLICY_EXPIRY_FLATTEN"
             else:
@@ -1287,7 +1367,8 @@ class AutonomousDemoRuntime:
                                    "bid": str(quote.bid), "authority": authority})
             exits.append(ExitProposal(exit_ref, ref, policy.digest(), p.track, p.canonical_id,
                                       p.etoro_instrument_id, p.units, reason, now,
-                                      authority=authority))
+                                      authority=authority,
+                                      broker_position_id=p.broker_position_id or None))
         return self._finish(now, tuple(exits), alerts)
 
     def _protective_valid(self, now: datetime) -> bool:
