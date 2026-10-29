@@ -990,7 +990,7 @@ def test_day_cold_os_worker_independently_closes_persisted_open_position(tmp_pat
         )
         assert child.returncode == 0, child.stderr
         child_report = json.loads(child.stdout)
-        assert (child_report["status"], child_report["open"]) == ("EXITS_CONFIRMED", 0), child_report
+        assert (child_report["status"], child_report["open"]) == ("EXITS_CONFIRMED", 0), (child_report, child.stderr)
         assert env.ledger.open_positions() == ()
         assert OfflineSwingRunFence(fence_path).state() == "IDLE"
         assert gateway._simulator.submitted_orders == 1
