@@ -127,7 +127,7 @@ DEFAULT_JOBS: tuple[JobSpec, ...] = (
     JobSpec("broad_scan", "SYSTEM", "Daily broad US scan on the prior close",
             Cadence(offsets=(("OPEN", -120),)), lease_seconds=3600),
     JobSpec("day_candidate_scan", "DAY", "DAY watchlist scan during regular hours",
-            Cadence(every_minutes=5, interval_start_offset=5, interval_end_offset=-15),
+            Cadence(every_minutes=5, interval_start_offset=5, interval_end_offset=-10),
             lease_seconds=240),
     JobSpec("swing_review", "SWING", "SWING review: premarket, mid-session, near close",
             Cadence(offsets=(("OPEN", -30), ("OPEN", 180), ("CLOSE", -30)))),
