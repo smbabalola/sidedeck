@@ -859,3 +859,32 @@ class OfflineDayScheduledService:
                     pass
             self.fence.finish(token, at=self.clock(), safe=False, outcome="EXCEPTION")
             raise
+
+
+def drive_offline_day_sequence(
+    service_factory: Callable[[], OfflineDayScheduledService],
+    ticks: Sequence[Callable[[], dict[str, Any]]], *,
+    max_ticks: int = 100,
+) -> tuple[dict[str, Any], ...]:
+    """Bounded in-process offline lifecycle driver; never starts a daemon.
+
+    Each callable invokes one due tick using the existing simulation-only
+    service. Terminate on any stop/uncertain result; no automatic HALT reset,
+    grant construction, broker connection or retries. Clock/input sourcing is
+    deliberately supplied by the offline test harness, not this function.
+    """
+    if not 1 <= max_ticks <= 1000 or len(ticks) > max_ticks:
+        raise OfflineRunnerRefused("offline DAY sequence exceeds bounded tick budget")
+    if type(service_factory()) is not OfflineDayScheduledService:
+        raise OfflineRunnerRefused("DAY sequence requires the exact offline service")
+    outcomes: list[dict[str, Any]] = []
+    for tick in ticks:
+        result = tick()
+        if (not isinstance(result, dict)
+                or result.get("execution_release") != "ETORO_DEMO_NOT_RELEASED"
+                or result.get("broker_route") != "SIMULATED_LOCAL"):
+            raise OfflineRunnerRefused("DAY driver received non-offline outcome")
+        outcomes.append(result)
+        if result.get("status") in {"HALTED", "RECOVERY_REQUIRED", "LOCKED"}:
+            break
+    return tuple(outcomes)
