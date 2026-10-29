@@ -504,3 +504,54 @@ def test_day_bounded_driver_completes_offline_lifecycle_without_prompts(tmp_path
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_polling_loop_stops_on_halting_close_without_retry(tmp_path):
+    """The offline loop polls autonomously and stops on an unconfirmed close."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence, run_offline_day_service_loop,
+    )
+    from test_sd063_autonomous_demo_policy import _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    initial = datetime(2026, 11, 27, 15, 5, tzinfo=UTC)
+    close = datetime(2026, 11, 27, 17, 50, tzinfo=UTC)
+    env = _day_env(tmp_path, initial)
+    gateway, entry_quote, signer = _offline_gateway(env)
+    schedule = SchedulerStore(tmp_path / "schedule.sqlite3")
+    schedule.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    schedule.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+    fence = OfflineSwingRunFence(tmp_path / "fence.sqlite3")
+    service = OfflineDayScheduledService(
+        schedule, fence,
+        OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+        clock=env.clock,
+    )
+    step = [0]
+    entry = _day_entry(env)
+    def inputs():
+        if step[0] == 0:
+            return {"entry": entry, "entry_quote": entry_quote}
+        return {"planning_bids": (_quote(signer, env.clock.now),)}
+    def wait():
+        step[0] += 1
+        env.clock.now = close
+    try:
+        outcomes = run_offline_day_service_loop(
+            service, owner="offline-poller", inputs=inputs,
+            wait=wait, stop_requested=lambda: False, max_polls=8,
+        )
+        assert [r["status"] for r in outcomes] == ["ENTRY_CONFIRMED", "HALTED"]
+        assert step[0] == 1
+        assert fence.state() == "UNRESOLVED"
+        assert len(env.ledger.open_positions()) == 1
+        assert env.ledger.kill_switch_engaged()
+        assert gateway._simulator.submitted_orders == 1
+        assert all(r["execution_release"] == "ETORO_DEMO_NOT_RELEASED" for r in outcomes)
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
