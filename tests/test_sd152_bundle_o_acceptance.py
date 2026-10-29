@@ -787,7 +787,7 @@ def test_day_scheduled_offline_soak_across_sessions_no_reentry(tmp_path):
         # historical resolved DAY proposal or infer a new strategy signal.
         env.clock.now = datetime(2026, 11, 30, 15, 5, tzinfo=UTC)
         for number in range(5):
-            result = worker().run_due(owner=f"soak-restart-{number}", entry=proposal)
+            result = worker().run_due(owner=f"soak-restart-{number}")
             assert result["status"] in {"NO_TRADE", "NO_DUE_SLOT"}
             assert gateway._simulator.submitted_orders == 1
             assert env.ledger.open_positions() == ()
