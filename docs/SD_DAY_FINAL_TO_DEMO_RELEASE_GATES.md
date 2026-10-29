@@ -29,3 +29,23 @@ Date: 2026-10-29. Branch: `codex/sd122-etoro-data-autodemo-20261027`. Draft PR #
 1. Inventory and assess already-authorized source/data, strategy report, audit and security evidence without external account access or additional research purchases.
 2. Produce a release dossier with explicit PASS/BLOCKED/NOT_ASSESSED per gate and no fabricated green status.
 3. Prepare a single narrowly scoped owner approval proposal *only after* all independent prerequisites have been evidenced; until then remain NO-GO and do not ask for premature brokerage permissions.
+
+
+## Evidence inventory — 29 October
+This is a source-location review, not independent reproduction or provider approval.
+
+| Lane | Existing evidence | Outstanding independent gate |
+| --- | --- | --- |
+| Market data | SD-021 historical SIP research snapshots; SD-142/143 importer and entitlement workstream | Rights for storage and broker automation, timely executable five-minute bid/ask, point-in-time mapping and fresh-quote proof |
+| Strategy | SD-014–022 research and SD-071 qualification; SD-155 test-fixture ORB | Genuine independently qualified locked OOS >=30 trades, costs and final holdout. Fixture admission does not qualify G3 |
+| Broker | SD-137–141 offline fake eToro-shaped lifecycle; DAY SD-126/152 CI #40852549194 | Real authorised broker lineage and protected baseline verified only under separately approved Demo release |
+| Security | SD-145 local anchor fixtures, SD-146/149 review, SD-152 durable fence | External immutable host, independent security assessment and tested incident/on-call operations |
+| Authority | SIDEDECK_STEERING.md §§20–21; SD-150/151 | Human signed expiring scope, explicit historical HALT recovery approval, narrowly bounded Demo canary |
+
+### Engineering order, without owner micro-prompts
+1. Freeze the CI-verified offline mechanical lifecycle; do not rebuild it or substitute new fixture tests for actual provider evidence.
+2. Reconcile already authorised data rights, existing research, and audit/security documentation offline. Block real source calls until separately authorised.
+3. Assemble one SD-149 release dossier with exact provenance, missing external proofs and reviewed release scope.
+4. Request an owner decision only for a concrete, bounded external step, and only when its independently verifiable prerequisites are ready. eToro Demo remains NOT_RELEASED.
+
+The four protected holdings have not been re-read in this batch. No live account, HALT reset, new signing grant, external audit-host deployment or Demo order was authorised.
