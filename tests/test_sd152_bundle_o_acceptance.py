@@ -432,3 +432,75 @@ def test_day_bounded_driver_runs_and_stops_on_unresolved_restart(tmp_path):
     finally:
         gateway._simulator.close_store()
         env.ledger.close()
+
+
+def test_day_bounded_driver_completes_offline_lifecycle_without_prompts(tmp_path):
+    """One invocation drives scheduled entry, monitoring and confirmed early close."""
+    from datetime import UTC, datetime
+    from sidedeck.application.sd068_track_scheduler import SchedulerStore
+    from sidedeck.application.sd126_offline_day_controller import OfflineDayCycleController
+    from sidedeck.application.sd152_offline_swing_runner import (
+        OfflineDayScheduledService, OfflineSwingRunFence, drive_offline_day_sequence,
+    )
+    from test_sd063_autonomous_demo_policy import MSFT, _offline_gateway
+    from test_sd125_day_session_exits import _day_entry, _day_env
+    from test_sd126_offline_day_controller import _quote
+
+    env = _day_env(tmp_path, datetime(2026, 11, 27, 15, 5, tzinfo=UTC))
+    gateway, open_quote, signer = _offline_gateway(
+        env, fill_price="500", close_price="490",
+        storage_path=tmp_path / "sim.sqlite3",
+    )
+    schedule = tmp_path / "schedule.sqlite3"
+    fence = tmp_path / "fence.sqlite3"
+    store = SchedulerStore(schedule)
+    store.set_track("DAY", enabled=True, mode="SIMULATION_ONLY")
+    store.set_exchange_track("XNYS", "DAY", enabled=True, mode="SIMULATION_ONLY")
+
+    def service():
+        return OfflineDayScheduledService(
+            SchedulerStore(schedule), OfflineSwingRunFence(fence),
+            OfflineDayCycleController(gateway._runtime, gateway, clock=env.clock),
+            clock=env.clock,
+        )
+
+    def at(moment, *, entry=None, close=False):
+        def run():
+            env.clock.now = moment
+            if close:
+                return service().run_due(
+                    owner="offline-loop",
+                    planning_bids=(_quote(signer, moment),),
+                    execution_bids={MSFT: _quote(signer, moment)},
+                )
+            if entry is not None:
+                return service().run_due(
+                    owner="offline-loop", entry=entry, entry_quote=open_quote,
+                )
+            return service().run_due(
+                owner="offline-loop",
+                planning_bids=(_quote(signer, moment),),
+            )
+        return run
+
+    try:
+        entry = _day_entry(env)
+        results = drive_offline_day_sequence(service, (
+            at(datetime(2026, 11, 27, 15, 5, tzinfo=UTC), entry=entry),
+            at(datetime(2026, 11, 27, 15, 10, tzinfo=UTC)),
+            at(datetime(2026, 11, 27, 17, 50, tzinfo=UTC), close=True),
+        ))
+        assert [r["status"] for r in results] == [
+            "ENTRY_CONFIRMED", "NO_TRADE", "EXITS_CONFIRMED",
+        ]
+        assert results[-1]["cycle"]["open_positions"] == 0
+        assert env.ledger.open_positions() == ()
+        assert not env.ledger.kill_switch_engaged()
+        assert gateway._simulator.submitted_orders == 1
+        assert OfflineSwingRunFence(fence).state() == "IDLE"
+        assert service().run_due(owner="replay")["status"] == "NO_DUE_SLOT"
+        assert all(r["execution_release"] == "ETORO_DEMO_NOT_RELEASED"
+                   for r in results)
+    finally:
+        gateway._simulator.close_store()
+        env.ledger.close()
