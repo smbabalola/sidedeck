@@ -40,3 +40,6 @@ This is a **reviewer handoff**, not an independent security attestation or a tra
 
 ## Next bounded external decision packet
 An **unsigned** first-source proposal is prepared at `docs/SD143_ALPACA_SPY_5MIN_AUTHORIZATION_PROPOSAL.md` (SPY only, Alpaca historical 5Min SIP, fixed 2025-10-27–2026-10-23 candidate window, zero automatic retries, no subscription/spend authority). It is **NOT AUTHORIZED**; the account-specific data usage and cross-broker retention rights, exact UTC bounds and approved pagination ceiling must be verified before presenting an executable approval. No automatic provider requests are permitted.
+
+## Owner usage direction — 29 October
+The owner says **YES** to using locally retained/replayed Alpaca bars and to using derived signals in eToro Demo. This confirms the desired SideDeck workflow only. Provider and exchange permissions remain UNVERIFIED_EXTERNAL; no contract entitlement, authenticated read, subscription, eToro release, or HALT reset follows from this statement. The bounded proposal is recorded in `docs/SD143_ALPACA_SPY_5MIN_AUTHORIZATION_PROPOSAL.md`. G1/G2/G3/G4/G5 retain their existing NO-GO status.
